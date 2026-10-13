@@ -562,6 +562,9 @@ it("bundled main Genex MCP joins an existing chat after account unlock on every 
     const project = "genex-existing-chat";
     await rig.core.games.scaffold(project);
     const threadId = await rig.core.createGameThread(project);
+    // Manual, so the plugin connector's card is asked: Auto runs a plugin's connector with no card
+    // (connector-modes.test.ts).
+    await rig.core.setPermissionMode(threadId, "default");
     const declared = rig.core.plugins
       .list()
       .find((p) => p.manifest.id === "genex")!
@@ -727,10 +730,8 @@ it("bundled Unreal Editor starts off, then finds the set-up project's editor fro
         ]);
         const onLiveTool = request.onLiveTool;
         assert.ok(onLiveTool, "the studio injects live tools");
-        const list = () =>
-          approveFixtureConnector(rig, () => onLiveTool("unreal-editor__list_toolsets", {})).catch(
-            (error: unknown) => error,
-          );
+        // Flipped: list_toolsets only reads (the plugin's `reads`), so it asks no card in any mode.
+        const list = () => onLiveTool("unreal-editor__list_toolsets", {}).catch((error: unknown) => error);
         answers.push(await list());
         await setUp();
         answers.push(await list());

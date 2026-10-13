@@ -3591,6 +3591,9 @@ describe("a director's run through the real core and harness", () => {
         "genex__asset",
         "genex__cli",
         "genex__cli-paid",
+        // Flipped: the Genex plugin's cover tools (f99aab6), beside its publish tools.
+        "genex__cover",
+        "genex__cover-set",
         "genex__package",
         "genex__publish",
         "genex__publish-status",

@@ -1376,9 +1376,13 @@ describe("the picker switches a lead's running session", () => {
       { decision: "approve_plan", mode: "auto" },
     );
     assert.deepEqual(await switched(1), ["auto"], "the plan approved into Auto");
+    // Flipped: an "always" moves the chat only from Manual, never out of Auto or Bypass
+    // (chat-permissions.test.ts), so the person picks Manual first; the lead follows both.
+    await core.setPermissionMode(threadId, "default");
+    assert.deepEqual(await switched(2), ["auto", "default"], "the person's Manual");
     const edit = { tool: "Edit", input: { file_path: path.join(project.dir, "src", "main.js") } };
     await answered({ ...edit, always: [{ kind: "mode", mode: "acceptEdits" }] }, { decision: "always" });
-    assert.deepEqual(await switched(2), ["auto", "acceptEdits"], "'always' allowing all edits");
+    assert.deepEqual(await switched(3), ["auto", "default", "acceptEdits"], "'always' allowing all edits");
     lead.end();
     await turn;
   });
