@@ -3,7 +3,14 @@
  * record StudioCore appends is the record the two renderers are tested against
  * (tests/conformance/seed-upgrade.test.ts).
  */
-import { type SeedMoveNotice, type SeedUpgradeReport, SeedUpgradeMode } from "../substrate/seed-upgrade.ts";
+import {
+  type SeedMoveNotice,
+  type SeedRefusal,
+  type SeedRefusalCode,
+  type SeedRetaken,
+  type SeedUpgradeReport,
+  SeedUpgradeMode,
+} from "../substrate/seed-upgrade.ts";
 
 export type SeedUpgradedPayload = Pick<SeedUpgradeReport, "added" | "updated" | "kept" | "retired"> & {
   moved?: SeedMoveNotice[];
@@ -112,13 +119,17 @@ const SCAFFOLDS_WEB = new Set([
 const SCAFFOLD_KIND_NOTE = (file: string) =>
   `Your edited ${file} was kept, but game.scaffold without kind now makes an empty folder with no kind. Send kind: ProjectStarter.Web (loop/folder-facts.ts) where a web game is meant, as the shipped copy does.`;
 
-/** The note the agent reads about a kept file, and the error for a note about nothing. */
+/** The notes the agent and the person read about kept files, and the error for a note about nothing. */
 const MESSAGE = {
   noMoves: "seedMoveNote needs at least one move",
   callNote: (file: string) =>
     CALL_NOTES[file] ??
     (SCAFFOLDS_WEB.has(file) ? SCAFFOLD_KIND_NOTE(file) : undefined) ??
     `Your edited ${file} was kept, but it calls the host the older way. Compare its host calls with the shipped copy and carry the new ones over.`,
+  keptPreRust: (modules: readonly string[]) =>
+    `A Rust night will not run on harness modules edited before Rust games: ${modules.join(", ")}. Re-take the seed copy of each; the edit is kept as a patch to carry over.`,
+  retaken: (rel: string, patchFile: string) =>
+    `The seed copy of ${rel} was re-taken for Rust games, so your edit there no longer runs. Carry over what you still need from its patch: ${patchFile}`,
   moveNote: (from: string, where: readonly string[]) =>
     `Your edited ${from} was kept, but other harness files now import some of its code from a new home, so your edits to that code run only inside it. Carry them over to reach the rest. Moved: ${where.join("; ")}.`,
 } as const;
@@ -131,7 +142,11 @@ export function seedMoveNote(moves: readonly SeedMoveNotice[]): string {
   const [first] = moves;
   if (!first) throw new TypeError(MESSAGE.noMoves);
   const where = moves.map((move) => `${movedNames(move)} → ${move.to}`);
-  const text = MESSAGE.moveNote(first.from, where);
+  return withinNoteLimit(MESSAGE.moveNote(first.from, where));
+}
+
+/** `text` cut to the memory policy's limit on one value. */
+function withinNoteLimit(text: string): string {
   return text.length > MAX_NOTE_CHARS ? `${text.slice(0, MAX_NOTE_CHARS - 1)}…` : text;
 }
 
@@ -155,6 +170,40 @@ export function seedMoveMemory(
   for (const move of moved) byFile.set(move.from, [...(byFile.get(move.from) ?? []), move]);
   for (const [from, moves] of byFile) next[`${SEED_MOVE_MEMORY_PREFIX}${from}`] = seedMoveNote(moves);
   return next;
+}
+
+/** What the person is offered for a module a night refuses. Carried by `studio:seed.retake` (M3.0): never rename a value. */
+export const SeedRemedy = {
+  /** Lay the seed copy down again, keeping the agent's edit as a patch (`retakeSeedModule`). */
+  RetakeSeedCopy: "retake-seed-copy",
+} as const;
+export type SeedRemedy = (typeof SeedRemedy)[keyof typeof SeedRemedy];
+
+/** The notice for a night refused over kept modules: each module with its remedy, and the words. */
+export interface KeptPreRustNotice {
+  code: SeedRefusalCode;
+  modules: string[];
+  remedies: Array<{ module: string; remedy: SeedRemedy }>;
+  text: string;
+}
+
+/**
+ * The notice for a Rust night the harness workspace refuses (`seedNightRefusal`), or null when
+ * nothing was refused: it names every kept module and offers to re-take the seed copy of each.
+ */
+export function keptPreRustNotice(refusal: SeedRefusal | null): KeptPreRustNotice | null {
+  if (!refusal || refusal.modules.length === 0) return null;
+  const { code, modules } = refusal;
+  const remedies = modules.map((module) => ({ module, remedy: SeedRemedy.RetakeSeedCopy }));
+  return { code, modules: [...modules], remedies, text: MESSAGE.keptPreRust(modules) };
+}
+
+/**
+ * The note to the agent after a re-take, within the memory policy's limit: its edit to the module
+ * no longer runs, and the patch it can carry the edit over from.
+ */
+export function seedRetakeNote(retaken: Pick<SeedRetaken, "rel" | "patchFile">): string {
+  return withinNoteLimit(MESSAGE.retaken(retaken.rel, retaken.patchFile));
 }
 
 /**

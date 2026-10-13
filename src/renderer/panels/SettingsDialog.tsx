@@ -9,9 +9,10 @@ import { LocalModelsSection } from "./LocalModelsSection.tsx";
 import { HarnessSection } from "./HarnessSection.tsx";
 import { GamesSection } from "./GamesSection.tsx";
 import { PermissionsSection } from "./PermissionsSection.tsx";
+import { ToolchainsSection } from "./ToolchainsSection.tsx";
 import { PrivacySection } from "./PrivacySection.tsx";
 import { AboutSection } from "./AboutSection.tsx";
-import { ABOUT_WORDS, PRIVACY_WORDS } from "../words.ts";
+import { ABOUT_WORDS, PRIVACY_WORDS, TOOLCHAIN_WORDS } from "../words.ts";
 
 interface SectionTab {
   id: SettingsSection;
@@ -22,6 +23,7 @@ interface SectionTab {
 const SECTIONS: readonly SectionTab[] = [
   { id: SettingsSection.Providers, label: "Model Providers", icon: "globe" },
   { id: SettingsSection.Local, label: "Local Models", icon: "box" },
+  { id: SettingsSection.Toolchains, label: TOOLCHAIN_WORDS.settings.title, icon: "code" },
   { id: SettingsSection.Appearance, label: "Appearance", icon: "palette" },
   { id: SettingsSection.Games, label: "Games", icon: "folder" },
   { id: SettingsSection.Harness, label: "Harness", icon: "harness" },
@@ -62,6 +64,7 @@ function SectionBody({
     return <ModelProvidersSection engines={engines} onEnginesRefresh={onEnginesRefresh} />;
   if (section === SettingsSection.Harness) return <HarnessSection />;
   if (section === SettingsSection.Permissions) return <PermissionsSection />;
+  if (section === SettingsSection.Toolchains) return <ToolchainsSection />;
   if (section === SettingsSection.Privacy) return <PrivacySection />;
   if (section === SettingsSection.About) return <AboutSection />;
   return (

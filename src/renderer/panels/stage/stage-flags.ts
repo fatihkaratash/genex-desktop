@@ -88,3 +88,26 @@ export function stageFlags({
     fileOpen: stageView === StageView.File,
   };
 }
+
+/**
+ * The flags for a compiled game (C++ · raylib, Rust · wgpu), whose Live may show no page of its
+ * own: the card for a game without Browser among its destinations (`noLivePage`), or its Mac build
+ * in Live's canvas (`native`). Either takes the web page's place, so the page's empty scene, loader
+ * and stopped state are not on show; the card covers the stage like the empty scene does.
+ */
+export function compiledStageFlags(
+  flags: ReturnType<typeof stageFlags>,
+  { noLivePage, native }: { noLivePage: boolean; native: boolean },
+) {
+  /** Live's card for a game without a browser build, while Live shows the preview. */
+  const statusCard = flags.previewOnStage && noLivePage && !native;
+  const pageAway = native || statusCard;
+  return {
+    ...flags,
+    statusCard,
+    emptyScene: flags.emptyScene && !native,
+    showEmpty: flags.showEmpty && !pageAway,
+    liveLoading: flags.liveLoading && !pageAway,
+    gameStopped: flags.gameStopped && !pageAway,
+  };
+}

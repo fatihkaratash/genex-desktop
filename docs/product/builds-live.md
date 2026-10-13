@@ -28,20 +28,22 @@ not stopped, all but a new build go in at once. The
 preview reaches only public library CDNs; Open Game names other hosts. Other folders' views:
 [projects](projects-engines.md#lives-views).
 
+**Compiled games** (C++ · raylib; Rust · wgpu on an Apple-silicon Mac or Linux x64) build per
+destination in the sandbox; **Web | Native** shows the Mac build in Live. Rust needs WebGPU. Only your
+**On a device** press installs a phone build ([feature map](../agent/feature-map.md)).
+
 **Builds** is a graph: You asked, a row per part, Your build, then the lead while no part
 works. Tries at one step fold into one node; what reached the build forms the line, the rest
 hangs below. Tries a pause cut off show Paused until added. An eye marks nodes the reviewers looked at. A new build is “Checking it starts…” until
 it has run. A working node shows its agent's screen. A selected
 node opens as a card; an eye opens the reviewers' notes. **Follow up in chat** notes the next message to that node's build.
 Earlier builds open from chat cards. A Loop in place draws the lead's save points on one row
-(no eye). A Loop's lead (from the start), workers, jobs or a claim make a tree: the lead (jobs
-below), a row per worker, then the finish check, tinted by state: Checking, Not yet (reasons, round of 3),
-Done or Stopped; a chat line each round. Finished workers stand on the line, others are
-ghosts. A chat message's workers get a graph, shown while newest.
+(no eye). A Loop's lead, workers and jobs make a tree ending in the finish check (Checking, Not
+yet, Done or Stopped; [feature map](../agent/feature-map.md)); a chat message's workers get a graph.
 
 Agents test in hidden windows, never in Live; chat frames never certify a build. A finished
 worker, passing checks, integration and Live's revision are distinct facts; Builds and Studio
-report missing checks, coverage limits and revisions; chat shows a delivery's capture, failures included.
+report missing checks and coverage limits.
 
 ## Continuation and interruption
 

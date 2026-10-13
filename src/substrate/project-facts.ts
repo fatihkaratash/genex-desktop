@@ -18,6 +18,7 @@ import {
   type SourcedFactRule,
   settleFacts,
 } from "../shared/project-facts.ts";
+import { isCompiledStack, isGameStack } from "../shared/game-project.ts";
 import { readJsonIfExists } from "./fsx.ts";
 
 /** How deep and how wide one walk goes: deep enough for `a/ProjectSettings/…`, never a whole disk. */
@@ -90,16 +91,23 @@ export async function projectFiles(dir: string, limits: WalkLimits = {}): Promis
   return walk.files;
 }
 
-/** Whether studio.json records the web starter (`contractVersion`, a number), as Genex writes it. */
+/**
+ * Whether studio.json records the web starter (`contractVersion`, a number), as Genex writes it, or
+ * a compiled game's stack (C++ · raylib, Rust · wgpu): Studio builds that game's page itself, so it
+ * is served as a web game at the root though no page of its own is there.
+ */
 async function recordsWebStarter(dir: string): Promise<boolean> {
-  const meta = await readJsonIfExists<{ contractVersion?: unknown }>(path.join(dir, "studio.json")).catch(() => null);
-  return typeof meta?.contractVersion === "number";
+  const meta = await readJsonIfExists<{ contractVersion?: unknown; stack?: unknown }>(
+    path.join(dir, "studio.json"),
+  ).catch(() => null);
+  if (typeof meta?.contractVersion === "number") return true;
+  return isGameStack(meta?.stack) && isCompiledStack(meta.stack);
 }
 
 /**
  * The facts a folder holds by its files: the core table, then `pluginRules` (the enabled plugins'
- * `detect`). A web starter recorded in studio.json counts as a web game at the root even while its
- * page is missing. Throws when the folder can't be read.
+ * `detect`). A web starter or a compiled game's stack recorded in studio.json counts as a web game
+ * at the root even while its page is missing. Throws when the folder can't be read.
  */
 export async function detectFacts(dir: string, pluginRules: readonly SourcedFactRule[]): Promise<ProjectFact[]> {
   const facts = factsOfFiles(await projectFiles(dir), [...CORE_RULES, ...pluginRules]);

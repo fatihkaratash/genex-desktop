@@ -5,7 +5,13 @@
  */
 import type { JSX, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "../ui/dropdown-menu.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+} from "../ui/dropdown-menu.tsx";
 import { Icon, type IconName } from "../ui/icons.tsx";
 import { Shortcut } from "../ui/Shortcut.tsx";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip.tsx";
@@ -13,7 +19,9 @@ import { formatTokens } from "../chat-labels.ts";
 import { TOGGLE_TERMINAL_EVENT } from "./terminal-events.ts";
 import type { ContextUsage } from "../../shared/context.ts";
 import { hostPlatform } from "../platform.ts";
-import { fileManagerWords, HISTORY_WORDS, historyMenuSize, historySpaceWords } from "../words.ts";
+import { EXPORT_WORDS, fileManagerWords, HISTORY_WORDS, historyMenuSize, historySpaceWords } from "../words.ts";
+import type { BuildTarget } from "../../shared/game-project.ts";
+import { exportDestinationLabel, useExportCaveat, useExportDestinations } from "../chat/use-chat-export.ts";
 import { ConfirmSheet } from "../ui/Confirm.tsx";
 import type { GameHistoryMenu } from "../chat/use-game-history.ts";
 import { HarnessGuideButton } from "../chat/HarnessGuide.tsx";
@@ -29,7 +37,8 @@ interface Props {
   onCompact: () => void;
   onRename: (title: string) => void;
   onReveal?: () => void;
-  onExport?: () => void;
+  /** Exports the game: to the browser folder when no destination is named, as a three.js game always does. */
+  onExport?: (destination?: BuildTarget) => void;
   exporting?: boolean;
   /** A game chat's history space and its clearing (the ⋯ menu's history item). */
   history?: GameHistoryMenu;
@@ -187,6 +196,49 @@ function ChatTitle({
   );
 }
 
+/** A destination's item words: its label, and under it the caveat when its export has one. */
+function ExportDestinationWords({ destination, caveat }: { destination: BuildTarget; caveat: string | null }) {
+  if (!caveat) return <>{exportDestinationLabel(destination)}</>;
+  return (
+    <span className="flex min-w-0 flex-col">
+      <span>{exportDestinationLabel(destination)}</span>
+      <span data-chat-export-caveat={destination} className="text-xs text-muted-foreground">
+        {caveat}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A compiled game's export destinations, shown in the menu once Export is chosen: one item per
+ * destination this computer exports, under the menu's "Export for" label; a destination only a
+ * software GPU has drawn says so under its label.
+ */
+function ExportDestinations({
+  destinations,
+  caveat,
+  onExport,
+}: {
+  destinations: readonly BuildTarget[];
+  caveat: (destination: BuildTarget) => string | null;
+  onExport?: (destination?: BuildTarget) => void;
+}): JSX.Element {
+  return (
+    <>
+      <DropdownMenuLabel>{EXPORT_WORDS.menuLabel}</DropdownMenuLabel>
+      {destinations.map((destination) => (
+        <DropdownMenuItem
+          key={destination}
+          data-chat-export-destination={destination}
+          onSelect={() => onExport?.(destination)}
+        >
+          <ExportDestinationWords destination={destination} caveat={caveat(destination)} />
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
+}
+
 /** The confirmation before clearing a game's Rewind history: Keep first, Clear as the danger. */
 function ClearHistorySheet({ history, onDone }: { history: GameHistoryMenu; onDone: () => void }): JSX.Element | null {
   if (!history.space) return null;
@@ -224,27 +276,45 @@ function ClearHistoryItem({ history, onChoose }: { history: GameHistoryMenu; onC
 }
 
 /**
+ * What the ⋯ menu's Export item offers: a compiled game's destinations (null: it exports at once),
+ * each one's caveat, whether they show, and how to show them.
+ */
+interface ExportChoice {
+  destinations: readonly BuildTarget[] | null;
+  caveat: (destination: BuildTarget) => string | null;
+  choosing: boolean;
+  onChoose: () => void;
+}
+
+/**
  * The ⋯ menu: export the game, clear its Rewind history, rename the chat. Closing it returns focus
- * to the rename field.
+ * to the rename field. A compiled game's Export item opens its destinations in place instead of
+ * exporting at once.
  */
 function ChatActions({
   input,
+  project,
   exporting,
   onExport,
   onRename,
   history,
 }: {
   input: RefObject<HTMLInputElement | null>;
+  project: string | null;
   exporting?: boolean;
-  onExport?: () => void;
+  onExport?: (destination?: BuildTarget) => void;
   onRename: () => void;
   history?: GameHistoryMenu;
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [choosing, setChoosing] = useState(false);
+  const destinations = useExportDestinations(project);
+  const caveat = useExportCaveat(project);
   const openMenu = (open: boolean): void => {
     if (open) history?.refresh();
     setMenuOpen(open);
+    if (!open) setChoosing(false);
   };
   return (
     <>
@@ -258,6 +328,7 @@ function ChatActions({
         onRename={onRename}
         history={history}
         onClearHistory={() => setConfirming(true)}
+        choice={{ destinations, caveat, choosing, onChoose: () => setChoosing(true) }}
       />
     </>
   );
@@ -273,16 +344,20 @@ function ChatActionsMenu({
   onRename,
   history,
   onClearHistory,
+  choice,
 }: {
   input: RefObject<HTMLInputElement | null>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   exporting?: boolean;
-  onExport?: () => void;
+  onExport?: (destination?: BuildTarget) => void;
   onRename: () => void;
   history?: GameHistoryMenu;
   onClearHistory: () => void;
+  choice: ExportChoice;
 }): JSX.Element {
+  const { destinations } = choice;
+  const noDestination = destinations !== null && destinations.length === 0;
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <Tooltip>
@@ -305,10 +380,25 @@ function ChatActionsMenu({
           }
         }}
       >
-        <DropdownMenuItem data-chat-action="export" disabled={!onExport || exporting} onSelect={() => onExport?.()}>
+        <DropdownMenuItem
+          data-chat-action="export"
+          disabled={!onExport || exporting || noDestination}
+          onSelect={(event) => {
+            if (destinations === null) {
+              onExport?.();
+              return;
+            }
+            // Keep the menu open: the destinations appear below the item.
+            event.preventDefault();
+            choice.onChoose();
+          }}
+        >
           <Icon name="export" />
           {exporting ? "Exporting…" : "Export game…"}
         </DropdownMenuItem>
+        {choice.choosing && destinations && (
+          <ExportDestinations destinations={destinations} caveat={choice.caveat} onExport={onExport} />
+        )}
         {history && <ClearHistoryItem history={history} onChoose={onClearHistory} />}
         <DropdownMenuItem data-chat-action="rename" onSelect={onRename}>
           <Icon name="rename" />
@@ -413,6 +503,7 @@ export function ChatHeader({
       {!isStudio && (
         <ChatActions
           input={inputRef}
+          project={project}
           exporting={exporting}
           onExport={onExport}
           onRename={() => setEditing(true)}
