@@ -260,9 +260,9 @@ up to 2 GiB).
 | preset | anti-aliasing | sun cascades | bloom | AO | contact shadows | lights (shadowed spots) |
 | --- | --- | --- | --- | --- | --- | --- |
 | `low` | MSAA 4x | 2 | off | off | off | 64 (0) |
-| `medium` | MSAA 4x | 2 | 5 mips | half size | off | 256 (0) |
-| `high` | TAA | 3 | 6 mips | half size, history | on | 1024 (2) |
-| `ultra` | TAA, RCAS | 4 | 7 mips | full size | on | 1024 (4) |
+| `medium` | MSAA 4x | 2 | on | half size | off | 256 (0) |
+| `high` | TAA | 3 | on | half size, history | on | 1024 (2) |
+| `ultra` | TAA, RCAS | 4 | on | full size | on | 1024 (4) |
 
 Every preset draws HDR, image-based lighting, the sky and fog; below a render scale of 1 it
 upscales (EASU with RCAS, bilinear on a desktop's `low`). Phones are capped whatever the preset:
@@ -280,7 +280,7 @@ adds the compensation and adapts at `adaptation_speed_up` (default 1) and `adapt
 for a sunlit scene; keep `manual` for flat, stylized colour. Keep dusk dark with
 `.exposure_curve(&[(-8.0, -6.0), (0.0, 0.0)])` (metered EV, EV added). The rest of
 `[render.look]` is equal on every preset: `bloom_intensity` (default 0.04, threshold-free),
-`bloom_threshold`, `bloom_radius`; fog lit by the sky, off at `fog_density` 0, shaped by
+`bloom_threshold`, `bloom_radius` (the glow's spread); fog lit by the sky, off at `fog_density` 0, shaped by
 `fog_height_falloff`, `fog_base_height`, `fog_start`, `fog_max_opacity`, `fog_color` and
 `fog_aerial_perspective`; `ao_intensity`, `ao_radius`; `contact_shadow_length`. Keep `fog_color`
 white and warm the whole frame in code with `.temperature(0.3, 0.0)` (a blue sky stays blue) or

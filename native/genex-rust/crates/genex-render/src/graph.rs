@@ -716,7 +716,7 @@ mod tests {
             assert!(!quality_allows(node, &on), "{} off in the legacy renderer", spec(node).wire);
             on.set_feature(feature, true);
             if feature == RenderFeature::Bloom {
-                on.bloom.mips = 4;
+                on.bloom.resolution = crate::post::bloom::CHAIN_RESOLUTION;
             }
             assert!(quality_allows(node, &on), "{} follows its switch", spec(node).wire);
         }

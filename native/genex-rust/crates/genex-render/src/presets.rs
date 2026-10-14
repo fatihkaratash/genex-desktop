@@ -12,6 +12,7 @@
 //! land on top. A feature that does not fit is switched off or made cheaper, never refused.
 
 use crate::device_class::{DeviceClass, DeviceFacts, FormFactor, PerformanceTier, TargetOs};
+use crate::post::bloom::CHAIN_RESOLUTION;
 use crate::settings::{
     AntiAliasing, AoQuality, AoResolution, BloomQuality, EnvironmentQuality, JitterCycle, LightQuality, PresetChoice, Quality, QualityPreset,
     MAX_CASCADES, RENDER_SCALE_MIN, RenderFeature, RenderSettings, SHADOW_BLEND_BAND_MAX, SHADOW_DISTANCE_MAX_M, SHADOW_DISTANCE_MIN_M,
@@ -287,6 +288,10 @@ const HIGH_ANISOTROPY: u8 = 16;
 const MEDIUM_ANISOTROPY: u8 = 8;
 const LOW_ANISOTROPY: u8 = 4;
 const MOBILE_ANISOTROPY: u8 = 4;
+/// The bloom chain's top height cap on phones (`min(output height / 2, this)`): every phone preset
+/// draws the same halo, on a chain under two thirds of a desktop's rows (renderer pass 2, P5:
+/// presets and classes lower the chain's resolution, never its mip count).
+pub const MOBILE_BLOOM_RESOLUTION: u16 = 360;
 const MOBILE_LOW_ANISOTROPY: u8 = 2;
 
 fn low_row(quality: &mut Quality, form: FormFactor) {
@@ -309,7 +314,8 @@ fn low_row(quality: &mut Quality, form: FormFactor) {
         FormFactor::Mobile => (ShadowFilter::Hardware2x2, MOBILE_LOW_PRESET_SHADOW_MAP_PX),
     };
     quality.shadows = shadows(2, map_size, filter, ShadowFormat::Depth16, &LOW_REACH);
-    quality.bloom = BloomQuality { enabled: false, mips: 0, half_res: true };
+    // Off, at the chain every preset draws: a game that switches bloom on gets the same halo.
+    quality.bloom = BloomQuality { enabled: false, resolution: CHAIN_RESOLUTION };
     quality.ao = AoQuality { resolution: AoResolution::Off, slices: 0, steps: 0, temporal: false };
     quality.lights = lights(64, 32, 0);
 }
@@ -320,7 +326,7 @@ fn medium_row(quality: &mut Quality) {
     quality.exposure_input_divisor = 8;
     quality.environment = environment(128, (96, 54), 4, 10, true);
     quality.shadows = shadows(2, 1536, ShadowFilter::Pcf3x3, ShadowFormat::Depth32, &MEDIUM_REACH);
-    quality.bloom = BloomQuality { enabled: true, mips: 5, half_res: true };
+    quality.bloom = BloomQuality { enabled: true, resolution: CHAIN_RESOLUTION };
     quality.ao = AoQuality { resolution: AoResolution::Half, slices: 1, steps: 4, temporal: false };
     quality.lights = lights(256, 32, 0);
     with_geometry_features(quality);
@@ -333,7 +339,7 @@ fn high_row(quality: &mut Quality) {
     quality.environment = environment(256, (192, 108), 1, 5, true);
     quality.shadows = shadows(3, 2048, ShadowFilter::PcssLite, ShadowFormat::Depth32, &HIGH_REACH);
     quality.contact_shadows = true;
-    quality.bloom = BloomQuality { enabled: true, mips: 6, half_res: true };
+    quality.bloom = BloomQuality { enabled: true, resolution: CHAIN_RESOLUTION };
     quality.ao = AoQuality { resolution: AoResolution::Half, slices: 2, steps: 6, temporal: true };
     quality.lights = lights(1024, 16, 2);
     with_geometry_features(quality);
@@ -351,7 +357,6 @@ fn ultra_row(quality: &mut Quality, form: FormFactor) {
     quality.environment.hdri_cube_size = ULTRA_HDRI_CUBE_PX;
     let map_size = if form == FormFactor::Desktop { 4096 } else { 2048 };
     quality.shadows = shadows(4, map_size, ShadowFilter::Pcss, ShadowFormat::Depth32, &ULTRA_REACH);
-    quality.bloom.mips = 7;
     // Three slices of eight steps at full resolution with history. The unbiased estimate (gate
     // finding 03: each slice measured against its unoccluded arc, every sample slid back onto its
     // slice) costs about a fifth more a step: 3 x 8 measured 1.38 ms (M4 Max, 1080p), so the owner
@@ -494,7 +499,7 @@ fn apply_mobile_caps(quality: &mut Quality, preset: QualityPreset, class: Device
     // its cost on the Mac mobile proxy is in the showcase's `metal_mobile_proxy` row). EASU and
     // RCAS run only while the render size differs from the output.
     quality.upscaler = Upscaler::Fsr1;
-    quality.bloom.mips = quality.bloom.mips.min(5);
+    quality.bloom.resolution = quality.bloom.resolution.min(MOBILE_BLOOM_RESOLUTION);
     let anisotropy = if class.tier == PerformanceTier::Low { MOBILE_LOW_ANISOTROPY } else { MOBILE_ANISOTROPY };
     quality.anisotropy = quality.anisotropy.min(anisotropy);
     let taa_allowed = class.tier >= PerformanceTier::High && preset >= QualityPreset::High;

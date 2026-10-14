@@ -142,7 +142,10 @@ fn metal_every_rq4_effect_a_preset_asks_for_is_drawn_by_the_renderer() {
     write_evidence("no-bloom", &no_bloom);
     let changed = all.bgra().chunks(4).zip(no_bloom.bgra().chunks(4)).filter(|(a, b)| a != b).count();
     eprintln!("bloom changes {changed} pixels");
-    assert!(changed as u32 > WIDTH * HEIGHT / 4, "bloom changes the frame ({changed} pixels)");
+    // P2-0.13 flipped (was a quarter of the frame; named in the log): the chain is sized from the
+    // output and ends at its first level of 8 rows (four levels over this 144-row frame), so the
+    // glow stays around the sphere as at 1080p instead of washing the small frame with its mean.
+    assert!(changed as u32 > WIDTH * HEIGHT / 6, "bloom changes the frame ({changed} pixels)");
 
     // Fog: uniform distance fog takes the far ground towards its colour, the near box less.
     let fog = Fog::default().with_density(0.08).with_height(0.0, 0.0).with_color([0.9, 0.92, 0.95]);

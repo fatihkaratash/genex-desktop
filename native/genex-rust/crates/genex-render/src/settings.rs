@@ -268,7 +268,10 @@ pub struct Look {
     /// Bloom's optional threshold in pre-exposed scene units, a stylistic choice: 0 (the default)
     /// is threshold-free, every pixel blooms by the energy-conserving blend.
     pub bloom_threshold: f32,
-    /// Bloom's spread: a multiplier on the upsample filter's radius (1 is the default).
+    /// Bloom's spread: how much each wider blur of the chain weighs against the one below it
+    /// (1, the default, weighs every mip alike; 2 doubles each wider mip's share), so a wider
+    /// spread glows further out while the filter stays one texel wide
+    /// ([`crate::post::bloom::mip_weights`]).
     pub bloom_radius: f32,
     /// Ambient occlusion's strength, `0..=1` (GTAO, the one AO algorithm on every preset).
     pub ao_intensity: f32,
@@ -1456,16 +1459,17 @@ pub struct ShadowQuality {
     pub fade_percent: u8,
 }
 
-/// Bloom.
+/// Bloom. The chain is sized from the output, never the render size, and keeps one mip count
+/// ([`crate::post::bloom::CHAIN_MIPS`]) on every preset, so its halo is as wide at every preset
+/// and DRS step; a preset or the degrade ladder lowers only its resolution.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BloomQuality {
     /// Whether bloom runs.
     pub enabled: bool,
-    /// Mip levels of the chain.
-    pub mips: u8,
-    /// Whether the chain starts at half resolution.
-    pub half_res: bool,
+    /// The chain's top height cap in texels: the chain starts at `min(output height / 2, this)`
+    /// rows (0: no chain).
+    pub resolution: u16,
 }
 
 /// Ambient occlusion's resolution (GTAO).
@@ -1703,7 +1707,7 @@ impl Quality {
                 fade_percent: 0,
             },
             contact_shadows: false,
-            bloom: BloomQuality { enabled: false, mips: 0, half_res: true },
+            bloom: BloomQuality { enabled: false, resolution: 0 },
             ao: AoQuality { resolution: AoResolution::Off, slices: 0, steps: 0, temporal: false },
             fog: false,
             environment: EnvironmentQuality {
@@ -2013,10 +2017,8 @@ pub enum QualityKnob {
     ContactShadows,
     /// [`BloomQuality::enabled`].
     Bloom,
-    /// [`BloomQuality::mips`].
-    BloomMips,
-    /// [`BloomQuality::half_res`].
-    BloomHalfRes,
+    /// [`BloomQuality::resolution`].
+    BloomResolution,
     /// [`AoQuality::resolution`].
     AoResolution,
     /// [`AoQuality::slices`].
@@ -2065,7 +2067,7 @@ pub enum QualityKnob {
 
 impl QualityKnob {
     /// Every knob.
-    pub const ALL: [QualityKnob; 43] = [
+    pub const ALL: [QualityKnob; 42] = [
         QualityKnob::Hdr,
         QualityKnob::Tonemap,
         QualityKnob::Exposure,
@@ -2085,8 +2087,7 @@ impl QualityKnob {
         QualityKnob::ShadowFade,
         QualityKnob::ContactShadows,
         QualityKnob::Bloom,
-        QualityKnob::BloomMips,
-        QualityKnob::BloomHalfRes,
+        QualityKnob::BloomResolution,
         QualityKnob::AoResolution,
         QualityKnob::AoSlices,
         QualityKnob::AoSteps,
@@ -2127,8 +2128,7 @@ impl QualityKnob {
             | QualityKnob::ShadowBlend
             | QualityKnob::ShadowFade
             | QualityKnob::Bloom
-            | QualityKnob::BloomMips
-            | QualityKnob::BloomHalfRes
+            | QualityKnob::BloomResolution
             | QualityKnob::AoResolution
             | QualityKnob::IblCubeSize
             | QualityKnob::IblHdriCubeSize
@@ -2317,7 +2317,7 @@ mod tests {
         smaller.shadows.map_size = 768;
         smaller.shadows.cascades = 1;
         smaller.render_scale = 0.67;
-        smaller.bloom.mips = 4;
+        smaller.bloom.resolution = 270;
         smaller.lights.cap = 64;
         assert!(off.resource_change_only(&smaller), "DRS and demotion knobs never change pipelines");
         let mut taa = off;
@@ -2330,8 +2330,9 @@ mod tests {
         assert_eq!(QualityKnob::AntiAliasing.kind(), KnobKind::Pipeline);
         // RQ2 review: the HDR map's cube, the rebake cadence and the sun's rebake threshold are
         // resource knobs too (16 -> 19); RQ3 review: the shadow distance, split, blend band and end
-        // fade (19 -> 23).
-        assert_eq!(QualityKnob::ALL.iter().filter(|k| k.kind() == KnobKind::Resource).count(), 23);
+        // fade (19 -> 23). P2-0.13 flipped (named in the log): bloom's mips and half-resolution start
+        // are one knob, its chain's resolution (23 -> 22).
+        assert_eq!(QualityKnob::ALL.iter().filter(|k| k.kind() == KnobKind::Resource).count(), 22);
         let mut reach = off;
         (reach.shadows.distance, reach.shadows.split_percent, reach.shadows.blend_percent, reach.shadows.fade_percent) = (120, 80, 10, 10);
         assert!(off.resource_change_only(&reach), "the shadows' reach never changes pipelines");

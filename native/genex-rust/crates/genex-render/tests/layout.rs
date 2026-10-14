@@ -835,6 +835,7 @@ fn every_rq4_target_is_one_webgpu_core_guarantees() {
     let render = (1920, 1080);
     let mut targets: Vec<genex_render::target_pool::TargetDesc> = genex_render::prepass::targets(render).to_vec();
     let quality = genex_render::presets::preset_quality(genex_render::settings::QualityPreset::Ultra, genex_render::device_class::DeviceClass::ALL[0]);
+    // The chain is sized from the output (renderer pass 2, P5): 1080p here.
     targets.extend(bloom::chain_target(render, &quality.bloom));
     targets.extend(ao::targets(render, &quality.ao));
     targets.push(contact_shadow::mask_target(render));

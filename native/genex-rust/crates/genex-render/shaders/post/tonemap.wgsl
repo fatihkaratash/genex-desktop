@@ -35,8 +35,8 @@
 // beside it (a lantern's frame against its glass).
 //
 // Bloom (RQ4.2) composites before the curve in every entry point: `mix(scene, bloom, intensity)`
-// with the chain's top (bloom_down/bloom_up.wgsl, every mip's blur summed) scaled by 1 / mips, so
-// the frame keeps its energy. Intensity 0 (no bloom: a neutral black texture is bound) skips it,
+// with the chain's top (bloom_down/bloom_up.wgsl, every mip's blur weighed by the look's spread,
+// weights that sum to 1), so the frame keeps its energy. Intensity 0 (no bloom: a neutral black texture is bound) skips it,
 // so the picture is byte for byte the bloom-free one. Under a look's stylistic threshold the chain
 // holds only the over-threshold part, so that part is traded for the glow and the rest is kept:
 // `scene + (bloom - part(scene)) * intensity` (a lerp would darken everything below it).
@@ -49,7 +49,7 @@ struct GxTonemapParams {
     // xy: the target's size in pixels; zw: 1 / it.
     output: vec4<f32>,
     // x: the dither amplitude in encoded units (0: none); y: the sharpness (0..1); z: bloom's
-    // intensity (0: no bloom); w: the bloom chain's scale (1 / mips).
+    // intensity (0: no bloom); w: the bloom chain's scale (1: its weights sum to 1).
     shape: vec4<f32>,
     // x: the frame index the dither is keyed to.
     frame: vec4<u32>,

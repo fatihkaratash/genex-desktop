@@ -380,15 +380,17 @@ impl Exposure {
 ///
 /// Bloom is threshold-free and energy-conserving: the tonemap blends the scene towards its own
 /// blur by `intensity`, so bright things glow and nothing is added. A `threshold` above 0 is a
-/// stylistic choice (only what is brighter than it, in pre-exposed scene units, glows). Presets
-/// change only the blur chain's mips, never the look.
+/// stylistic choice (only what is brighter than it, in pre-exposed scene units, glows). The blur
+/// chain is sized from the output, so its glow is as wide on every preset and render scale; a
+/// phone or a tight memory budget draws it at a lower resolution, never a different look.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bloom {
     /// The blend weight, `0..=1` (0.04 by default; 0 draws no bloom).
     pub intensity: f32,
     /// The stylistic threshold in pre-exposed scene units, `0..=16` (0, the default: none).
     pub threshold: f32,
-    /// The spread, a multiplier on the blur's radius, `0.25..=4` (1 by default).
+    /// The spread, `0.25..=4` (1 by default): how much the wider blurs weigh against the narrower
+    /// ones, so above 1 the glow reaches further and below 1 it hugs the light.
     pub radius: f32,
 }
 
@@ -415,7 +417,7 @@ impl Bloom {
         Bloom { threshold, ..self }
     }
 
-    /// The bloom spread by `radius` (a multiplier on the blur's radius).
+    /// The bloom spread by `radius` (above 1 the glow reaches further, below 1 it hugs the light).
     pub fn radius(self, radius: f32) -> Bloom {
         Bloom { radius, ..self }
     }

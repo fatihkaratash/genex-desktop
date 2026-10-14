@@ -115,8 +115,8 @@ const SHADOW_SIZE_MIN: u32 = 768;
 const IBL_SIZE_MIN: u32 = 64;
 /// The smallest material size class the ladder halves to.
 const MATERIAL_SIZE_MIN: u32 = 64;
-/// Bloom keeps at least this many mips.
-const BLOOM_MIPS_MIN: u8 = 4;
+/// The lowest chain resolution (top rows) the bloom rung halves to.
+const BLOOM_RESOLUTION_MIN: u16 = 180;
 
 /// A material texture array: square layers of `size_px` (rgba8 with a full mip chain).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -321,15 +321,15 @@ impl Shape {
         }
     }
 
-    /// Pixels in the bloom chain (0 when bloom is off).
+    /// Pixels in the bloom chain (0 when bloom is off): sized from the output, the chain the
+    /// renderer allocates ([`crate::post::bloom::chain_sizes`]), whatever the DRS step, and the
+    /// pre-levels a scene more than twice its top's size is halved into first.
     fn bloom_px(&self, quality: &Quality) -> u64 {
-        if !quality.bloom.enabled || quality.bloom.mips == 0 {
-            return 0;
-        }
-        let shift = u32::from(quality.bloom.half_res);
-        (0..u32::from(quality.bloom.mips))
-            .map(|mip| (self.render.0 >> (mip + shift)).max(1) * (self.render.1 >> (mip + shift)).max(1))
-            .sum()
+        let size = |(w, h): (u64, u64)| (u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
+        let (render, output) = (size(self.render), size(self.output));
+        let chain = crate::post::bloom::chain_sizes(output, &quality.bloom);
+        let pre = crate::post::bloom::pre_level_sizes(render, output, &quality.bloom);
+        chain.iter().chain(&pre).map(|(w, h)| u64::from(*w) * u64::from(*h)).sum()
     }
 
     /// Bytes of the Hi-Z pyramid (half resolution down to 1 × 1, `r32float`).
@@ -546,15 +546,16 @@ pub enum DegradeRung {
     /// MSAA 4x → no AA (`from`/`to`: samples). Pipeline: boot or explicit only.
     Msaa,
     /// TAA → MSAA 4x where MSAA is transient, else no AA (`from`/`to`: history buffers 2 → 0).
-    /// Pipeline: boot or explicit only. It comes after the resource rungs (AO, bloom mips, spot
+    /// Pipeline: boot or explicit only. It comes after the resource rungs (AO, bloom resolution, spot
     /// shadows, shadow and IBL size; RQ5 review): its history pair is a fraction of what they
     /// free, and on a GPU without transient attachments its fallback is no anti-aliasing at all
     /// (a browser hiding `deviceMemory` keeps TAA at 1080p this way).
     TaaHistory,
     /// AO full → half → off (`from`/`to`: 2 full, 1 half, 0 off).
     Ao,
-    /// Bloom mips −1, down to 4.
-    BloomMips,
+    /// The bloom chain's resolution halves, down to 180 rows (`from`/`to`: its top's rows). Its
+    /// mip count never changes (renderer pass 2, P5).
+    BloomResolution,
     /// Shadowed spots → none (`from`/`to`: spot slots): the spot atlas layer goes before the sun's
     /// cascades are halved for its memory. Taken only for a game that uses shadowed spots (only
     /// then is the layer reserved).
@@ -575,7 +576,7 @@ impl DegradeRung {
         DegradeRung::ShadowFormat,
         DegradeRung::Msaa,
         DegradeRung::Ao,
-        DegradeRung::BloomMips,
+        DegradeRung::BloomResolution,
         DegradeRung::SpotShadows,
         DegradeRung::ShadowSize,
         DegradeRung::IblSize,
@@ -599,7 +600,7 @@ impl DegradeRung {
             DegradeRung::Msaa => "msaa",
             DegradeRung::TaaHistory => "taa-history",
             DegradeRung::Ao => "ao",
-            DegradeRung::BloomMips => "bloom-mips",
+            DegradeRung::BloomResolution => "bloom-resolution",
             DegradeRung::SpotShadows => "spot-shadows",
             DegradeRung::ShadowSize => "shadow-size",
             DegradeRung::IblSize => "ibl-size",
@@ -661,7 +662,7 @@ fn step_down(rung: DegradeRung, quality: &mut Quality, materials: &mut [Material
         DegradeRung::Msaa => step_msaa(quality),
         DegradeRung::TaaHistory => step_taa(quality, transient),
         DegradeRung::Ao => step_ao(quality),
-        DegradeRung::BloomMips => step_bloom(quality),
+        DegradeRung::BloomResolution => step_bloom(quality),
         DegradeRung::SpotShadows => step_spot_shadows(quality),
         DegradeRung::ShadowSize => step_shadow_size(quality),
         DegradeRung::IblSize => step_ibl(quality),
@@ -699,12 +700,12 @@ fn step_ao(quality: &mut Quality) -> Option<(u32, u32)> {
 }
 
 fn step_bloom(quality: &mut Quality) -> Option<(u32, u32)> {
-    let mips = quality.bloom.mips;
-    if !quality.bloom.enabled || mips <= BLOOM_MIPS_MIN {
+    let resolution = quality.bloom.resolution;
+    if !quality.bloom.enabled || resolution / 2 < BLOOM_RESOLUTION_MIN {
         return None;
     }
-    quality.bloom.mips = mips - 1;
-    Some((u32::from(mips), u32::from(mips - 1)))
+    quality.bloom.resolution = resolution / 2;
+    Some((u32::from(resolution), u32::from(resolution / 2)))
 }
 
 fn step_spot_shadows(quality: &mut Quality) -> Option<(u32, u32)> {

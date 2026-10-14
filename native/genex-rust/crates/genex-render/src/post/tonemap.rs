@@ -20,7 +20,7 @@
 //! [`crate::post::bloom::TONEMAP_BLOOM_BINDING`] (with the filtering sampler); without bloom they
 //! carry a neutral 1x1 black texture. `GpuTonemapParams::shape.z` holds the look's intensity (0
 //! without bloom: the shader skips the composite, so the picture is byte for byte the bloom-free
-//! one) and `shape.w` the chain's 1 / mips; the composite is `mix(scene, bloom, intensity)`, or,
+//! one) and `shape.w` the chain's scale (1: its weights sum to 1); the composite is `mix(scene, bloom, intensity)`, or,
 //! under the look's stylistic threshold (`bloom.x`, its knee `bloom.y`),
 //! `scene + (bloom - soft_threshold(scene)) * intensity` ([`crate::post::bloom::composite`]), so the
 //! scene below the threshold keeps its light.
@@ -152,7 +152,7 @@ pub struct GpuTonemapParams {
     /// xy: the target's size in pixels; zw: 1 / it.
     pub output: [f32; 4],
     /// x: the dither amplitude (0: none); y: the sharpness; z: bloom's intensity (0: no bloom);
-    /// w: the bloom chain's scale (1 / mips).
+    /// w: the bloom chain's scale (1: its weights sum to 1).
     pub shape: [f32; 4],
     /// x: the frame index the dither is keyed to.
     pub frame: [u32; 4],
@@ -415,6 +415,9 @@ pub(crate) struct TonemapPass<'a> {
     pub source_size: (u32, u32),
     /// The target's size.
     pub target_size: (u32, u32),
+    /// The output's size (the world target's): the bloom chain is sized from it, so a DRS step
+    /// keeps the halo's width (renderer pass 2, P5).
+    pub output_size: (u32, u32),
     /// Whether to dither (the final world-target write).
     pub dither: bool,
     /// The frame index the dither is keyed to.
@@ -617,7 +620,8 @@ impl TonemapNode {
         let settings = self.bloom?;
         let node = self.bloom_node.as_mut()?;
         let source = if pass.source.multisampled() { BloomSource::Msaa(pass.input) } else { BloomSource::Scene(pass.input) };
-        node.encode(device, queue, encoder, BloomInput { source, render: pass.source_size, settings: &settings, generation: pass.generation })
+        let input = BloomInput { source, render: pass.source_size, output: pass.output_size, settings: &settings, generation: pass.generation };
+        node.encode(device, queue, encoder, input)
     }
 
     /// Record one tonemap pass (after the bloom chain, when the node draws bloom): a full-screen
@@ -800,6 +804,7 @@ fn tonemap_through(
         tonemapper,
         source_size: size,
         target_size: target,
+        output_size: target,
         dither,
         frame_index: 0,
         generation: 0,

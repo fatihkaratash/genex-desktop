@@ -3747,6 +3747,7 @@ impl Renderer {
             tonemapper: self.path.tonemapper,
             source_size: targets.render_size,
             target_size,
+            output_size: (self.width, self.height),
             dither: fsr.is_none(),
             frame_index: self.frame_index,
             generation,
