@@ -139,7 +139,7 @@
     ],
     "tonemappers": ["khronos-neutral", "agx", "aces", "none", "agx-punchy"],
     "exposureModes": ["manual", "auto"],
-    "metering": ["average", "center", "spot"],
+    "metering": ["average", "center", "spot", "ground"],
     "lookKeys": [
       "tonemapper",
       "exposure",

@@ -105,7 +105,9 @@ fn the_template_reads_its_genex_toml_look_agx_punchy_with_auto_exposure() {
     let runtime = started();
     let look = runtime.render().borrow().look();
     assert_eq!((look.tonemapper, look.exposure), (Tonemap::AgxPunchy, ExposureMode::Auto));
-    assert_eq!(look.ev_compensation, 1.5);
+    // P2-0.10 flipped 1.5 to 0.5: punchy keeps middle grey, so the template keeps only the sunlit
+    // scene's half EV.
+    assert_eq!(look.ev_compensation, 0.5);
 }
 
 #[test]

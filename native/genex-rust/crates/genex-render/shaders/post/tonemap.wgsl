@@ -5,13 +5,20 @@
 //
 // The curve is the pipeline's `GX_TONEMAPPER` override, `Tonemapper::shader_id`: 0 Khronos PBR
 // Neutral (the legacy-preserving default), 1 AgX, 2 Hill's ACES fit, 3 none (a clamp, encoded
-// as the legacy forward shader encodes), 4 AgX with the punchy look (Wrensch's `agxLook`,
-// Blender's "Punchy": power 1.35 and saturation 1.4 in AgX's log space). tests/layout.rs emits every value
-// through HLSL, MSL and SPIR-V. The curves are ported from three.js 0.185's tonemapping shader chunk
-// (MIT, Copyright 2010-2026 three.js authors): Khronos PBR Neutral (Khronos Group, Emmett Lalish),
-// AgX (Troy Sobotka; the minimal fit of Benjamin Wrensch, iolite; Filament's Rec. 2020 port) and
-// Stephen Hill's ACES fit (ACES RRT + ODT, with three's 1 / 0.6 brighter-viewing scale). Every
-// curve's output is dithered, `none` too: an HDR scene through a clamp bands like any other.
+// as the legacy forward shader encodes), 4 AgX punchy. tests/layout.rs emits every value through
+// HLSL, MSL and SPIR-V. Curves 0-2 are ported from three.js 0.185's tonemapping shader chunk (MIT,
+// Copyright 2010-2026 three.js authors): Khronos PBR Neutral (Khronos Group, Emmett Lalish), AgX
+// (Troy Sobotka; the minimal fit of Benjamin Wrensch, iolite; Filament's Rec. 2020 port) and
+// Stephen Hill's ACES fit (ACES RRT + ODT, with three's 1 / 0.6 brighter-viewing scale). Punchy is
+// Godot 4.7.2's AgX (MIT, Copyright 2014-present Godot Engine contributors; `tonemap.glsl`
+// `allenwp_curve` and `tonemap_agx`): Allen Pestaluky's curve, a power toe and a Reinhard-like
+// shoulder meeting at scene 0.18, between the combined Rec. 709 -> Rec. 2020 -> AgX inset matrix
+// and the outset -> Rec. 709 one (EaryChow's Blender AgX matrices). Its contrast is 1.4 and its
+// toe, slope and shoulder are computed on the CPU (`gx_tm.curve`, `post::tonemap::AgxCurve`); the
+// crossover maps to the display grey plain AgX draws 0.18 at (Godot maps it to 0.18 itself), so
+// the look deepens contrast about middle grey and never shifts the exposure. Saturation 1.4 about
+// luminance follows the curve. Every curve's output is dithered, `none` too: an HDR scene through a
+// clamp bands like any other.
 //
 // Entry points, one per way the scene reaches the curve:
 // - fs_tonemap: the 1x scene, one texel per pixel (scale 1);
@@ -48,9 +55,12 @@ struct GxTonemapParams {
     frame: vec4<u32>,
     // x: bloom's stylistic threshold (0: none, the lerp); y: its soft knee as a fraction of it.
     bloom: vec4<f32>,
-    // The look's white balance on linear rgb (`GpuTonemapParams::balance`): the diagonal of its
-    // luminance-normalised gains (identity leaves the scene as it is).
+    // The look's white balance on linear rgb (`GpuTonemapParams::balance`): a CIECAT16 chromatic
+    // adaptation times the diagonal of its luminance-normalised gains (identity leaves the scene
+    // as it is).
     balance: mat3x3<f32>,
+    // AgX punchy's curve (`AgxCurve`): x contrast, y the toe's a, z the shoulder's slope, w its w.
+    curve: vec4<f32>,
 }
 
 @group(0) @binding(0) var gx_hdr_scene: texture_2d<f32>;
@@ -71,6 +81,12 @@ const GX_TM_RADIANCE_MAX: f32 = 64512.0;
 // Khronos PBR Neutral: where highlight compression starts, and how far compressed highlights desaturate.
 const GX_NEUTRAL_START: f32 = 0.76;
 const GX_NEUTRAL_DESATURATION: f32 = 0.15;
+// AgX punchy (`post::tonemap`'s AGX_CROSSOVER, AGX_GREY_OUT, AGX_PUNCHY_SATURATION): the scene
+// value the toe and the shoulder meet at, the display value it maps to (plain AgX's grey), and the
+// saturation about luminance after the curve.
+const GX_AWP_CROSSOVER: f32 = 0.18;
+const GX_AWP_GREY_OUT: f32 = 0.2145;
+const GX_AWP_SATURATION: f32 = 1.4;
 
 struct GxTonemapOut {
     @builtin(position) clip: vec4<f32>,
@@ -103,13 +119,38 @@ fn gx_tm_agx_contrast(x: vec3<f32>) -> vec3<f32> {
     return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
 }
 
-// AgX's punchy look: slope 1, offset 0, power 1.35 per channel, saturation 1.4 about luma.
-fn gx_tm_agx_punchy(c: vec3<f32>) -> vec3<f32> {
-    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
-    return luma + 1.4 * (pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.35)) - luma);
+// Godot's `allenwp_curve` (MIT): a sigmoid power toe below the crossover, a Reinhard-like
+// shoulder above it reaching display white at the curve's white, generalised to a crossover that
+// maps to GX_AWP_GREY_OUT instead of itself (the CPU solves the toe for it).
+fn gx_tm_awp(x: vec3<f32>) -> vec3<f32> {
+    let shoulder_max = 1.0 - GX_AWP_GREY_OUT;
+    let s = x - GX_AWP_CROSSOVER;
+    let slope_s = gx_tm.curve.z * s;
+    let shoulder = slope_s * (1.0 + s / gx_tm.curve.w) / (1.0 + slope_s / shoulder_max) + GX_AWP_GREY_OUT;
+    let t = pow(x, vec3<f32>(gx_tm.curve.x));
+    let toe = t / (t + gx_tm.curve.y);
+    return select(shoulder, toe, x < vec3<f32>(GX_AWP_CROSSOVER));
 }
 
-fn gx_tm_agx(color: vec3<f32>, punchy: bool) -> vec3<f32> {
+// Godot's `tonemap_agx` (MIT): the combined Rec. 709 -> Rec. 2020 -> AgX inset matrix, the curve,
+// a clip at white and the combined outset -> Rec. 709 matrix; then the punchy saturation.
+fn gx_tm_agx_punchy(color: vec3<f32>) -> vec3<f32> {
+    let inset = mat3x3<f32>(
+        vec3<f32>(0.544814746488245, 0.140416948464053, 0.0888104196149096),
+        vec3<f32>(0.373787398372697, 0.754137554567394, 0.178871756420858),
+        vec3<f32>(0.0813978551390581, 0.105445496968552, 0.732317823964232)
+    );
+    let outset = mat3x3<f32>(
+        vec3<f32>(1.96488741169489, -0.299313364904742, -0.164352742528393),
+        vec3<f32>(-0.855988495690215, 1.32639796461980, -0.238183969428088),
+        vec3<f32>(-0.108898916004672, -0.0270845997150571, 1.40253671195648)
+    );
+    let c = outset * min(gx_tm_awp(inset * color), vec3<f32>(1.0));
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return clamp(luma + GX_AWP_SATURATION * (c - luma), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn gx_tm_agx(color: vec3<f32>) -> vec3<f32> {
     let srgb_to_rec2020 = mat3x3<f32>(vec3<f32>(0.6274, 0.0691, 0.0164), vec3<f32>(0.3293, 0.9195, 0.0880), vec3<f32>(0.0433, 0.0113, 0.8956));
     let rec2020_to_srgb = mat3x3<f32>(vec3<f32>(1.6605, -0.1246, -0.0182), vec3<f32>(-0.5876, 1.1329, -0.1006), vec3<f32>(-0.0728, -0.0083, 1.1187));
     let inset = mat3x3<f32>(
@@ -126,9 +167,6 @@ fn gx_tm_agx(color: vec3<f32>, punchy: bool) -> vec3<f32> {
     c = max(c, vec3<f32>(1e-10));
     c = clamp((log2(c) - GX_AGX_MIN_EV) / (GX_AGX_MAX_EV - GX_AGX_MIN_EV), vec3<f32>(0.0), vec3<f32>(1.0));
     c = gx_tm_agx_contrast(c);
-    if punchy {
-        c = gx_tm_agx_punchy(c);
-    }
     c = outset * c;
     c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
     return clamp(rec2020_to_srgb * c, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -152,8 +190,11 @@ fn gx_tm_neutral(color: vec3<f32>) -> vec3<f32> {
 // display-linear colour in [0, 1].
 fn gx_tonemap_curve(color: vec3<f32>) -> vec3<f32> {
     let c = min(max(gx_tm.balance * color, vec3<f32>(0.0)), vec3<f32>(GX_TM_RADIANCE_MAX));
-    if GX_TONEMAPPER == 1u || GX_TONEMAPPER == 4u {
-        return gx_tm_agx(c, GX_TONEMAPPER == 4u);
+    if GX_TONEMAPPER == 1u {
+        return gx_tm_agx(c);
+    }
+    if GX_TONEMAPPER == 4u {
+        return gx_tm_agx_punchy(c);
     }
     if GX_TONEMAPPER == 2u {
         return gx_tm_aces(c);

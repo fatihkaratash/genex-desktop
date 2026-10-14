@@ -259,19 +259,20 @@ shadows while the world pass is multisampled.
 
 The look maps the linear HDR scene to the display. `tonemapper`: `khronos-neutral`
 (default) keeps authored colours; `agx-punchy` is the filmic choice
-for a bright, high-contrast scene; plain `agx` greys saturated lights,
-so keep it for a muted photographic look; `aces` is a punchier film curve; `none` clamps.
+for a bright, high-contrast scene (AgX's middle grey, more contrast and colour); plain `agx` is
+muted; `aces` is a punchier film curve; `none` clamps.
 `exposure`: `manual` (default) is fixed at `ev_compensation` EV (0 is 1.0, +1 doubles it); `auto`
-meters the scene (`metering`: `average`, `center`, `spot`), holds it within `ev_min..=ev_max`,
+meters the scene (`metering`: `average`, `center`, `spot`, sky-aware `ground`), holds it within `ev_min..=ev_max`,
 adds the compensation and adapts at `adaptation_speed_up` (default 1) and `adaptation_speed_down`
-(3) EV per simulated second. Use `auto` where sky, sun or lights sit next to shade, with
-`ev_compensation = 0.5` for a sunlit scene (1.5 under `agx-punchy`); keep `manual` for flat, stylized colour. The rest of
+(3) EV per simulated second. Use `auto` where light meets shade, with `ev_compensation = 0.5`
+for a sunlit scene; keep `manual` for flat, stylized colour. Keep dusk dark with
+`.exposure_curve(&[(-8.0, -6.0), (0.0, 0.0)])` (metered EV, EV added). The rest of
 `[render.look]` is equal on every preset: `bloom_intensity` (default 0.04, threshold-free),
 `bloom_threshold`, `bloom_radius`; fog lit by the sky, off at `fog_density` 0, shaped by
 `fog_height_falloff`, `fog_base_height`, `fog_start`, `fog_max_opacity`, `fog_color` and
-`fog_aerial_perspective`; `ao_intensity`, `ao_radius`; `contact_shadow_length`. `fog_color`
-tints what is behind the scene (sky, map or clear colour): keep it white and warm or cool the
-whole frame with `.white_balance([1.0, 0.85, 0.65])` in code instead. The presets choose how an effect is drawn, never how it looks. In code:
+`fog_aerial_perspective`; `ao_intensity`, `ao_radius`; `contact_shadow_length`. Keep `fog_color`
+white and warm the whole frame in code with `.temperature(0.3, 0.0)` (a blue sky stays blue) or
+`.white_balance([1.0, 0.85, 0.65])`. The presets choose how an effect is drawn, never how it looks. In code:
 `RenderConfig::new().tonemap(Tonemap::KhronosNeutral).exposure(Exposure::auto().compensation(0.5)).fog(Fog::default().with_density(0.02))`
 (`genex::render`).
 
@@ -305,7 +306,7 @@ preset = "auto"             # auto | low | medium | high | ultra
 [render.look]
 tonemapper = "agx-punchy"
 exposure = "auto"
-ev_compensation = 1.5       # EV, within ±10
+ev_compensation = 0.5       # EV, within ±10
 
 [render.shadows]            # every preset, held to each class's caps
 distance = 60               # world units, 10..=400

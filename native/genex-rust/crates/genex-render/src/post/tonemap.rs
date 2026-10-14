@@ -26,7 +26,11 @@
 //! scene below the threshold keeps its light.
 //!
 //! The curves are ported from three.js 0.185's tonemapping shader chunk (MIT): Khronos PBR Neutral,
-//! AgX and Stephen Hill's ACES fit. [`tonemap_cpu`] is the CPU reference the shader is held to.
+//! AgX and Stephen Hill's ACES fit. AgX punchy is Godot 4.7.2's AgX (MIT): the allenwp curve
+//! ([`AgxCurve`], its parameters computed here as Godot's `environment_storage.cpp` computes them)
+//! between Blender AgX's combined inset and outset matrices, at contrast [`AGX_PUNCHY_CONTRAST`]
+//! with scene 0.18 kept at the display grey plain AgX draws it at ([`AGX_GREY_OUT`]), then
+//! saturation [`AGX_PUNCHY_SATURATION`]. [`tonemap_cpu`] is the CPU reference the shader is held to.
 //!
 //! Shaders: [`crate::shaders::TONEMAP`], [`crate::shaders::RESOLVE_HDR`].
 
@@ -160,6 +164,75 @@ pub struct GpuTonemapParams {
     /// [`crate::settings::Look::white_balance_gains`] ([`balance_columns`]); a chromatic-adaptation
     /// matrix baked on the CPU from temperature and tint takes its place without a layout change.
     pub balance: [[f32; 4]; 3],
+    /// AgX punchy's curve ([`AgxCurve::row`]): contrast, the toe's a, the shoulder's slope and w.
+    pub curve: [f32; 4],
+}
+
+/// The scene value where the allenwp curve's toe and shoulder meet (Godot's `awp_crossover_point`).
+pub const AGX_CROSSOVER: f32 = 0.18;
+/// The display-linear value the crossover maps to: where plain AgX draws scene 0.18 (sRGB 128), so
+/// punchy's contrast pivots about middle grey and never shifts the exposure (Godot maps the
+/// crossover to itself, sRGB 118).
+pub const AGX_GREY_OUT: f32 = 0.2145;
+/// AgX punchy's contrast: the toe's power (Godot's default 1.25 approximates Blender's AgX). 1.4,
+/// not the plan's 1.5: it keeps a sky-lit shadow readable and amplifies a wobble of shadow
+/// radiance (PCF, PCSS, AO or TAA noise) 1.4 times on screen, against 2.3 under pass 1's punchy,
+/// and AO steps between presets stay within the showcase's cabin-wall bound.
+pub const AGX_PUNCHY_CONTRAST: f32 = 1.4;
+/// AgX punchy's white: the scene value the shoulder reaches display white at (Blender AgX's
+/// 2^6.5 x 0.18).
+pub const AGX_PUNCHY_WHITE: f32 = 16.29;
+/// AgX punchy's saturation about Rec. 709 luminance, after the curve (grey stays grey).
+pub const AGX_PUNCHY_SATURATION: f32 = 1.4;
+
+/// The allenwp tonemapping curve's parameters (Godot 4.7.2 `environment_storage.cpp`
+/// `environment_get_tonemap_parameters`, MIT), solved for a crossover at [`AGX_CROSSOVER`] that
+/// maps to [`AGX_GREY_OUT`]: the toe `t = x^contrast / (x^contrast + toe_a)` passes through it, the
+/// shoulder starts with the toe's slope there and reaches display white at `white`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AgxCurve {
+    /// The toe's power.
+    pub contrast: f32,
+    /// The toe's denominator offset.
+    pub toe_a: f32,
+    /// The shoulder's slope at the crossover (the toe's).
+    pub slope: f32,
+    /// The shoulder's w: where it reaches display white.
+    pub w: f32,
+}
+
+impl AgxCurve {
+    /// The curve of `contrast` reaching display white at scene `white` (above the crossover).
+    pub fn new(contrast: f32, white: f32) -> AgxCurve {
+        let shoulder_max = 1.0 - AGX_GREY_OUT;
+        let crossover_c = libm::powf(AGX_CROSSOVER, contrast);
+        let toe_a = crossover_c * (1.0 / AGX_GREY_OUT - 1.0);
+        let denominator = crossover_c + toe_a;
+        let slope = contrast * libm::powf(AGX_CROSSOVER, contrast - 1.0) * toe_a / (denominator * denominator);
+        let reach = white.max(AGX_CROSSOVER * 2.0) - AGX_CROSSOVER;
+        AgxCurve { contrast, toe_a, slope, w: reach * reach / shoulder_max * slope }
+    }
+
+    /// AgX punchy's curve.
+    pub fn punchy() -> AgxCurve {
+        AgxCurve::new(AGX_PUNCHY_CONTRAST, AGX_PUNCHY_WHITE)
+    }
+
+    /// The uniform's row (`GpuTonemapParams::curve`).
+    pub fn row(&self) -> [f32; 4] {
+        [self.contrast, self.toe_a, self.slope, self.w]
+    }
+
+    /// The curve at scene value `x` (one channel, `x >= 0`): the shader's `gx_tm_awp`.
+    pub fn at(&self, x: f32) -> f32 {
+        if x < AGX_CROSSOVER {
+            let t = libm::powf(x, self.contrast);
+            return t / (t + self.toe_a);
+        }
+        let s = x - AGX_CROSSOVER;
+        let slope_s = self.slope * s;
+        slope_s * (1.0 + s / self.w) / (1.0 + slope_s / (1.0 - AGX_GREY_OUT)) + AGX_GREY_OUT
+    }
 }
 
 /// A column-major 3x3 matrix on linear rgb (`m[column][row]`).
@@ -221,30 +294,38 @@ fn aces(color: [f32; 3]) -> [f32; 3] {
     clamp01(mul(&ACES_OUTPUT, fitted))
 }
 
-/// The "punchy" look's power (ASC CDL, per channel, in AgX's log space).
-const AGX_PUNCHY_POWER: f32 = 1.35;
-/// The "punchy" look's saturation about Rec. 709 luma.
-const AGX_PUNCHY_SATURATION: f32 = 1.4;
-
-/// AgX's look (Wrensch's `agxLook`, Blender's "Punchy"): slope 1 and offset 0, `power` per channel
-/// and `saturation` about luma, on the sigmoid's output.
-fn agx_look(c: [f32; 3], power: f32, saturation: f32) -> [f32; 3] {
-    let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
-    c.map(|v| luma + saturation * (libm::powf(v.max(0.0), power) - luma))
-}
-
-fn agx(color: [f32; 3], punchy: bool) -> [f32; 3] {
+fn agx(color: [f32; 3]) -> [f32; 3] {
     let inset = mul(&AGX_INSET, mul(&SRGB_TO_REC2020, color));
     let encoded = inset.map(|c| ((libm::log2f(c.max(1e-10)) - AGX_MIN_EV) / (AGX_MAX_EV - AGX_MIN_EV)).clamp(0.0, 1.0));
-    let mut contrast = encoded.map(|x| {
+    let contrast = encoded.map(|x| {
         let (x2, x4) = (x * x, x * x * x * x);
         15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232
     });
-    if punchy {
-        contrast = agx_look(contrast, AGX_PUNCHY_POWER, AGX_PUNCHY_SATURATION);
-    }
     let linear = mul(&AGX_OUTSET, contrast).map(|c| libm::powf(c.max(0.0), 2.2));
     clamp01(mul(&REC2020_TO_SRGB, linear))
+}
+
+/// Godot's combined Rec. 709 -> Rec. 2020 -> AgX inset matrix (columns).
+#[allow(clippy::excessive_precision, reason = "the constants as Godot publishes them")]
+const AGX_GODOT_INSET: Mat3 = [
+    [0.544_814_746_488_245, 0.140_416_948_464_053, 0.088_810_419_614_909_6],
+    [0.373_787_398_372_697, 0.754_137_554_567_394, 0.178_871_756_420_858],
+    [0.081_397_855_139_058_1, 0.105_445_496_968_552, 0.732_317_823_964_232],
+];
+/// Godot's combined AgX outset -> Rec. 2020 -> Rec. 709 matrix (columns).
+#[allow(clippy::excessive_precision, reason = "the constants as Godot publishes them")]
+const AGX_GODOT_OUTSET: Mat3 = [
+    [1.964_887_411_694_89, -0.299_313_364_904_742, -0.164_352_742_528_393],
+    [-0.855_988_495_690_215, 1.326_397_964_619_80, -0.238_183_969_428_088],
+    [-0.108_898_916_004_672, -0.027_084_599_715_057_1, 1.402_536_711_956_48],
+];
+
+/// AgX punchy: Godot's AgX through `curve`, then [`AGX_PUNCHY_SATURATION`] about luminance.
+fn agx_punchy(color: [f32; 3], curve: &AgxCurve) -> [f32; 3] {
+    let shaped = mul(&AGX_GODOT_INSET, color).map(|c| curve.at(c).min(1.0));
+    let c = mul(&AGX_GODOT_OUTSET, shaped);
+    let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+    clamp01(c.map(|v| luma + AGX_PUNCHY_SATURATION * (v - luma)))
 }
 
 fn neutral(color: [f32; 3]) -> [f32; 3] {
@@ -267,8 +348,8 @@ pub fn tonemap_cpu(tonemapper: Tonemapper, rgb: [f32; 3]) -> [f32; 3] {
     // `max` first: a NaN reads as 0, as the shader's does.
     let c = rgb.map(|v| v.max(0.0).clamp(0.0, SCENE_RADIANCE_MAX));
     match tonemapper {
-        Tonemapper::Agx => agx(c, false),
-        Tonemapper::AgxPunchy => agx(c, true),
+        Tonemapper::Agx => agx(c),
+        Tonemapper::AgxPunchy => agx_punchy(c, &AgxCurve::punchy()),
         Tonemapper::Aces => aces(c),
         Tonemapper::None => clamp01(c),
         _ => neutral(c),
@@ -552,6 +633,7 @@ impl TonemapNode {
             frame: [(pass.frame_index % DITHER_CYCLE) as u32, 0, 0, 0],
             bloom: [threshold, crate::post::bloom::THRESHOLD_KNEE, 0.0, 0.0],
             balance: balance_columns(&pass.balance),
+            curve: AgxCurve::punchy().row(),
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         let pipeline = self.pipeline(device, pass.tonemapper, pass.source, pass.format);

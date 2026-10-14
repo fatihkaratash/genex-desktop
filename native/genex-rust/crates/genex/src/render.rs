@@ -495,6 +495,26 @@ impl RenderConfig {
         self
     }
 
+    /// The config with its look's white balance as a chromatic adaptation: `temperature` warms
+    /// (positive) or cools (negative) and `tint` turns magenta (positive) or green, each within
+    /// `-1..=1` (0 leaves the picture unchanged). Unlike gains it keeps saturated colours' hues: a
+    /// warm grade warms the neutrals while a blue sky stays blue. It composes with
+    /// [`RenderConfig::white_balance`].
+    pub fn temperature(mut self, temperature: f32, tint: f32) -> RenderConfig {
+        self.look = self.look.with_temperature(temperature, tint);
+        self
+    }
+
+    /// The config with auto exposure's compensation curve: `(metered EV, compensation EV)` points,
+    /// piecewise linear between them and flat beyond the ends (at most 8; a point that is not a
+    /// number is left out). A scene metered dark can stay dark: `[(-4.0, -2.0), (0.0, 0.0)]` keeps
+    /// a dusk at EV -3 1.5 EV under middle grey and leaves daylight alone. Empty (the default)
+    /// adds nothing.
+    pub fn exposure_curve(mut self, points: &[(f32, f32)]) -> RenderConfig {
+        self.look = self.look.with_compensation_curve(genex_render::settings::CompensationCurve::new(points));
+        self
+    }
+
     /// The config with `bloom` as its look's bloom ([`Bloom::apply_to`]).
     pub fn bloom(mut self, bloom: Bloom) -> RenderConfig {
         self.look = bloom.apply_to(self.look);

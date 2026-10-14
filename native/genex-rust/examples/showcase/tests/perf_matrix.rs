@@ -41,7 +41,7 @@ use genex_render::device_class::{DeviceClass, FormFactor, PerformanceTier, Targe
 use genex_render::presets::{class_defaults, default_preset, preset_quality, reference_resolution, scene_format};
 use genex_render::renderer::FrameStats;
 use genex_render::scene::{FramePlan, MeshLibrary, MeshletState, Scene};
-use genex_render::settings::{AntiAliasing, ExposureMode, Look, Quality, QualityPreset, RenderFeature, Tonemapper};
+use genex_render::settings::{AntiAliasing, CompensationCurve, ExposureMode, Look, Quality, QualityPreset, RenderFeature, Tonemapper};
 use genex_render::{RenderOptions, Renderer};
 use genex_render::meshlet_cull::CullPass;
 use showcase_game::bench::SceneId;
@@ -257,16 +257,14 @@ fn lakeside_look() -> Look {
     look
 }
 
-/// The look a capture of `cell` draws with: the lakeside's, with the scene's own floor on what
-/// auto exposure meters where it sets one (the dusk plaza, `StressId::ev_min`).
+/// The look a capture of `cell` draws with: the lakeside's, with the scene's own exposure
+/// compensation curve where it sets one (the dusk plaza, `StressId::exposure_curve`).
 fn scene_look(cell: Cell) -> Look {
-    let mut look = lakeside_look();
-    if let Cell::Stress(id) = cell
-        && let Some(ev_min) = id.ev_min()
-    {
-        look.ev_min = ev_min;
+    let look = lakeside_look();
+    match cell {
+        Cell::Stress(id) => id.exposure_curve().map_or(look, |points| look.with_compensation_curve(CompensationCurve::new(points))),
+        _ => look,
     }
-    look
 }
 
 /// GPU timestamps around a frame: a stamped dispatch first in the frame's first encoder and a

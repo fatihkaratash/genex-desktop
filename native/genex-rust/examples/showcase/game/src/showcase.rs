@@ -8,8 +8,10 @@ use crate::draw::{HORIZON, draw};
 use crate::passes;
 use crate::world::{Models, SHOTS, TERRAIN_WGSL, World, scene_probe, update};
 
-/// Auto exposure's compensation in EV, against the renderer's metering of the golden-hour frame.
-pub const LOOK_EV_COMPENSATION: f32 = 0.9;
+/// Auto exposure's compensation in EV, against the renderer's metering of the golden-hour frame:
+/// none. AgX punchy holds middle grey where plain AgX draws it (pass 2, P2-0.10), so the +0.9 EV
+/// that made up for pass 1's punchy darkening it by 1.15 EV is gone.
+pub const LOOK_EV_COMPENSATION: f32 = 0.0;
 
 /// Cascades the lakeside asks for at `high` and `ultra`: the tour's long shots reach the sun's
 /// shadow distance, and four cascades keep the trees' leaf shadows crisp in the middle distance.

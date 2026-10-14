@@ -137,11 +137,12 @@ export const ExposureMode = {
 } as const;
 export type ExposureMode = (typeof ExposureMode)[keyof typeof ExposureMode];
 
-/** Where auto exposure looks. Wire values. */
+/** Where auto exposure looks (`ground`: sky-aware, the lower rows weigh more). Wire values. */
 export const Metering = {
   Average: "average",
   Center: "center",
   Spot: "spot",
+  Ground: "ground",
 } as const;
 export type Metering = (typeof Metering)[keyof typeof Metering];
 

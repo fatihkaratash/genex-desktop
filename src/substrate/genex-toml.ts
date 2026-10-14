@@ -30,7 +30,7 @@
  * [render.look]             # the game's look, the same on every preset and device
  * tonemapper = "agx-punchy" # khronos-neutral (default) | agx | agx-punchy | aces | none
  * exposure = "auto"         # manual (default) | auto
- * metering = "center"       # average | center | spot
+ * metering = "center"       # average | center | spot | ground
  * ev_compensation = -0.5    # within ±10
  * bloom_intensity = 0.04    # 0..=1
  * ev_min = -6               # auto exposure's metered EV range, within ±16 (default -8..=8)

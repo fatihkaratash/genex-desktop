@@ -1064,8 +1064,8 @@ fn scene_pipelines(device: &Device, layouts: &Layouts, samples: u32, format: Tex
     // The HDR scene's pipelines expose in the shader (`GX_SCENE_HDR`); the legacy scene's encode
     // sRGB with no branch on the frame, so the off path draws exactly as before the follow-up.
     let hdr = [("GX_SCENE_HDR", f64::from(u8::from(reversed)))];
-    let surfaces = surface_constants(reversed, surface);
-    let blended = surface_constants(reversed, surface.blended());
+    let surfaces = surface_constants(reversed, format, surface);
+    let blended = surface_constants(reversed, format, surface.blended());
     let mesh_spec = |label, fragment, depth_write, blend| PipelineSpec {
         label,
         module: &forward_module,
@@ -1158,7 +1158,7 @@ fn forward_equal_pipeline(device: &Device, layouts: &Layouts, format: TextureFor
         samples: 1,
         layout: &layout,
     };
-    Ok(render_pipeline_with(device, &spec, &surface_constants(reversed, surface)))
+    Ok(render_pipeline_with(device, &spec, &surface_constants(reversed, format, surface)))
 }
 
 /// The forward module's pipeline constants: the HDR scene (`reversed` depth) exposes in the shader
@@ -1174,8 +1174,10 @@ fn forward_equal_pipeline(device: &Device, layouts: &Layouts, format: TextureFor
 /// (`GX_BINNED_LIGHTS`). Two more bound the sun chunk by the quality's shadows (pass-1 gate,
 /// owner decision 2026-10-12): its cascade blend band and end fade only where the quality has
 /// them (`GX_SUN_SOFT_EDGES`), its cascade choice only over the quality's cascades
-/// (`GX_SUN_CASCADES`).
-fn surface_constants(reversed: bool, surface: SurfaceKey) -> [(&'static str, f64); 15] {
+/// (`GX_SUN_CASCADES`). An HDR scene stored as `rg11b10ufloat` (`format`) dithers its writes by
+/// half a mantissa step (`GX_SCENE_RG11B10`, renderer pass 2 P2-0.10 C5); every other format writes
+/// as before.
+fn surface_constants(reversed: bool, format: TextureFormat, surface: SurfaceKey) -> [(&'static str, f64); 16] {
     let effects = surface.effects;
     [
         ("GX_SUN_SOFT_EDGES", f64::from(u8::from(surface.sun_soft_edges))),
@@ -1190,6 +1192,7 @@ fn surface_constants(reversed: bool, surface: SurfaceKey) -> [(&'static str, f64
         ("GX_FOG", f64::from(u8::from(effects.fog))),
         ("GX_AERIAL", f64::from(u8::from(effects.aerial))),
         ("GX_SCENE_HDR", f64::from(u8::from(reversed))),
+        ("GX_SCENE_RG11B10", f64::from(u8::from(reversed && format == TextureFormat::Rg11b10Ufloat))),
         ("GX_SPECULAR_AA", f64::from(u8::from(reversed && surface.specular_aa))),
         ("GX_SHADOW_FILTER", f64::from(surface.shadow_filter.shader_id())),
         ("GX_SHADOW_TEMPORAL", f64::from(u8::from(surface.shadow_temporal))),
@@ -3976,7 +3979,7 @@ impl Renderer {
             return Ok(());
         }
         let Some(node) = self.meshlet_node.as_ref() else { return Ok(()) };
-        let constants = surface_constants(key.reversed, key.surface);
+        let constants = surface_constants(key.reversed, key.format, key.surface);
         let spec = MeshletPipelineSpec {
             format: key.format,
             samples: key.samples,
@@ -4864,7 +4867,7 @@ mod surface_constants_tests {
 
     /// The value the forward pipeline of `quality` (the legacy scene, no TAA) gives `name`.
     fn constant(quality: &Quality, name: &str) -> f64 {
-        let constants = surface_constants(false, SurfaceKey::of(quality, false, false));
+        let constants = surface_constants(false, WORLD_FORMAT, SurfaceKey::of(quality, false, false));
         constants.iter().find(|(key, _)| *key == name).map(|(_, value)| *value).unwrap_or_else(|| panic!("{name} is a surface constant"))
     }
 
@@ -4904,13 +4907,29 @@ mod surface_constants_tests {
             let quality = preset_quality(preset, desktop);
             let surface = SurfaceKey::of(&quality, true, true);
             let value = |constants: &[(&'static str, f64)], name: &str| constants.iter().find(|(key, _)| *key == name).map(|(_, value)| *value);
-            let opaque = surface_constants(true, surface);
-            let blended = surface_constants(true, surface.blended());
+            let opaque = surface_constants(true, TextureFormat::Rgba16Float, surface);
+            let blended = surface_constants(true, TextureFormat::Rgba16Float, surface.blended());
             assert_eq!(value(&opaque, "GX_SHADOW_TEMPORAL"), Some(1.0), "{preset:?}: the opaque surfaces turn with the frame under TAA");
             assert_eq!(value(&blended, "GX_SHADOW_TEMPORAL"), Some(0.0), "{preset:?}: the transparent surfaces do not");
             let others = |constants: &[(&'static str, f64)]| constants.iter().filter(|(key, _)| *key != "GX_SHADOW_TEMPORAL").copied().collect::<Vec<_>>();
             assert_eq!(others(&opaque), others(&blended), "{preset:?}");
         }
+    }
+
+    /// Renderer pass 2, P2-0.10 (C5): only an HDR scene stored as `rg11b10ufloat` (desktop low and
+    /// phones) dithers its writes by half a mantissa step; the `rgba16float` scene and the legacy
+    /// scene compile the dither out, so their pipelines draw exactly as before.
+    #[test]
+    fn only_the_rg11b10_scene_dithers_its_writes() {
+        let quality = preset_quality(QualityPreset::Low, DeviceClass::new(FormFactor::Mobile, PerformanceTier::High));
+        let surface = SurfaceKey::of(&quality, true, false);
+        let dither = |reversed, format| {
+            let constants = surface_constants(reversed, format, surface);
+            constants.iter().find(|(key, _)| *key == "GX_SCENE_RG11B10").map(|(_, value)| *value)
+        };
+        assert_eq!(dither(true, TextureFormat::Rg11b10Ufloat), Some(1.0), "the rg11b10 HDR scene dithers");
+        assert_eq!(dither(true, TextureFormat::Rgba16Float), Some(0.0), "the rgba16float HDR scene does not");
+        assert_eq!(dither(false, WORLD_FORMAT), Some(0.0), "the legacy scene does not");
     }
 
     /// The legacy key the renderer starts from is the features-off quality's.

@@ -56,8 +56,8 @@ never the quality.
   device, outside the simulation. Make content cheap at `low` and let presets add to it.
 - **The look.** Frames are HDR. `khronos-neutral` (the default) keeps authored colours;
   `agx-punchy` (this template's) suits bright, high-contrast scenes; plain `agx` greys saturated
-  lights. Use `exposure = "auto"` (with `ev_compensation = 0.5` for a sunlit scene, 1.5 under
-  `agx-punchy`, whose look deepens shadows) when light and shade sit together. Bloom, height fog, ambient occlusion and contact shadows are the look's and
+  lights. Use `exposure = "auto"` (with `ev_compensation = 0.5` for a sunlit scene, under any
+  curve) when light and shade sit together. Bloom, height fog, ambient occlusion and contact shadows are the look's and
   the preset's: set `bloom_*`, `fog_*`, `ao_*` and `contact_shadow_length` in `[render.look]`,
   never as custom passes.
 - **Light with the built-ins.** `frame.sun`, `frame.ambient`, `frame.point_light` and

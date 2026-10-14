@@ -115,8 +115,9 @@ const GOLDEN: [(&str, usize); 33] = [
     ("GxMaterialExt", 32),
     ("LightBinParams", 32),
     // Pass 2's contracts wave: the tonemap's uniform joins the table at 128 bytes, its white
-    // balance a 3x3 matrix (three 16-byte columns) where the gains row was (96 before).
-    ("GxTonemapParams", 128),
+    // balance a 3x3 matrix (three 16-byte columns) where the gains row was (96 before). P2-0.10
+    // flipped 128 -> 144: AgX punchy's curve row (Godot's AgX, contrast, toe, slope and w).
+    ("GxTonemapParams", 144),
 ];
 
 fn parse(name: &str, source: &str) -> naga::Module {

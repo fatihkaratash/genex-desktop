@@ -218,6 +218,23 @@ fn tonemap_and_exposure_round_trip_through_render_settings_and_the_toml_look() {
 }
 
 #[test]
+fn a_look_takes_a_temperature_and_an_exposure_curve_that_an_exposure_keeps() {
+    use genex::render::{Exposure, Look, Metering};
+    let config = RenderConfig::new().exposure(Exposure::auto().metering(Metering::Ground)).temperature(0.4, -0.1).exposure_curve(&[(0.0, 0.0), (-4.0, -2.0)]);
+    let look = config.look;
+    assert_eq!((look.temperature, look.tint, look.metering), (0.4, -0.1, Metering::Ground));
+    assert_eq!((look.compensation_curve.at(-2.0), look.compensation_curve.at(5.0)), (-1.0, 0.0), "linear between the points, flat beyond");
+    assert_ne!(look.white_balance_matrix(), Look::default().white_balance_matrix(), "the temperature reaches the tonemap's matrix");
+    let wild = RenderConfig::new().temperature(9.0, f32::NAN).exposure_curve(&[(f32::NAN, 1.0)]).look;
+    assert_eq!((wild.temperature, wild.tint), (1.0, 0.0), "held to -1..=1; not a number is 0");
+    assert!(wild.compensation_curve.is_empty(), "a point that is not a number is left out");
+    let later = RenderConfig::new().exposure_curve(&[(-4.0, -2.0)]).temperature(-0.5, 0.0).exposure(Exposure::auto().compensation(0.5)).look;
+    assert_eq!((later.compensation_curve.points().len(), later.temperature), (1, -0.5), "an exposure set afterwards keeps both");
+    let from_toml = RenderConfig::from_toml("[render.look]\nexposure = \"auto\"\nmetering = \"ground\"\n").expect("a [render.look] fragment");
+    assert_eq!(from_toml.look.metering, Metering::Ground, "genex.toml spells the sky-aware metering `ground`");
+}
+
+#[test]
 fn the_facade_default_is_hdr_with_the_legacy_preserving_look() {
     use genex::render::{ExposureMode, Look, Tonemap};
     let control = control(RenderConfig::new());
