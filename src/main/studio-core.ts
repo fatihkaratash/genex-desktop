@@ -198,8 +198,8 @@ import {
 import { crateRequestsFor } from "./crate-requests.ts";
 import { engineEjectionsFor } from "./rust-eject.ts";
 import { engineTrustFor } from "./rust-trust.ts";
-import { HistorySpaceService } from "./core/history-space.ts";
-import type { GameHistoryCleared, GameHistorySpace } from "../shared/game-history.ts";
+import { StorageSpaceService } from "./core/storage-space.ts";
+import type { StorageFreed, StorageSpace } from "../shared/storage-space.ts";
 import { SelfEditGateService } from "./core/self-edit-gate.ts";
 import { SelfImprovementService } from "./core/self-improvement.ts";
 import { serial } from "./core/serial.ts";
@@ -628,7 +628,7 @@ export class StudioCore {
   readonly #threads: GameThreadService;
   readonly #gameFiles: GameFileService;
   readonly #rewind: ChatRewindService;
-  readonly #history: HistorySpaceService;
+  readonly #storage: StorageSpaceService;
   /** Questions an agent's plugin tool is waiting on the user for (`plugin_consent` cards in the chat). */
   readonly #consent: PluginConsent;
   /** The locks plugin tools and connectors wait their turn for, the person first. */
@@ -739,11 +739,11 @@ export class StudioCore {
     this.#selfEditGate = new SelfEditGateService(this, this.#x);
     this.#pluginTools = new PluginToolService(this, this.#x);
     this.#conversation = new ConversationService(this, this.#x);
-    this.#assets = new AssetService(this, undefined, options.assetFolders?.now);
+    this.#assets = new AssetService(this, undefined, options.assetFolders?.now, this.#x.assetCalls);
     this.#threads = new GameThreadService(this);
     this.#gameFiles = new GameFileService(this);
     this.#rewind = new ChatRewindService(this, this.#x);
-    this.#history = new HistorySpaceService(this, this.#x);
+    this.#storage = new StorageSpaceService(this, this.#x);
     this.#permissions = new ChatPermissionService(this);
   }
 
@@ -3113,14 +3113,14 @@ export class StudioCore {
     return this.#rewind.rewind(...args);
   }
 
-  /** How much space a game's version history takes, and how much clearing frees (`core/history-space.ts`). */
-  gameHistory(project: string): Promise<GameHistorySpace> {
-    return this.#history.space(project);
+  /** What freeing space deletes now, in `project` or in every game (`core/storage-space.ts`). */
+  storageSpace(project?: string): Promise<StorageSpace> {
+    return this.#storage.space(project);
   }
 
-  /** Clear a game's Rewind history and finished runs' side tracks (`core/history-space.ts`). */
-  clearGameHistory(project: string): Promise<GameHistoryCleared> {
-    return this.#history.clear(project);
+  /** Free space in `project`, refused while it works, or in every game not working (`core/storage-space.ts`). */
+  freeStorage(project?: string): Promise<StorageFreed> {
+    return this.#storage.free(project);
   }
 
   /**

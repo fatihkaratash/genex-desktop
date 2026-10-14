@@ -280,7 +280,7 @@ it("Genex job records are read without being written, and an approval never leav
     [JOB_A],
   );
   assert.equal(records[0]!.operation, "image");
-  assert.equal(records[0]!.prompt!.length, 500);
+  assert.equal(records[0]!.prompt!.length, 900, "a prompt within the cap is kept whole, for the card's tooltip");
   assert.equal("approval" in records[0]!, false);
   assert.equal(JSON.stringify(records).includes("AAAA"), false);
   assert.deepEqual(await readdir(jobs), before);

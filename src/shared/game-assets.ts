@@ -12,6 +12,7 @@
  */
 import { type CompiledStack, GameStack, isCompiledStack } from "./game-project.ts";
 
+import type { CallMaking, MakingJob } from "./asset-making.ts";
 import type { CallCutOff } from "./plugins.ts";
 
 export type AssetKind = "image" | "model" | "audio" | "video" | "other";
@@ -68,18 +69,10 @@ export interface ProjectAssets {
   project: string;
   assets: ProjectAsset[];
   /**
-   * Jobs with no file in the game yet: the plugin's own word for each (`pluginStatus`), and
-   * `delivered` when the job did deliver files earlier that the game no longer holds.
+   * Jobs with no file in the game yet, any plugin's, in the shared words (`shared/asset-making.ts`):
+   * what each makes, where it is and who makes it.
    */
-  jobs?: Array<{
-    source: string;
-    jobId: string;
-    at?: string;
-    operation?: string;
-    prompt?: string;
-    pluginStatus?: string;
-    delivered?: boolean;
-  }>;
+  jobs?: MakingJob[];
   /** The walk hit its entry or depth cap: some files under `assets/` are not listed. */
   truncated: boolean;
   skipped: Array<{ file: string; why: string }>;
@@ -107,13 +100,6 @@ export interface AssetDeliveredPayload {
   workspace?: "game" | "build";
 }
 
-/** The plugin statuses that mean a job ended without its file: its card asks for attention. */
-const STALLED = new Set(["failed", "retrieval_failed", "stopped", "canceled"]);
-export function assetJobStalled(pluginStatus: string | null | undefined): boolean {
-  return STALLED.has(pluginStatus ?? "");
-}
-
-/** A delivery the game folder does not hold yet: it waits for its build to land. */
 /**
  * A delivery record the chat can show: one that lists its files. A record without that list has
  * nothing to show, and the cards that list a delivery's files would fail on it.
@@ -122,6 +108,7 @@ export function isAssetDelivery(delivery: Partial<AssetDeliveredPayload>): deliv
   return Array.isArray(delivery.files);
 }
 
+/** A delivery the game folder does not hold yet: it waits for its build to land. */
 export function deliveredToBuild(delivery: Pick<AssetDeliveredPayload, "workspace" | "runId">): boolean {
   return (
     delivery.workspace === "build" ||
@@ -179,6 +166,8 @@ export interface PluginToolStartedPayload {
   engine: string;
   role: PluginToolRole;
   at: string;
+  /** What the call makes, when its tool says (or it is Genex's asset tool): the host stamps it. */
+  making?: CallMaking;
 }
 
 /**
@@ -387,6 +376,9 @@ export const MEDIA_FORMATS: readonly string[] = Object.freeze(
     .filter(([, format]) => MEDIA_KINDS.includes(format.kind))
     .map(([ext]) => ext),
 );
+
+/** Whether a file is media (an image, model, sound or video) by its extension: an asset of its own. */
+export const isMediaFile = (file: string): boolean => MEDIA_FORMATS.includes(assetExtension(file));
 
 /** What a model loads beside itself (a glTF's buffers, an OBJ's materials): read wherever models are. */
 export const MODEL_COMPANION_FORMATS: readonly string[] = Object.freeze(["bin", "mtl"]);

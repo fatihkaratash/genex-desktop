@@ -10,18 +10,19 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { after, before, describe, it } from "node:test";
 import { clearSideTracks, historySpace } from "../../src/substrate/history-space.ts";
 import { ChatCheckpoints } from "../../src/main/chat-checkpoints.ts";
-import { HistorySpaceService } from "../../src/main/core/history-space.ts";
+import { StorageSpaceService } from "../../src/main/core/storage-space.ts";
 import { type OutcomeView, outcomeEnded } from "../../src/shared/run-summary.ts";
 import { git, gitOrNull } from "../../src/substrate/snapshots.ts";
 import { CustomEvent, customEventData } from "../../src/shared/custom-events.ts";
 import type { DelegateRequest } from "../../src/substrate/engines/types.ts";
-import { HISTORY_WORDS, historyClearedWords, historyMenuSize, historySpaceWords } from "../../src/renderer/words.ts";
 import { type CoreLite, coreLite } from "../helpers/core-lite.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 
 const MB = 1024 ** 2;
-const GB = 1024 ** 3;
 
+/** The commit each of Rewind's refs names, as `for-each-ref` lists them. */
+const rewindRefs = async (dir: string): Promise<string[]> =>
+  (await git(dir, ["for-each-ref", "--format=%(objectname)", "refs/studio/chat/"])).split("\n").filter(Boolean);
 /** Every ref of the repository with the commit it names, as `for-each-ref` lists them. */
 const refs = async (dir: string): Promise<string> => git(dir, ["for-each-ref", "--format=%(objectname) %(refname)"]);
 const resolves = async (dir: string, ref: string): Promise<string | null> =>
@@ -320,6 +321,8 @@ describe("clearing a game's history through the studio", () => {
   const project = "history";
   /** Released to let the test's one delegated session answer. */
   let release: () => void = () => {};
+  /** The delegated session reached the engine: `release` now lets it answer. */
+  let reachedEngine = false;
 
   before(async () => {
     lite = await coreLite();
@@ -336,6 +339,7 @@ describe("clearing a game's history through the studio", () => {
       delegate: async (_request: DelegateRequest) => {
         await new Promise<void>((resolve) => {
           release = resolve;
+          reachedEngine = true;
         });
         return { ok: true, engine: "claude-code", summary: "fixture", turns: 1, usage: {}, sessionId: "s1" };
       },
@@ -368,8 +372,10 @@ describe("clearing a game's history through the studio", () => {
     await until(async () => (lite.core.activeBuilders()[project] ?? 0) > 0, "the delegation");
     await git(dir, ["update-ref", "refs/studio/chat/t/before/m0", "HEAD"]);
     const held = await refs(dir);
-    await assert.rejects(lite.core.clearGameHistory(project), /Wait for this game's work to finish/);
+    await assert.rejects(lite.core.freeStorage(project), /Wait for this game's work to finish/);
     assert.equal(await refs(dir), held, "no ref changed while the game was busy");
+    // The game counts as working before its session reaches the engine; release only once it has.
+    await until(async () => reachedEngine, "the delegated session reaching the engine");
     release();
     await working;
     await until(async () => (lite.core.activeBuilders()[project] ?? 0) === 0, "the delegation's end");
@@ -377,41 +383,44 @@ describe("clearing a game's history through the studio", () => {
     // A file only a checkpoint holds: once cleared, a next checkpoint must not lean on its blob.
     await writeFile(path.join(dir, "notes.txt"), randomBytes(2048).toString("hex"));
     const first = await checkpoint("msg_one");
-    assert.ok((await lite.core.gameHistory(project)).rewindTracks >= 2);
-    const cleared = await lite.core.clearGameHistory(project);
-    assert.ok(cleared.removedTracks >= 2);
+    assert.ok((await rewindRefs(dir)).length >= 2);
+    await lite.core.freeStorage(project);
     assert.equal(await resolves(dir, first), null);
+    assert.deepEqual(await rewindRefs(dir), []);
     const next = await checkpoint("msg_two");
     const files = await git(dir, ["ls-tree", "-r", "--name-only", next]);
     assert.ok(files.split("\n").includes("notes.txt"), files);
-    assert.equal((await lite.core.gameHistory(project)).rewindTracks, 1);
+    assert.deepEqual(await rewindRefs(dir), [await resolves(dir, next)]);
   });
 
-  it("keeps a paused or unknown run's tracks and clears a finished one's", async () => {
+  it("keeps a paused or unknown run's tracks and the newest finished one's, and clears an older one's", async () => {
     const head = (await git(dir, ["rev-parse", "HEAD"])).trim();
-    for (const id of ["run_done", "run_paused", "run_unknown"])
+    for (const id of ["run_older", "run_done", "run_paused", "run_unknown"])
       await git(dir, ["update-ref", `refs/studio/runs/${id}/integration`, head]);
+    const finished = (runId: string, goal: string) => [
+      customEventData(CustomEvent.RunStarted, { runId, project, goal }),
+      customEventData(CustomEvent.RunFinished, { runId, project, landed: false }),
+    ];
+    await lite.core.append(finished("run_older", "a"), threadId);
     await lite.core.append(
       [
-        customEventData(CustomEvent.RunStarted, { runId: "run_done", project, goal: "a" }),
-        customEventData(CustomEvent.RunFinished, { runId: "run_done", project, landed: false }),
-        customEventData(CustomEvent.RunStarted, { runId: "run_paused", project, goal: "b" }),
+        ...finished("run_done", "b"),
+        customEventData(CustomEvent.RunStarted, { runId: "run_paused", project, goal: "c" }),
         customEventData(CustomEvent.RunFinished, { runId: "run_paused", project, executionStatus: "paused" }),
       ],
       threadId,
     );
-    const space = await lite.core.gameHistory(project);
-    assert.equal(space.finishedRunTracks, 1);
-    await lite.core.clearGameHistory(project);
-    assert.equal(await resolves(dir, "refs/studio/runs/run_done/integration"), null);
+    await lite.core.freeStorage(project);
+    assert.equal(await resolves(dir, "refs/studio/runs/run_older/integration"), null);
+    assert.equal(await resolves(dir, "refs/studio/runs/run_done/integration"), head, "the newest finished build stays");
     assert.equal(await resolves(dir, "refs/studio/runs/run_paused/integration"), head);
     assert.equal(await resolves(dir, "refs/studio/runs/run_unknown/integration"), head);
   });
 
   it("answers only for a game it lists", async () => {
     for (const name of ["nope", "../x", "", "HISTORY"]) {
-      await assert.rejects(lite.core.gameHistory(name), name);
-      await assert.rejects(lite.core.clearGameHistory(name), name);
+      await assert.rejects(lite.core.storageSpace(name), name);
+      await assert.rejects(lite.core.freeStorage(name), name);
     }
   });
 });
@@ -435,7 +444,7 @@ describe("which runs a clear counts as ended", () => {
     for (const [state, ended] of table) assert.equal(outcomeEnded(outcome(state)), ended, state);
   });
 
-  /** A history service over a real repository, with the runs and the work the test names. */
+  /** A storage service over a real repository, with the runs (newest first) and the work the test names. */
   async function service(items: Array<{ project?: string; runId: string; state: OutcomeView["state"] }>) {
     const repo = await gameRepository();
     const head = (await git(repo.dir, ["rev-parse", "HEAD"])).trim();
@@ -443,7 +452,7 @@ describe("which runs a clear counts as ended", () => {
     const activeRunIds = new Set<string>();
     const core = {
       games: { list: async () => [{ name: "g" }], dirFor: () => repo.dir },
-      layout: { scratch: await tmpDir("history-space-scratch-") },
+      layout: { scratch: await tmpDir("history-space-scratch-"), runs: await tmpDir("history-space-runs-") },
       assertProjectAllowed: async () => {},
       activityItems: async () =>
         items.map(({ project = "g", runId, state }) => ({ project, runId, runOutcome: outcome(state) })),
@@ -451,89 +460,49 @@ describe("which runs a clear counts as ended", () => {
     const internals = {
       activeDelegations: new Map(),
       activeRunIds,
+      servedRoots: new Map(),
       rewind: { checkpoints: { exclusive: <T>(_dir: string, work: () => Promise<T>) => work() } },
     };
-    return { dir: repo.dir, activeRunIds, history: new HistorySpaceService(core as never, internals as never) };
+    return { dir: repo.dir, activeRunIds, storage: new StorageSpaceService(core as never, internals as never) };
   }
 
-  it("counts cancelled and failed runs as cleared, and not a finished run that is still going", async () => {
-    const { dir, activeRunIds, history } = await service([
-      { runId: "run_cancelled", state: "cancelled" },
-      { runId: "run_failed", state: "failed" },
-      { runId: "run_settling", state: "finished" },
+  it("clears cancelled, failed and older finished runs, and keeps the newest ended run and a paused one", async () => {
+    const { dir, storage } = await service([
       { runId: "run_paused", state: "paused" },
+      { runId: "run_newest", state: "cancelled" },
+      { runId: "run_failed", state: "failed" },
+      { runId: "run_finished", state: "finished" },
+      { runId: "run_cancelled", state: "cancelled" },
     ]);
-    activeRunIds.add("run_settling");
-    assert.equal((await history.space("g")).finishedRunTracks, 2, "the run still going is not counted");
-    activeRunIds.clear();
-    const cleared = await history.clear("g");
-    assert.equal(cleared.removedTracks, 3);
-    for (const runId of ["run_cancelled", "run_failed", "run_settling"])
+    await storage.free("g");
+    for (const runId of ["run_failed", "run_finished", "run_cancelled"])
       assert.equal(await resolves(dir, `refs/studio/runs/${runId}/integration`), null, runId);
+    assert.ok(await resolves(dir, "refs/studio/runs/run_newest/integration"), "the newest ended run keeps its track");
     assert.ok(await resolves(dir, "refs/studio/runs/run_paused/integration"), "a paused run keeps its track");
   });
 
   it("refuses while a run of the game, or a run tied to no game yet, is going, and changes no ref", async () => {
-    const { dir, activeRunIds, history } = await service([
+    const { dir, activeRunIds, storage } = await service([
       { runId: "run_mine", state: "running" },
       { project: "other", runId: "run_other", state: "running" },
       { runId: "run_done", state: "finished" },
+      { runId: "run_older", state: "finished" },
     ]);
     const before = await refs(dir);
     activeRunIds.add("run_mine");
-    await assert.rejects(history.clear("g"), /Wait for this game's work to finish/, "a run of the game");
+    await assert.rejects(storage.free("g"), /Wait for this game's work to finish/, "a run of the game");
     activeRunIds.clear();
     activeRunIds.add("run_untied");
-    await assert.rejects(history.clear("g"), /Wait for this game's work to finish/, "a run no record ties to a game");
+    await assert.rejects(storage.free("g"), /Wait for this game's work to finish/, "a run no record ties to a game");
     assert.equal(await refs(dir), before, "no ref changed");
     activeRunIds.clear();
     activeRunIds.add("run_other");
-    const cleared = await history.clear("g");
-    assert.equal(cleared.removedTracks, 1, "another game's run does not hold this one");
-    assert.equal(await resolves(dir, "refs/studio/runs/run_done/integration"), null);
-  });
-});
-
-describe("the words for a game's history space", () => {
-  it("say the sizes in the largest unit they reach", () => {
-    const space = (totalBytes: number, clearableBytes: number, recentBytes = 0) => ({
-      totalBytes,
-      clearableBytes,
-      recentBytes,
-      rewindTracks: clearableBytes ? 3 : 0,
-      finishedRunTracks: 0,
-    });
-    assert.match(historySpaceWords(space(3.4 * GB, 1.2 * GB)), /^Version history takes 3\.4 GB\. .*about 1\.2 GB/);
-    assert.match(historySpaceWords(space(40 * MB, 12 * MB)), /takes 40 MB\. .*about 12 MB/);
-    assert.match(historySpaceWords(space(900 * 1024, 80 * 1024)), /takes 900 KB\. .*about 80 KB/);
-    assert.match(historySpaceWords(space(20 * MB, 0)), /^Version history takes 20 MB\. Nothing beside it to clear\./);
-    assert.match(
-      historySpaceWords(space(40 * MB, 12 * MB, 3 * MB)),
-      /Clearing them frees that space\. About 3 MB from the last hour stays until a later clear\./,
-    );
-    assert.match(
-      historySpaceWords({ ...space(40 * MB, 0, 3 * MB), rewindTracks: 0 }),
-      /^Version history takes 40 MB\. Nothing beside it to clear now; about 3 MB from the last hour goes at a later clear\.$/,
-    );
-    assert.match(
-      historySpaceWords({ ...space(40 * MB, 12 * MB), rewindTracks: 0 }),
-      /^Version history takes 40 MB\. Copies cleared earlier still take about 12 MB of it\. Clearing frees that space\./,
-    );
-    assert.equal(historyClearedWords({ removedTracks: 4, freedBytes: 1.2 * GB }), "Cleared 1.2 GB.");
-    assert.equal(historyClearedWords({ removedTracks: 0, freedBytes: 0 }), HISTORY_WORDS.nothingCleared);
-  });
-
-  it("the menu carries the size only once it is known", () => {
-    assert.equal(historyMenuSize(null), null);
+    await storage.free("g");
     assert.equal(
-      historyMenuSize({
-        totalBytes: GB,
-        clearableBytes: 12 * MB,
-        recentBytes: 0,
-        rewindTracks: 1,
-        finishedRunTracks: 0,
-      }),
-      "12 MB",
+      await resolves(dir, "refs/studio/runs/run_older/integration"),
+      null,
+      "another game's run does not hold this one",
     );
+    assert.ok(await resolves(dir, "refs/studio/runs/run_done/integration"));
   });
 });

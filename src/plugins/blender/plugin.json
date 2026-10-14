@@ -45,7 +45,8 @@
           }
         },
         "required": ["name"]
-      }
+      },
+      "asset": { "kind": "model", "prompt": "name" }
     },
     {
       "name": "retrieve",

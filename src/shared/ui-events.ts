@@ -134,6 +134,8 @@ export interface UiEventMap {
   /** One event of a delegated contractor session, as its engine reported it. */
   "delegated.event": { engine: string; type: string; payload: unknown };
   "asset.delivered": AssetDeliveredPayload;
+  /** A call making an asset started or ended: the game's waiting jobs changed (`ProjectAssets.jobs`). */
+  "asset.jobs": { project: string };
   /** A coordinator tool put a build on screen: the chat of that game brings Live forward. */
   "stage.show": { project: string; view: "live" };
 
@@ -275,6 +277,7 @@ export const UiEvent = {
   DelegationCheckpoint: "delegation.checkpoint",
   DelegatedEvent: "delegated.event",
   AssetDelivered: "asset.delivered",
+  AssetJobs: "asset.jobs",
   StageShow: "stage.show",
   RunKeepawake: "run.keepawake",
   RunStopping: "run.stopping",

@@ -37,7 +37,7 @@ import {
 import { FinishLook, finishCheckFace, finishCheckLook, jobsTileStatus, LeadFace } from "../../run-tree.ts";
 import { useStill } from "../../stills.ts";
 import { Icon } from "../../ui/icons.tsx";
-import { ASSET_THUMB_PX, blenderRender, firstImage, isMaking } from "../inspector/asset-jobs.ts";
+import { ASSET_THUMB_PX, assetsStatus, blenderRender, firstImage, isMaking } from "../inspector/asset-jobs.ts";
 import { optimizationStatus } from "../inspector/OptimizationPanel.tsx";
 import { IMAGE_OUTLINE } from "../inspector/pictures.tsx";
 import { GraphSelection } from "../inspector/selection.ts";
@@ -588,21 +588,6 @@ export function StartNode({
       {clamped || open ? <ShowAll open={open} onToggle={() => setOpen((value) => !value)} /> : null}
     </div>
   );
-}
-
-/** Where the run's assets have got to, in one line: failures first, then work in hand, then the game. */
-export function assetsStatus(jobs: AssetInfo[]): { text: string; tone: Tone } {
-  const made = jobs.filter((job) => job.state === AssetCardState.Delivered);
-  const failed = jobs.filter((job) => job.state === AssetCardState.Failed).length;
-  const making = jobs.length - made.length - failed;
-  const inGame = made.filter((job) => job.inGame).length;
-  const known = made.filter((job) => job.inGame !== undefined).length;
-  if (failed) return { text: `${failed} failed`, tone: Tone.Red };
-  if (making) return { text: `Making ${making}`, tone: Tone.Accent };
-  if (!known) return { text: `${made.length} delivered`, tone: Tone.Muted };
-  if (inGame === made.length) return { text: `${inGame} in game`, tone: Tone.Green };
-  if (inGame) return { text: `${inGame} of ${made.length} in game`, tone: Tone.Orange };
-  return { text: "Not in game yet", tone: Tone.Orange };
 }
 
 /** The glyph the assets tile wears for each tone of its status; the other tones wear none. */

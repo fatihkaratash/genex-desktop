@@ -19,8 +19,9 @@ unchanged. Where it disagrees with this preface, this preface wins.
 - Studio installs the version it pins, which satisfies the card's `^0.16.0`. Never run
   `npm i` for these packages yourself.
 - A game made from Studio's template has no `package.json` (it loads three.js through an import
-  map), so it cannot add these packages. Tell the user multiplayer needs a game with its own
-  package manager and build; never copy the SDK into the game by hand.
+  map), and Studio has no copy of the multiplayer package for it yet. Tell the user multiplayer
+  needs a game with its own package manager and build; never copy the SDK into the game by hand.
+  Player identity, saves and leaderboards do work there (`genex-threejs-embed-auth`).
 
 - If approval is declined or times out, or the hosted test route is unavailable, report the
   specific blocker. Preserve local play; do not retry without changed authorization or claim

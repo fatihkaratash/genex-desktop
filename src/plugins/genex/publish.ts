@@ -3,6 +3,7 @@
  * an attempt runs, when an unknown outcome may be settled or re-checked, and which links are ours.
  */
 import {
+  GENEX_GAME_PACKAGES,
   GenexHostedStatus,
   GenexPublishJobState,
   GenexPublishKind,
@@ -13,6 +14,7 @@ import {
 } from "../../shared/genex.ts";
 import { SECOND_MS } from "../../shared/duration.ts";
 import { stripAnsi } from "./cli.ts";
+import type { GenexConnection } from "./entry-page.ts";
 import { DEFAULT_DASHBOARD, isGenexLink } from "./http.ts";
 
 /** A draft checked this soon after its upload is still expected to go live on its own. */
@@ -130,19 +132,39 @@ export function publishArgs(phase: GenexPublishPhase, listing: { title?: string 
   return [...args, "--title", listing.title];
 }
 
+/** The package.json of Studio's publish copy. */
+export interface WorkspaceManifest extends GenexGameManifest {
+  name: string;
+  private: true;
+}
+
 /**
  * The package.json of Studio's publish copy: the game's Genex SDK versions and `genex` settings,
- * which the CLI reads from the folder it runs in and sends with every upload. Null when the game
- * names none, so no package.json is left behind.
+ * plus the SDK Studio ships with a game that brings none (`studioSdk`), which the CLI reads from the
+ * folder it runs in and sends with every upload. Null when there is nothing to name, so no
+ * package.json is left behind.
  */
-export function workspaceManifest(project: string, manifest: GenexGameManifest | undefined): object | null {
-  if (!manifest) return null;
+export function workspaceManifest(
+  project: string,
+  manifest: GenexGameManifest | undefined,
+  studioSdk = false,
+): WorkspaceManifest | null {
+  if (!manifest && !studioSdk) return null;
+  const sdk = studioSdk ? { "@genex-ai/embed-sdk": GENEX_GAME_PACKAGES["@genex-ai/embed-sdk"] } : {};
   return {
     name: project.toLowerCase(),
     private: true,
-    dependencies: manifest.dependencies,
-    ...(manifest.genex ? { genex: manifest.genex } : {}),
+    dependencies: { ...manifest?.dependencies, ...sdk },
+    ...(manifest?.genex ? { genex: manifest.genex } : {}),
   };
+}
+
+/**
+ * What a published copy is connected to: the game's project on Genex and the API Studio publishes
+ * through. The games host names the environment it really serves the page from; this stands in.
+ */
+export function publishedConnection(meta: HostedMeta, api: string): GenexConnection {
+  return { slug: String(meta.slug ?? ""), apiUrl: api, dashboardOrigins: [dashboardFor(meta)] };
 }
 
 /** The sign-in support Genex records for a build, when its answer names one: compared with what shipped. */

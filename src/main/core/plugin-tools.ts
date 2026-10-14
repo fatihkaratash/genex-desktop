@@ -16,6 +16,7 @@ import {
   type PluginConsentBy,
   type PluginConsentEvent,
   type PluginInfo,
+  type PluginManifest,
   type PluginMcpServer,
   PLUGIN_SKILL_TOOL,
   PluginSourceKind,
@@ -29,6 +30,9 @@ import { genexTelemetryEnv } from "../../substrate/genex-telemetry.ts";
 import { type ConnectorCall, type ConnectorToolEvent, McpHealth, type McpChange } from "../../shared/mcp.ts";
 import { connectorCallFields, keepCaptures } from "./connector-record.ts";
 import { noteCutOff } from "./cut-off-calls.ts";
+import { closeAssetCall, type OpenedCall, openAssetCall } from "./asset-calls.ts";
+import { type CallMaking, callMaking, genexCallMaking } from "../../shared/asset-making.ts";
+import { GENEX_ASSET_TOOL, GENEX_PLUGIN_ID } from "../../shared/genex.ts";
 import { HOLD_OF_REFUSAL, isLockRefused, type LockRefused, PERSON_FIRST_ASK_MS } from "./plugin-locks.ts";
 import { HOOK_CALL_MS, HOOK_LOCK_WAIT_MS } from "./plugin-hooks.ts";
 import { EMPTY_HOOK_REPORT, HookEvent, type HookReport } from "../../shared/plugin-hooks.ts";
@@ -194,9 +198,6 @@ function momentBudget(
   return { waitMs, limitMs };
 }
 
-/** The plugin whose MCP server is Studio's own Genex CLI, seeded with a tools workspace. */
-const GENEX_PLUGIN_ID = "genex";
-
 /** A manifest env source (`PluginMcpEnvValue`): its prefix, and what follows it. */
 const ENV_SOURCE = {
   CredentialFile: "credential-file",
@@ -254,6 +255,21 @@ export interface ConnectorCallOptions {
   byHarness?: boolean;
 }
 
+/**
+ * What a plugin tool call makes, stamped on its record: Genex's asset tool by its operation, any
+ * other tool by its manifest's `asset`; null for a call that makes nothing.
+ */
+function pluginCallMaking(
+  manifest: Pick<PluginManifest, "id" | "tools"> | undefined,
+  tool: string,
+  args: Record<string, unknown>,
+): CallMaking | null {
+  if (!manifest) return null;
+  if (manifest.id === GENEX_PLUGIN_ID) return tool === GENEX_ASSET_TOOL ? genexCallMaking(args) : null;
+  const declared = manifest.tools.find((t) => t.name === tool)?.asset;
+  return declared ? callMaking(declared, args) : null;
+}
+
 export class PluginToolService {
   readonly #core: StudioCore;
   /** What each run's Genex jobs committed, against its cap. */
@@ -261,6 +277,7 @@ export class PluginToolService {
   readonly #x: Pick<
     CoreInternals,
     | "activeConnectorCalls"
+    | "assetCalls"
     | "chatMode"
     | "consent"
     | "cutOffCalls"
@@ -276,6 +293,7 @@ export class PluginToolService {
     x: Pick<
       CoreInternals,
       | "activeConnectorCalls"
+      | "assetCalls"
       | "chatMode"
       | "consent"
       | "cutOffCalls"
@@ -706,6 +724,7 @@ export class PluginToolService {
       release = await this.#holdConnectorNeeds(name, binding, callSignal, options, deadline);
       await this.#appendQuietly(customEventData(CustomEvent.ConnectorToolStarted, { ...call }), binding);
       sent = true;
+      this.#connectorAssetCall(call, binding?.project, started);
       const result = await this.#core.mcp.tool(name, args, binding, callSignal);
       const text = typeof result === "string" ? result : result.text;
       const images = typeof result === "string" ? [] : (result.images ?? []);
@@ -729,6 +748,8 @@ export class PluginToolService {
     } finally {
       release();
       this.#x.activeConnectorCalls.delete(controller);
+      // A call that was never one making an asset closes nothing.
+      if (sent) this.#assetCallClosed(call.callId, binding?.project, false);
     }
   }
 
@@ -784,6 +805,7 @@ export class PluginToolService {
     const connectorId = name.slice(0, Math.max(0, name.indexOf("__")));
     const exposedName = name.slice(connectorId.length + 2);
     const pluginId = this.#core.mcp.ownerOf(connectorId);
+    const declared = this.#core.mcp.assetOf(name);
     return {
       callId: shortId("connector"),
       connectorId,
@@ -792,6 +814,7 @@ export class PluginToolService {
       ...(pluginId ? { pluginId } : {}),
       connectorName: this.#connectorName(connectorId),
       ...connectorCallFields(args),
+      ...(declared ? { making: callMaking(declared, args) } : {}),
     };
   }
 
@@ -1113,12 +1136,14 @@ export class PluginToolService {
     const installed = this.#core.plugins.list().find((p) => p.manifest.id === pluginId);
     const attributed = ctx.attribution ? { runId: ctx.attribution.runId, facetId: ctx.attribution.agentId } : null;
     const asked = callRun(ctx);
+    const making = pluginCallMaking(installed?.manifest, tool, args);
     const payload = startedPayload({
       pluginId,
       pluginName: installed?.manifest.name ?? pluginId,
       tool,
       toolName: name,
       args,
+      ...(making ? { making } : {}),
       project: binding.project,
       ...(binding.threadId ? { threadId: binding.threadId } : {}),
       ...(asked?.runId ? { runId: asked.runId } : {}),
@@ -1137,7 +1162,48 @@ export class PluginToolService {
     await this.#core
       .append([customEventData(CustomEvent.PluginToolStarted, { ...payload })], binding.threadId)
       .catch(() => {});
+    if (making)
+      this.#assetCallOpened({
+        callId: payload.callId,
+        project: binding.project,
+        source: pluginId,
+        sourceName: payload.pluginName,
+        at: payload.at,
+        making,
+      });
     return { callId: payload.callId, startedAt: Date.now(), payload };
+  }
+
+  /** A call making an asset went out: while it runs it is one of its game's waiting jobs. */
+  #assetCallOpened(call: OpenedCall): void {
+    if (openAssetCall(this.#x.assetCalls, call) && call.project) this.#assetJobsChanged(call.project);
+  }
+
+  /**
+   * A call making an asset came back. Genex's own create has no call job, but it wrote its job
+   * record before answering: the game's jobs are read again now, not at the next poll.
+   */
+  #assetCallClosed(callId: string, project: string | null | undefined, making: boolean): void {
+    const closed = closeAssetCall(this.#x.assetCalls, callId);
+    const changed = closed ?? (making ? project : null);
+    if (changed) this.#assetJobsChanged(changed);
+  }
+
+  /** A connector call that says it makes an asset went out: its game's waiting job while it runs. */
+  #connectorAssetCall(call: ConnectorCall & { callId: string }, project: string | null | undefined, at: number): void {
+    if (!call.making) return;
+    this.#assetCallOpened({
+      callId: call.callId,
+      project,
+      source: call.pluginId ?? call.connectorId,
+      ...(call.connectorName ? { sourceName: call.connectorName } : {}),
+      at: new Date(at).toISOString(),
+      making: call.making,
+    });
+  }
+
+  #assetJobsChanged(project: string): void {
+    this.#core.emit(UiEvent.AssetJobs, { project });
   }
 
   /** The same call, closed: what it answered or what it threw, with the image count taken before the bytes were stripped. */
@@ -1148,6 +1214,7 @@ export class PluginToolService {
     binding?: PluginBinding,
   ): Promise<void> {
     if (binding) this.#x.pluginCallAttribution.delete(binding);
+    this.#assetCallClosed(started.payload.callId, started.payload.project, started.payload.making !== undefined);
     const version = this.#core.plugins.list().find((p) => p.manifest.id === started.payload.pluginId)?.manifest.version;
     const cutOff = "error" in outcome && outcome.error instanceof PluginCallCutOff ? outcome.error.reason : null;
     const { payload: call } = started;

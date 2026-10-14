@@ -1,6 +1,8 @@
 /** A section of the Settings dialog a request can open. */
 export const SettingsSection = {
   Games: "games",
+  /** What freeing space deletes, and one button that frees it (`panels/StorageSection.tsx`). */
+  Storage: "storage",
   Providers: "providers",
   Local: "local",
   Appearance: "appearance",

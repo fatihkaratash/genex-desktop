@@ -356,6 +356,40 @@ test("parallel plugin calls match their own outcomes and delivered assets stay v
   assert.equal(new Set(entries.map((e) => e.id)).size, entries.length);
 });
 
+test("a call making an asset carries the ids its job may go by; a call that makes nothing carries none", () => {
+  const making = { kind: "character", tool: "meshy", prompt: "Knight" };
+  const entries = toEntries([
+    custom(1, "plugin_tool_started", { callId: "a", pluginId: "genex", tool: "asset", making }),
+    custom(2, "plugin_tool", {
+      callId: "a",
+      pluginId: "genex",
+      tool: "asset",
+      making,
+      ok: true,
+      jobId: "j",
+      generationId: "g",
+    }),
+    custom(3, "plugin_tool_started", { callId: "b", pluginId: "genex", tool: "cover" }),
+    custom(4, "connector_tool_started", {
+      callId: "c",
+      connectorId: "paint",
+      tool: "paint",
+      exposedName: "paint",
+      making,
+    }),
+    custom(5, "connector_tool_started", { connectorId: "paint", tool: "paint", exposedName: "paint", making }),
+  ]);
+  const rows = entries.flatMap((e) => (e.kind === "tools" ? e.rows : []));
+  assert.deepEqual(rows.find((row) => row.key === "a")!.making, { ids: ["a", "j", "g"] }, "the call's, then its job's");
+  assert.equal(rows.find((row) => row.key === "b")!.making, undefined);
+  assert.deepEqual(rows.find((row) => row.key === "c")!.making, { ids: ["c"] });
+  assert.equal(
+    rows.filter((row) => row.making).length,
+    2,
+    "a connector record from before calls had ids has no job to find",
+  );
+});
+
 test("build-workspace deliveries wait for their run result; game-folder deliveries show where they land", () => {
   const file = (name: string) => [
     { file: `assets/genex/0d99db96-677f-436b-abcf-5da04d1e06cf/${name}`, kind: "audio", bytes: 4 },

@@ -91,6 +91,20 @@ extension says. Without an icon Studio shows your plugin's initial. An MCP serve
 and pictures itself through its own `serverInfo.title` and `serverInfo.icons` when it connects;
 until then, and when it sends none, it wears your plugin's icon.
 
+### Showing what a tool makes
+
+A tool that makes an asset can say so (API 3), and while a call runs Genex shows it as a card of
+that kind on the Assets canvas and in the chat, where its files will land, with your plugin's icon:
+
+```json
+{ "name": "paint", "description": "…", "parameters": { … }, "asset": { "kind": "image", "prompt": "prompt", "tool": "Pixel Lab" } }
+```
+
+`kind` is one of `character`, `creature`, `model`, `rigged-model`, `animation`, `image`,
+`texture`, `video`, `sound-effect`, `music`, `voice`; `prompt` names the parameter that says what
+to make; `tool` names the service doing the work. See
+[Assets being made](plugins.md#assets-being-made).
+
 ### Host services
 
 Each is capability-gated and scoped to your plugin. `ctx.host('<method>', args)` is typed, so an
@@ -401,6 +415,9 @@ What Studio will and will not do with it:
 Your server is trusted native code in a child process, not a sandbox. Declare the narrowest thing
 that does the job, say in `description` what a user must set up, and let a call fail with a message
 rather than starting a server that can only answer "not configured".
+
+An MCP server's tool says what it makes in its own `tools/list` entry, so this works for any
+server, yours or one a person added: `"_meta": { "genex/asset": { "kind": "image", "prompt": "text" } }`.
 
 ## 7. Check it
 

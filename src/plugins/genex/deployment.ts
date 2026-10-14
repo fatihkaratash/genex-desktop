@@ -2,6 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { SECOND_MS } from "../../shared/duration.ts";
+import { withHead } from "../../shared/genex-page.ts";
 
 export const DEPLOYMENT_MARKER = "studio-deployment.json";
 const ENTRY_FILE = "index.html";
@@ -30,14 +31,18 @@ const digest = (data: Uint8Array | string) => createHash("sha256").update(data).
 /** The entry page's marker naming one upload. */
 const deploymentTag = (id: string) => `<meta name="studio-deployment" content="${id}">`;
 
-/** Put this upload's marker into the export's entry page, replacing any earlier one. */
+/**
+ * Put this upload's marker first in the export's head, replacing any earlier one. A page with no
+ * head tag gets one ({@link withHead}): the games host injects only into a head, and a marker ahead
+ * of the doctype would put the page in quirks mode.
+ */
 async function tagEntry(root: string, id: string): Promise<void> {
   const entry = path.join(root, ENTRY_FILE);
   const html = (await readFile(entry, "utf8")).replace(/<meta name="studio-deployment" content="[^"]*">/g, "");
   const tag = deploymentTag(id);
   await writeFile(
     entry,
-    /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, (head) => head + tag) : tag + html,
+    withHead(html).replace(/<head(?=[\s>/])[^>]*>/i, (head) => head + tag),
   );
 }
 

@@ -431,6 +431,10 @@ const SET_FILL_HOVER_SHIFT = 0.04;
 const SET_FILL_DARKENS_ABOVE = 0.85;
 /** How many steps a colour takes toward black or white to become readable. */
 const READABLE_STEPS = 100;
+/** The luminance above which a background reads as light. */
+const LIGHT_BACKGROUND = 0.4;
+/** How vivid a dark theme's destructive fill may be in OKLCH: a deep red, never a neon one. */
+const DARK_DANGER_CHROMA = 0.15;
 /** Every custom preset's id starts with this. */
 export const CUSTOM_PRESET_PREFIX = "custom-";
 /** The appearance modes, in the order Settings offers them. */
@@ -704,6 +708,16 @@ export function sidebarRowMix(p: Palette, row: SidebarRow): { color: string; per
     : { color: p.hover, percent: share.dark };
 }
 /**
+ * A dark theme's destructive fill and hover: its red, no more vivid than `DARK_DANGER_CHROMA`,
+ * deepened under a white label as the accent fill is, so it pairs with the accent button. Null in a
+ * light theme, whose red fills as set.
+ */
+export function darkDangerFill(p: Palette): { fill: string; hover: string } | null {
+  if (luminance(p.background) > LIGHT_BACKGROUND) return null;
+  const [L, C, h] = oklch(p.danger);
+  return accentFill(fromOklch(L, Math.min(C, DARK_DANGER_CHROMA), h));
+}
+/**
  * The CSS variables a palette draws. Every colour is drawn exactly as set, however low its contrast:
  * the palette's author owns readability (the colour tweaker shows each role's contrast). Only a
  * contrast above the default lifts muted text further.
@@ -722,6 +736,8 @@ export function themeVariables(p: Palette, contrast = DEFAULT_CONTRAST): Record<
   const controlBorder = controlEdge(p, contrast, mix);
   const hoverFill = (color: string) => mix(color, onColor(color) === "#000000" ? "#ffffff" : "#000000", 92);
   const primary = accentButton(p);
+  const darkDanger = darkDangerFill(p);
+  const dangerFill = darkDanger?.fill ?? p.danger;
   const sidebarFill = (row: SidebarRow) => {
     const { color, percent } = sidebarRowMix(p, row);
     return mix(color, p.sidebar, percent);
@@ -763,12 +779,12 @@ export function themeVariables(p: Palette, contrast = DEFAULT_CONTRAST): Record<
     "--green": p.success,
     "--orange": p.warning,
     "--destructive": p.danger,
-    "--danger-fill": p.danger,
-    "--danger-foreground": onColor(p.danger),
-    "--danger-hover": hoverFill(p.danger),
+    "--danger-fill": dangerFill,
+    "--danger-foreground": onColor(dangerFill),
+    "--danger-hover": darkDanger?.hover ?? hoverFill(p.danger),
     "--success-foreground": onColor(p.success),
     "--error-foreground": onColor(p.danger),
-    "--image-outline": luminance(p.background) > 0.4 ? "#0000001a" : "#ffffff1a",
+    "--image-outline": luminance(p.background) > LIGHT_BACKGROUND ? "#0000001a" : "#ffffff1a",
     "--shadow-overlay": `0 0 0 1px ${edge}, 0 16px 48px #00000026`,
     "--shadow-raised": `0 0 0 1px ${edge}, 0 8px 24px #00000020`,
     ...placeVariables(p),

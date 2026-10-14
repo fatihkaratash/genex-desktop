@@ -309,10 +309,10 @@ export interface StudioApi {
   renameThread(threadId: string, title: string): Promise<ConversationRecord>;
   compactThread(threadId: string, options?: { engine?: string; model?: string }): Promise<boolean>;
   archiveGame(project: string): Promise<boolean>;
-  /** How much space a game's version history takes, and how much clearing Rewind history frees. */
-  gameHistory(project: string): Promise<import("./game-history.ts").GameHistorySpace>;
-  /** Clear a game's Rewind history and finished builds' side tracks; refused while the game works. */
-  clearGameHistory(project: string): Promise<import("./game-history.ts").GameHistoryCleared>;
+  /** What freeing space deletes now, in one game or (none named) in all of them. */
+  storageSpace(project?: string): Promise<import("./storage-space.ts").StorageSpace>;
+  /** Free space in one game (refused while it works) or (none named) in every game not working. */
+  freeStorage(project?: string): Promise<import("./storage-space.ts").StorageFreed>;
   /** Takes back a game's engine link from its chat line; refused once the link has changed since. */
   undoEngineLink(request: import("./game-engine.ts").EngineLinkUndo): Promise<boolean>;
   /** The person's Stop on a job's chat line: the job's record, or null for a job the game never had. */

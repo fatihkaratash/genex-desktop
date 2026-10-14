@@ -1871,6 +1871,7 @@ function ownService(lite: CoreLite): PluginToolService {
     pluginCallAttribution: new WeakMap(),
     mcpSecrets: null,
     activeConnectorCalls: new Map(),
+    assetCalls: new Map(),
     cutOffCalls: new Map(),
     planning: async () => false,
     chatMode: async () => PermissionMode.Bypass,

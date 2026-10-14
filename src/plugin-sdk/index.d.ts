@@ -125,12 +125,43 @@ export type PluginHostTool = "genex-cli" | "genex-cli-paid" | "genex-package";
  */
 export type PluginToolAudience = "agents" | "harness";
 
+/** The kinds of asset Genex draws while one is being made. */
+export type PluginAssetKind =
+  | "character"
+  | "creature"
+  | "model"
+  | "rigged-model"
+  | "animation"
+  | "image"
+  | "texture"
+  | "video"
+  | "sound-effect"
+  | "music"
+  | "voice";
+
+/**
+ * API 3: what a call of a tool makes. While the call runs, Genex shows it as a card of that kind on
+ * the Assets canvas and in the chat, in the spot its files will land, with the tool's name (`tool`,
+ * else your plugin's), your plugin's icon, and the argument named `prompt` (default `prompt`) as
+ * what was asked. An MCP server says the same per tool in its `tools/list` entry, as
+ * `_meta: { "genex/asset": { kind, prompt?, tool? } }`. It changes how a call is shown, nothing else.
+ */
+export interface PluginToolAsset {
+  kind: PluginAssetKind;
+  /** The argument that says what to make: one of the tool's parameters, at most 64 characters. */
+  prompt?: string;
+  /** The outside service doing the work, when your plugin is a front for one (at most 40 characters). */
+  tool?: string;
+}
+
 /** A tool as your manifest declares it. Agents see it as a plain `PluginTool`. */
 export interface PluginManifestTool extends PluginTool {
   /** Reserved for the bundled Genex plugin. */
   host?: PluginHostTool;
   /** API 3: who may call the tool; agents when absent. */
   audience?: PluginToolAudience;
+  /** API 3, agent tools only: the kind of asset a call makes. */
+  asset?: PluginToolAsset;
 }
 
 /**

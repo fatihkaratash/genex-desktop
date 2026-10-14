@@ -39,9 +39,9 @@ Where it disagrees with this preface, this preface wins.
   {"name":"genex-cover"}` first, and never save a frame in `.genex/scratch`.
 - `npm i @genex-ai/multiplayer`: `genex__package {"package":"@genex-ai/multiplayer"}`, and
   `npm i @genex-ai/embed-sdk`: `genex__package {"package":"@genex-ai/embed-sdk"}`. Studio picks
-  the version and the user approves the install. Only a browser game with its own `package.json`
-  can add them: not one made from Studio's template, and not a compiled game (Rust · wgpu, or a
-  C++ · raylib game made before Rust).
+  the version and the user approves the install. In a game made from Studio's template it maps
+  Studio's copy in the import map instead, and Studio calls `initEmbed()` for the game. A compiled
+  game (Rust · wgpu, or a C++ · raylib game made before Rust) cannot add them.
 - A `genex__cli` call carries the words of the command, its positional argument and its flags by
   name without dashes: `npx genex llm cancel <id>` is
   `genex__cli {"command":"llm cancel","args":"<id>"}`, and `--all` is `"options":{"all":true}`.

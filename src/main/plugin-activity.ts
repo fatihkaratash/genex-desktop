@@ -11,6 +11,7 @@
  * generated picture cannot be copied into the thread log by way of a tool result.
  */
 import { randomUUID } from "node:crypto";
+import type { CallMaking } from "../shared/asset-making.ts";
 import type { PluginToolFinishedPayload, PluginToolRole, PluginToolStartedPayload } from "../shared/game-assets.ts";
 import { isJsonObject } from "../substrate/fsx.ts";
 
@@ -137,6 +138,8 @@ export interface PluginToolCall {
   engine: string;
   role: PluginToolRole;
   at?: string;
+  /** What the call makes, when its tool says (`shared/asset-making.ts`). */
+  making?: CallMaking;
 }
 
 /** The `plugin_tool_started` payload. `runId`/`facetId`/`iteration` stay at the top level on purpose. */
@@ -156,6 +159,7 @@ export function startedPayload(call: PluginToolCall): PluginToolStartedPayload {
     engine: call.engine,
     role: call.role,
     at: call.at ?? new Date().toISOString(),
+    ...(call.making ? { making: call.making } : {}),
   };
   return payload;
 }

@@ -27,7 +27,9 @@ import {
   studioContractGeneration,
 } from "../../src/substrate/game-workspace.ts";
 import { bootBudget } from "../../src/substrate/preview-ready.ts";
-import { webGameSignal } from "../../src/substrate/project-shape.ts";
+import { templateLoadsGenexSdk, webGameSignal } from "../../src/substrate/project-shape.ts";
+import { withGenexSdkImport } from "../../src/shared/genex-page.ts";
+import { servedKey } from "../../src/main/core/page-report.ts";
 import { ensureRepo, git } from "../../src/substrate/snapshots.ts";
 import { buildContractorBrief } from "../../src/harness-seed/loop/chat-session.ts";
 import {
@@ -2694,5 +2696,28 @@ describe("a C++ · raylib folder", () => {
       assert.ok(!writes.includes(browserFile), `${browserFile} is not promised: ${writes.join(", ")}`);
     }
     assert.ok(writes.includes("studio.json"), "the destinations adoption records are a promise too");
+  });
+});
+
+describe("a template game that loads the Genex SDK", () => {
+  it("is still the template, and the preview knows it loads the SDK only once its page maps Studio's copy", async () => {
+    const dir = await realpath(await tmpDir("studio-genex-template-"));
+    const page = await readFile(path.resolve(import.meta.dirname, "../../src/game-template/index.html"), "utf8");
+    await writeFile(path.join(dir, "studio.json"), JSON.stringify({ contractVersion: 1 }));
+    await writeFile(path.join(dir, "index.html"), page);
+    assert.equal(await templateLoadsGenexSdk(dir), false, "the template as it starts");
+    await writeFile(path.join(dir, "index.html"), `<!-- /vendor/genex/connect.js -->\n${page}`);
+    assert.equal(await templateLoadsGenexSdk(dir), false, "a comment naming the module loads nothing");
+    await writeFile(path.join(dir, "index.html"), withGenexSdkImport(page) ?? "");
+    assert.equal(await templateLoadsGenexSdk(dir), true);
+    assert.equal(await detectProjectShape(dir), null, "mapping the SDK keeps it Studio's template");
+    await rm(path.join(dir, "index.html"));
+    assert.equal(await templateLoadsGenexSdk(dir), false, "no page");
+  });
+
+  it("is loaded again by Reload once its page moves it to the loopback origin, not reloaded in place", () => {
+    const page = { entry: "index.html", root: undefined };
+    assert.notEqual(servedKey({ ...page, loopback: false }), servedKey({ ...page, loopback: true }));
+    assert.equal(servedKey({ ...page, loopback: true }), servedKey({ ...page, loopback: true }));
   });
 });

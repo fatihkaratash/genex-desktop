@@ -2,7 +2,7 @@
  * The line below the transcript that says what is happening: the chat's own work (with the work
  * log folded in), else a running build's status, else Studio quietly learning, else nothing.
  */
-import type { JSX, Key } from "react";
+import { type JSX, type Key, useMemo } from "react";
 import type { AgentScreenFrame } from "../../shared/agent-screen.ts";
 import { leadFrameOf } from "../state/agent-screens.ts";
 import { useAgentScreens } from "../state/hooks.ts";
@@ -11,6 +11,9 @@ import { Presence, type PresenceChild } from "../ui/Presence.tsx";
 import { BuildStatus } from "./BuildStatus.tsx";
 import type { ActivityItem } from "./conversation-entries.ts";
 import { WorkLogContent } from "./WorkLog.tsx";
+import { makingCalls } from "./making-calls.ts";
+import { MakingTiles } from "./MakingTiles.tsx";
+import type { Notify } from "../state/toasts.ts";
 
 export interface ChatWorkProps {
   /** The chat's own work is under way. */
@@ -37,6 +40,8 @@ export interface ChatWorkProps {
   onShowBuilds?: () => void;
   /** The chat is loading: the line it opens with is simply there. */
   still?: boolean;
+  /** Where an approval from a card of what the work is making reports a problem. */
+  onNotice?: Notify;
 }
 
 /** What the line is: the chat's own work, a running build or Studio learning. A change of kind swaps it. */
@@ -62,6 +67,19 @@ export function ChatWork(props: ChatWorkProps): JSX.Element {
   );
 }
 
+const NO_NOTICE: Notify = () => {};
+
+/** What the chat's work is still making, under its line, as the Assets canvas shows it. */
+function WorkMaking({ props }: { props: ChatWorkProps }): JSX.Element | null {
+  const calls = useMemo(() => makingCalls(props.details ?? []), [props.details]);
+  if (!props.project || !calls.length) return null;
+  return (
+    <div className="mt-1">
+      <MakingTiles project={props.project} calls={calls} onNotice={props.onNotice ?? NO_NOTICE} />
+    </div>
+  );
+}
+
 /** The line on show, keyed by its kind, or nothing. */
 function workLine(props: ChatWorkProps, leadFrame: AgentScreenFrame | undefined): PresenceChild[] {
   if (props.chatWorking)
@@ -77,6 +95,7 @@ function workLine(props: ChatWorkProps, leadFrame: AgentScreenFrame | undefined)
               waiting={props.waiting}
               {...(props.busySince ? { since: props.busySince } : {})}
             />
+            <WorkMaking props={props} />
           </div>
         ),
       },

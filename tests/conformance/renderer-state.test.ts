@@ -705,6 +705,8 @@ describe("what each UI event makes the renderer read again", () => {
     assert.equal(uiEventReads(ev("plugin.event", { id: "genex", event: {} })).assets, null);
     assert.deepEqual(uiEventReads(ev("asset.delivered", { project: "pond" })).assets, { project: "pond" });
     assert.deepEqual(uiEventReads(ev("asset.delivered", {})).assets, { project: null });
+    assert.deepEqual(uiEventReads(ev("asset.jobs", { project: "pond" })).assets, { project: "pond" });
+    assert.equal(uiEventReads(ev("asset.jobs", {})).assets, null, "a change of jobs names its game");
   });
 });
 

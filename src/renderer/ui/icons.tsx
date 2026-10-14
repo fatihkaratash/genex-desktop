@@ -437,6 +437,14 @@ const glyphs = {
   circle: <circle className="a-pulse" cx="12" cy="12" r="7" />,
   // Compact: two corners drawn in toward the middle, the context folding smaller.
   compact: <path d="M4.5 14h5.5v5.5M19.5 10H14V4.5M14 10l6-6M4 20l6-6" />,
+  // A drive: where Genex keeps what it makes on this Mac.
+  drive: (
+    <>
+      <path d="M3.5 13l2.6-6.1A2.2 2.2 0 0 1 8.1 5.5h7.8a2.2 2.2 0 0 1 2 1.4l2.6 6.1V17a2.5 2.5 0 0 1-2.5 2.5H6A2.5 2.5 0 0 1 3.5 17z" />
+      <path d="M3.5 13h17" />
+      <circle cx="7.5" cy="16.25" r="1" {...DOT} />
+    </>
+  ),
   // A model chip: the die and its pins, for models that run on this Mac.
   chip: (
     <>

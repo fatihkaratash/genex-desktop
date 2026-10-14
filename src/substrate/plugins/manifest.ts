@@ -40,6 +40,7 @@ import { PLUGIN_ID } from "../../shared/plugin-id.ts";
 import { GameEngine, isGameEngine } from "../../shared/game-engine.ts";
 import { GameStack, isGameStack } from "../../shared/game-project.ts";
 import { MCP_ID, McpTransport } from "../../shared/mcp.ts";
+import { MakingKind, type PluginToolAsset, readToolAsset } from "../../shared/asset-making.ts";
 import { pictureType } from "../image-sniff.ts";
 
 /** The plugin's id, and every name it declares (tools, skills, panels, actions, settings). */
@@ -183,6 +184,8 @@ const MESSAGE = {
   HostToolNeedsConfirmation: "A host tool that spends credits or installs packages needs a confirmation",
   AudienceNeedsApi3: "tools[].audience requires apiVersion 3",
   InvalidToolAudience: `Invalid tools[].audience (${[...TOOL_AUDIENCES].join(", ")})`,
+  AssetNeedsApi3: "tools[].asset requires apiVersion 3",
+  InvalidToolAsset: `Invalid tools[].asset (an agent tool's { kind: ${Object.values(MakingKind).join("|")}, prompt?: one of its parameters, tool?: a short name })`,
   InvalidPanel: "Invalid panel",
   InvalidAction: "Invalid action",
   SensitiveNeedsConfirmation: "Sensitive actions require trusted confirmation",
@@ -318,6 +321,18 @@ function validateAudience(t: PluginManifestTool, m: PluginManifest): void {
   if (!TOOL_AUDIENCES.has(t.audience)) throw new Error(MESSAGE.InvalidToolAudience);
 }
 
+/**
+ * What a tool says its calls make (API 3): a kind Studio draws, a prompt that is one of its own
+ * parameters, and only on a tool agents call (the harness's own steps make no card).
+ */
+function toolAsset(t: PluginManifestTool, m: PluginManifest): PluginToolAsset {
+  if (m.apiVersion < 3) throw new Error(MESSAGE.AssetNeedsApi3);
+  const asset = readToolAsset(t.asset);
+  const promptKnown = asset?.prompt === undefined || Object.hasOwn(t.parameters.properties, asset.prompt);
+  if (!asset || !promptKnown || t.audience === PluginToolAudience.Harness) throw new Error(MESSAGE.InvalidToolAsset);
+  return asset;
+}
+
 /** A tool's optional declarations: its consent question (API 2), its host program and its audience. */
 function validateToolOptions(t: PluginManifestTool, m: PluginManifest): void {
   if (t.confirmation !== undefined) {
@@ -351,6 +366,7 @@ function validateTool(t: PluginManifestTool, m: PluginManifest, names: Set<strin
   if (t.host !== undefined) tool.host = t.host;
   // Agents are the default audience, so only the harness is written.
   if (t.audience === PluginToolAudience.Harness) tool.audience = t.audience;
+  if (t.asset !== undefined) tool.asset = toolAsset(t, m);
   applyToolScope(t, tool, m);
   return tool;
 }

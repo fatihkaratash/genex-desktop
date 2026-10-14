@@ -38,7 +38,15 @@ export const GENEX_CLI_PROMPT = {
   UnknownPackage: (name: string, allowed: readonly string[]) =>
     `${name} is not a package genex__package adds. It adds: ${allowed.join(", ")}.`,
   NoPackageJson:
-    "This game has no package.json (it uses Studio's template and its /vendor/ import maps), so it cannot add Genex packages. Multiplayer needs a game with its own build.",
+    "This game has no package.json and is not made from Studio's template, so it cannot add Genex packages. Multiplayer needs a game with its own build.",
+  TemplateMultiplayer:
+    'Multiplayer is not available yet in a game made from Studio\'s template: Studio has no copy of @genex-ai/multiplayer for its import map. Player identity, saves and leaderboards are: genex__package {"package":"@genex-ai/embed-sdk"}.',
+  TemplatePageUnreadable:
+    "This game's index.html has no import map Studio can read, so @genex-ai/embed-sdk was not added. Restore the template's import map (three from /vendor/) and try again.",
+  TemplateSdkMapped: [
+    "index.html now maps @genex-ai/embed-sdk to Studio's copy (/vendor/genex/embed-sdk/index.js) and loads Studio's connect module (/vendor/genex/connect.js) right after its import map. Keep both.",
+    'Studio connects the game: in the preview in local test mode, and on Genex to the game\'s project when it is published. Import what you need from "@genex-ai/embed-sdk" (waitForPlayer, loadPlayerState, savePlayerState, submitScore, getLeaderboard) and never call initEmbed() yourself.',
+  ],
   ForeignFolder:
     "This call is not bound to the game's own folder or one of its Studio worktrees; nothing was installed.",
 } as const;

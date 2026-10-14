@@ -13,7 +13,7 @@ import { registerLoginIpc, type LoginIpcDeps } from "../../src/main/ipc/login.ts
 import { badgeText, registerNotificationsIpc } from "../../src/main/ipc/notifications.ts";
 import { registerModelsIpc, type ModelsIpcDeps } from "../../src/main/ipc/models.ts";
 import { registerUpdateIpc } from "../../src/main/ipc/update.ts";
-import { registerGameHistoryIpc } from "../../src/main/ipc/game-history.ts";
+import { registerStorageIpc } from "../../src/main/ipc/storage.ts";
 import { registerJobsIpc } from "../../src/main/ipc/jobs.ts";
 import { createLoginControllers, type SubscriptionEngine } from "../../src/main/login-controllers.ts";
 import type { ClaudeLoginState } from "../../src/shared/claude-login.ts";
@@ -1620,31 +1620,31 @@ describe("the native-game fixture's scripted registry", () => {
   });
 });
 
-it("a game's history is read and cleared only for a game named as one", async () => {
+it("storage is measured and freed for one game named as one, or for every game", async () => {
   const calls: string[] = [];
-  const space = { totalBytes: 2, clearableBytes: 1, recentBytes: 0, rewindTracks: 1, finishedRunTracks: 0 };
+  const space = { bytes: { copies: 3, pictures: 2, history: 1 } };
+  const freed = { freedBytes: 6, skipped: [] };
   const core = {
-    gameHistory: async (project: string) => {
-      calls.push(`space ${project}`);
+    storageSpace: async (project?: string) => {
+      calls.push(`space ${project ?? "every game"}`);
       return space;
     },
-    clearGameHistory: async (project: string) => {
-      calls.push(`clear ${project}`);
-      return { removedTracks: 1, freedBytes: 1 };
+    freeStorage: async (project?: string) => {
+      calls.push(`free ${project ?? "every game"}`);
+      return freed;
     },
   };
   const { handle, invoke } = registrar();
-  registerGameHistoryIpc(handle, { core });
-  for (const payload of [undefined, null, {}, { project: 1 }, { project: "../x" }, { project: "" }, { project: "A b" }])
-    for (const channel of ["studio:game.history", "studio:game.history.clear"])
+  registerStorageIpc(handle, { core });
+  for (const payload of [{ project: 1 }, { project: null }, { project: "../x" }, { project: "" }, { project: "A b" }])
+    for (const channel of ["studio:storage", "studio:storage.free"])
       assert.equal((await invoke(channel, payload)).ok, false, `${channel} ${JSON.stringify(payload)}`);
   assert.deepEqual(calls, [], "nothing was asked of the core");
-  assert.deepEqual(await invoke("studio:game.history", { project: "pond" }), { ok: true, value: space });
-  assert.deepEqual(await invoke("studio:game.history.clear", { project: "pond" }), {
-    ok: true,
-    value: { removedTracks: 1, freedBytes: 1 },
-  });
-  assert.deepEqual(calls, ["space pond", "clear pond"]);
+  assert.deepEqual(await invoke("studio:storage", { project: "pond" }), { ok: true, value: space });
+  assert.deepEqual(await invoke("studio:storage.free", { project: "pond" }), { ok: true, value: freed });
+  assert.deepEqual(await invoke("studio:storage", {}), { ok: true, value: space });
+  assert.deepEqual(await invoke("studio:storage.free", undefined), { ok: true, value: freed });
+  assert.deepEqual(calls, ["space pond", "free pond", "space every game", "free every game"]);
 });
 
 /** The jobs registrar over a core that records each Stop and an `openExternal` that records each URL. */

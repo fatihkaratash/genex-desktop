@@ -5,6 +5,9 @@ import { FileText } from "../ui/FileText.tsx";
 import { PluginIcon } from "../ui/PluginIcon.tsx";
 import { ToolRow } from "../ui/ToolChips.tsx";
 import { AssetResults } from "./AssetResults.tsx";
+import { makingCalls } from "./making-calls.ts";
+import { MakingTiles } from "./MakingTiles.tsx";
+import type { Notify } from "../state/toasts.ts";
 import { ChatDisclosure } from "./ChatDisclosure.tsx";
 import { ShotStrip } from "./ConnectorShots.tsx";
 import {
@@ -25,14 +28,18 @@ export const WorkLog = memo(function WorkLog({
   items,
   deliveries,
   onOpenAssets,
+  making,
 }: {
   items: ActivityItem[];
   deliveries?: AssetDeliveredPayload[] | undefined;
   onOpenAssets?: (() => void) | undefined;
+  /** The game the work is for, to show what it is still making as the Assets canvas does. */
+  making?: { project: string; onNotice: Notify } | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const failures = items.filter(failedToolItem).length;
   const strip = useMemo(() => stripShots(items), [items]);
+  const calls = useMemo(() => makingCalls(items), [items]);
   return (
     <div className="flex min-w-0 flex-col">
       <ChatDisclosure
@@ -47,6 +54,11 @@ export const WorkLog = memo(function WorkLog({
         <WorkLogContent items={items} />
       </ChatDisclosure>
       {strip.length > 0 && <ShotStrip paths={strip} />}
+      {making && calls.length > 0 && (
+        <div className="mt-2">
+          <MakingTiles project={making.project} calls={calls} onNotice={making.onNotice} />
+        </div>
+      )}
       {deliveries?.length ? (
         <div className="mt-2">
           <AssetResults deliveries={deliveries} onOpenAssets={onOpenAssets} />

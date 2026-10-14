@@ -9,6 +9,7 @@ import { newBuildOffer } from "../../src/renderer/stage.ts";
 import type { EventEnvelope } from "../../src/substrate/types.ts";
 import {
   buildRunGraph,
+  buildsView,
   hasMergedBuild,
   nextStep,
   passedFraction,
@@ -484,7 +485,9 @@ import {
   runStillPath,
   thumbShot,
 } from "../../src/renderer/run-graph.ts";
-import { layoutSteps, partRows, STEPS } from "../../src/renderer/run-steps.ts";
+import { layoutSteps, partRows, STEPS, Tone } from "../../src/renderer/run-steps.ts";
+import { assetsStatus, isMaking, stoppedShort } from "../../src/renderer/panels/inspector/asset-jobs.ts";
+import { MakingPhase } from "../../src/shared/asset-making.ts";
 
 describe("notes and plain words", () => {
   it("pins a user note to the round it named and records the first later verdict of that part", () => {
@@ -857,6 +860,72 @@ describe("the plugins' asset jobs in the run graph", () => {
     assert.equal(node.jobs[0]!.iteration, 2);
   });
 
+  it("drops a Genex request refused before a generation started, and fails a generation that did", () => {
+    counter = 0;
+    // Genex answers a refused request as a job that failed with no generation, not as an error.
+    const refused = (callId: string, error: string) =>
+      finished(callId, {
+        jobId: `job-${callId}`,
+        result: JSON.stringify({ id: `job-${callId}`, operation: "character", status: "failed", files: [], error }),
+      });
+    const graph = buildRunGraph([
+      event("run_started", { goal: "a farm", project: "farm" }),
+      started("call-1"),
+      refused("call-1", "✗ Error: Cannot quote this generation (HTTP 400). No generation was sent."),
+      started("call-2"),
+      refused("call-2", '{"kind":"character","status":"selection_required","selector":"Casual Walk"}'),
+      started("call-3"),
+      finished("call-3", {
+        jobId: "job-3",
+        generationId: "gen-3",
+        result: JSON.stringify({ id: "job-3", generationId: "gen-3", status: "failed", error: "The rig failed." }),
+      }),
+    ])!;
+    const node = graph.nodes.find((n) => n.kind === "assets");
+    assert.ok(node && node.kind === "assets");
+    assert.deepEqual(
+      node.jobs.map((job) => [job.callId, job.state, job.error]),
+      [["call-3", "failed", "The rig failed."]],
+      "only the generation that started and failed is listed, in Genex's words",
+    );
+  });
+
+  it("reads a job the log leaves on its way as the game's inventory does, so a stale one stops making", () => {
+    counter = 0;
+    const graph = buildRunGraph([
+      event("run_started", { goal: "a farm", project: "farm" }),
+      started("call-1"),
+      finished("call-1", { jobId: "job-1", generationId: "gen-1", result: '{"id":"job-1","status":"accepted"}' }),
+    ])!;
+    // The inventory lists a Genex job by its generation, and has read its record two hours on.
+    const inventory = (phase: MakingPhase) => ({
+      project: "farm",
+      assets: [],
+      jobs: [{ source: "genex", jobId: "gen-1", phase }],
+      truncated: false,
+      skipped: [],
+    });
+    const jobOf = (phase: MakingPhase) => {
+      const node = buildsView(graph, null, inventory(phase)).nodes.find((n) => n.kind === "assets");
+      assert.ok(node && node.kind === "assets");
+      return node.jobs;
+    };
+    const stale = jobOf(MakingPhase.Unsure);
+    assert.deepEqual(
+      [isMaking(stale[0]!), stoppedShort(stale[0]!), assetsStatus(stale)],
+      [false, MakingPhase.Unsure, { text: "1 not confirmed", tone: Tone.Orange }],
+      "a job Genex still says it is making two hours on is Not confirmed, not Making",
+    );
+    const making = jobOf(MakingPhase.Making);
+    assert.deepEqual(
+      [isMaking(making[0]!), stoppedShort(making[0]!), assetsStatus(making)],
+      [true, null, { text: "Making 1", tone: Tone.Accent }],
+    );
+    const unlisted = buildsView(graph, null, null).nodes.find((n) => n.kind === "assets");
+    assert.ok(unlisted && unlisted.kind === "assets");
+    assert.equal(isMaking(unlisted.jobs[0]!), true, "with no inventory read, the log's word stands");
+  });
+
   it("joins a call that names no job to the delivery of the same files", () => {
     counter = 0;
     const graph = buildRunGraph([
@@ -957,6 +1026,23 @@ describe("the plugins' asset jobs in the run graph", () => {
       at: "2026-09-05T10:05:00.000Z",
     });
     assert.equal(node.jobs[0]!.state, "delivered", "a failed check does not fail the asset");
+  });
+
+  it("reads a call's operation only where the digest writes it, never out of its prompt", () => {
+    counter = 0;
+    const graph = buildRunGraph([
+      event("run_started", { goal: "a farm", project: "farm", reference: { name: "x" } }),
+      started("call-5", {
+        pluginId: "sprite-forge",
+        pluginName: "Sprite Forge",
+        tool: "paint",
+        toolName: "sprite-forge__paint",
+        args: "prompt=a shop sign that reads operation=status",
+      }),
+    ])!;
+    const node = graph.nodes.find((n) => n.kind === "assets");
+    assert.ok(node && node.kind === "assets", "a call whose prompt mentions a lookup is still an asset");
+    assert.equal(node.jobs[0]?.operation, null);
   });
 
   /**

@@ -177,6 +177,7 @@ and the Plugins page — no polling is needed for a change to show.
 | `hooks[]` | 3 | Up to 32 `{on, tool, facts?}`: the plugin's harness tools Genex runs at its moments; see [Hooks](#hooks-genexs-moments) |
 | `observers[]` | 3 | Up to 8 `{id, facts, tool, live?, label?}`: what Genex can capture of a project with these facts, and the Live view it shows; see [Observers](#observers) |
 | `tools[].ready` | 3 | Agent tools with `makes` only: the harness tool that answers whether the kind can be made now (`{ready, note}`) |
+| `tools[].asset` | 3 | Agent tools only: `{kind, prompt?, tool?}`, the kind of asset a call makes; see [Assets being made](#assets-being-made) |
 | `icon` | any | The plugin's picture: a `.png`, `.jpg`, `.webp` or `.svg` file in the package, at most 512 KiB, square and full-bleed (Studio rounds the corners); see [Icons](#icons) |
 
 ### Icons
@@ -1061,6 +1062,31 @@ session reads a notice first, once, naming each call and saying to look at what 
 before repeating it (`delegation-prompts.ts` `cutOffNotice`). When the harness dies, plugins are
 not stopped: their backends, unlocked accounts and connectors stay up, and only the calls in flight
 end (`PluginRegistry.abortCalls`, `recovery.ts` `onHarnessDied`); quitting the app stops them all.
+
+## Assets being made
+
+While a call that makes an asset runs, the Assets canvas and the chat show it as one card in the
+spot its files will land: the kind's drawing, the tool's name and picture, a clock and the prompt
+(`shared/asset-making.ts`, `renderer/asset-making.ts`). A tool says what its calls make with
+`tools[].asset`: `kind` one of `character`, `creature`, `model`, `rigged-model`, `animation`,
+`image`, `texture`, `video`, `sound-effect`, `music`, `voice`; `prompt` the parameter that says what
+to make (default `prompt`); `tool` the outside service doing the work (else the plugin's name, with
+its icon). An MCP server, a plugin's or one the person added, says the same per tool in its
+`tools/list` entry: `_meta: {"genex/asset": {kind, prompt?, tool?}}` (`MCP_ASSET_META`); a
+malformed one says nothing. Either changes how a call is shown, never what it may do.
+
+The host stamps the declaration on the call's own record (`making` on `plugin_tool_started` and
+`connector_tool_started`, the prompt cut to 1000 characters) and lists the call in the game's
+inventory (`ProjectAssets.jobs`, `jobId` the call's id) from the moment it goes out until it
+answers, announcing each change (`asset.jobs`). The list is memory only (`main/core/asset-calls.ts`):
+a call the app did not see end never shows as still being made. Genex's jobs come from its own job
+records instead, with their kind, routed tool and phase (queued, making, waiting for a choice, not
+downloaded, not in the game, failed, stopped, not confirmed): a request refused before Genex
+started a generation has none, and one still making past `GENEX_MAKING_MAX_MS` is not confirmed.
+Only media is an asset: a generation's data files are not, and a provider's `source` copy folds
+into the finished model of its generation (`withoutGenexSources`). The chat's work shows the same cards
+for its steps, read from the inventory by the call's, job's or generation's id, so a card ends
+with its job; Bundled Blender declares `model`.
 
 ## The tool consent model
 
@@ -1978,6 +2004,15 @@ Genex:
   refuses the same games (`assertPublishable`, `PublishRefusedError` code `unreal-game` or
   `not-web-game`): the dialog's review and publish, `genex__publish`
   before its consent card, and `export.stage` (a panel's or toolbar's publish) before it exports.
+- Every published copy gets a `<head>` tag when `deployment.ts` marks it (`withHead`): the games
+  host injects its environment (`window.__GENEX__`), mobile kit, crash watchdog and cover
+  responder only into one, and the marker never goes ahead of the doctype. A game whose
+  package.json names no Genex package is connected by Studio (`plugins/genex/entry-page.ts`): once
+  Genex names the project (a first publish creates it), the plugin copies its build of the pinned
+  embed SDK (`embed-sdk/` beside its backend: the entry and the modules it reaches) and a connect
+  module naming the slug into the copy's `vendor/genex/`, loads that module after the page's last
+  import map, names the SDK in the copy's package.json so the CLI sends `embedSdkVersion`, and
+  marks the copy again. A game that brings its own SDK connects itself; Studio never adds a second.
 - That dialog also reads the cover record publish-status answers (`GenexPublishState.cover`, typed
   in `shared/genex.ts` with the plugin's outcome kinds as `GenexCoverOutcome`). While it reports no
   kept shot and no send running, the owner chose no cover on genex.games (`kept_owner`, which the
@@ -2017,7 +2052,9 @@ Genex:
   renderer or the plugin names, refuses a link anywhere on the way, and reads only `shot.png` or
   `shot.jpg` (no link, at most 8 MiB, bytes of the type its name says; the newer when both are
   there); anything else answers null. `genex-cover-shot.test.ts` holds its hostile table.
-- A game using `@genex-ai/embed-sdk` is previewed with `?genex_local_test=1`.
+- A game using `@genex-ai/embed-sdk` is previewed with `?genex_local_test=1`. A template game whose
+  page loads Studio's copy (`/vendor/genex/`, `pageLoadsGenexSdk` in `shared/genex-page.ts`) is
+  previewed on its loopback origin, where the SDK runs in local test mode without the query.
 - `tools[].host` (API 3, id `genex`, source `bundled`, else refused before any hook runs) names a
   program Studio runs for the tool through the registry's `hostTool` hook. `genex-cli` backs
   `genex__cli` and `genex-cli-paid` backs `genex__cli-paid`: Studio's pinned CLI runs in
@@ -2035,8 +2072,11 @@ Genex:
   command sees only `{id, slug}` from the publish workspace. `genex-package` backs
   `genex__package`: it adds `@genex-ai/multiplayer` or `@genex-ai/embed-sdk` at the exact pin in
   `GENEX_GAME_PACKAGES` (`shared/genex.ts`) with the game's package manager, only in the bound
-  game or a git worktree of it under Studio's scratch (by realpath), never in a template game
-  with no `package.json`. The paid tool and the package tool need consent; fixture profiles refuse
+  game or a git worktree of it under Studio's scratch (by realpath). A template game has no
+  `package.json`: for `@genex-ai/embed-sdk` the tool maps Studio's copy in its page's import map
+  (`/vendor/genex/embed-sdk/index.js`, which the build copies from the pinned devDependency) and
+  loads `/vendor/genex/connect.js` after the map (`withGenexSdkImport`); its page must be a
+  regular file, never a link. Multiplayer is refused there. The paid tool and the package tool need consent; fixture profiles refuse
   both host steps (`studio:plugins.host-cli`, `studio:plugins.host-package`).
 - `genex__asset` accepts only each lane's own options (`LANE_OPTIONS`, `plugins/genex/request.ts`),
   and a refusal names them (`Unsupported Genex option for <op>`). Each lane's provider is fixed and

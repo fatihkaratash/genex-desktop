@@ -3,7 +3,7 @@
  * game it is — recorded in studio.json, or read from the evidence in the folder itself — and
  * where people play it (its stack and destinations).
  */
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { StudioPlatform } from "../shared/boot.ts";
 import {
@@ -24,6 +24,7 @@ import {
   stackOf,
 } from "../shared/game-project.ts";
 import { hostTarget, TargetRefusal } from "../shared/game-targets.ts";
+import { pageLoadsGenexSdk } from "../shared/genex-page.ts";
 import { CoreFact, FolderHolds, hasFact } from "../shared/project-facts.ts";
 import { entryExists, isJsonObject, pathExists, readRegularFile } from "./fsx.ts";
 import { isRemoteSrc, pageScripts, projectRelative } from "./game-page.ts";
@@ -546,6 +547,16 @@ function recordedCompiledShape(kind: unknown): ProjectShape | null {
 async function compiledFolderShape(dir: string, meta: { kind?: unknown } | null): Promise<ProjectShape | null> {
   if (await pathExists(path.join(dir, "index.html"))) return null;
   return recordedCompiledShape(meta?.kind) ?? compiledShapeByFiles(dir);
+}
+
+/**
+ * Whether a template game's page loads the Genex SDK through Studio's copy. The SDK keeps a preview
+ * from sending anyone to genex.games to sign in only in its local test mode, which only a loopback
+ * origin gets: the preview serves such a game there, as it does a built one.
+ */
+export async function templateLoadsGenexSdk(dir: string): Promise<boolean> {
+  const html = await readFile(path.join(dir, TEMPLATE_SHAPE.entry), "utf8").catch(() => null);
+  return html !== null && pageLoadsGenexSdk(html);
 }
 
 /**

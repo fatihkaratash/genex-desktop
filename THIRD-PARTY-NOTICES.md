@@ -58,6 +58,14 @@ tree includes third-party libraries under their own terms, listed with their lic
 [three.js add-on libraries](#threejs-add-on-libraries); the Assets viewer also copies the Draco and
 Basis Universal decoders to `dist/renderer/decoders`.
 
+## Vendored Genex embed SDK (@genex-ai/embed-sdk)
+
+Template games and published games that bring no SDK of their own use Genex's player-identity SDK,
+`@genex-ai/embed-sdk` 0.30.0 (MIT, as its package.json declares; the package ships no license
+file). Its browser modules are copied unchanged to `dist/resources/vendor/genex/embed-sdk` and to
+`dist/resources/plugins/genex/embed-sdk`, and from there into a published game's
+`vendor/genex/embed-sdk`.
+
 ## Cover orb shaders from orbkit
 
 `src/shared/cover-orbs.ts` holds twelve fragment shaders and orbkit's shared GLSL helpers, copied

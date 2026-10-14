@@ -134,6 +134,7 @@ it("a run's plugin call answers to the Plan mode of the chat the run was started
       pluginCallAttribution: new WeakMap(),
       mcpSecrets: null,
       activeConnectorCalls: new Map(),
+      assetCalls: new Map(),
       cutOffCalls: new Map(),
       planning: async (thread) => thread === parent,
       chatMode: async () => PermissionMode.Manual,

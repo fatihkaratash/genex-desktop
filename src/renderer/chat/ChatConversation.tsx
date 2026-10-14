@@ -218,7 +218,7 @@ const ConversationContent = memo(function ConversationContent({
           <PendingBubbles key={`pending:${threadId}`} sends={sends} />
           <StreamingReply threadId={threadId} events={view.events} onShowing={onStreaming} />
 
-          <ChatWork key={`work:${threadId}`} {...view.line} still={loading} />
+          <ChatWork key={`work:${threadId}`} {...view.line} still={loading} onNotice={onNotice} />
           {threadId && (
             <WaitingFollowUps
               key={`waiting:${threadId}`}

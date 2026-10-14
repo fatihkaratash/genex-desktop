@@ -17,7 +17,8 @@ import { sniffImage } from "../substrate/image-sniff.ts";
 import { assertRelativePath, isBelow } from "../substrate/paths.ts";
 import { isJsonObject, readRegularFile } from "../substrate/fsx.ts";
 import { isPluginId } from "../shared/plugin-id.ts";
-import { GENEX_COVER_MAX_BYTES, GENEX_COVER_SHOT_FILE, GENEX_COVERS_DIR } from "../shared/genex.ts";
+import { GENEX_COVER_MAX_BYTES, GENEX_COVER_SHOT_FILE, GENEX_COVERS_DIR, GENEX_PLUGIN_ID } from "../shared/genex.ts";
+import { genexJobShown, genexMaking, genexPhase, type MakingJob } from "../shared/asset-making.ts";
 import type { StillMimeType } from "../shared/preview-contract.ts";
 import { genexRef } from "../shared/genex-ref.ts";
 import { isImageFile } from "../substrate/game-workspace.ts";
@@ -27,6 +28,7 @@ import {
   type AssetSource,
   assetExtension,
   assetKind,
+  isMediaFile,
   type ProjectAsset,
   type ProjectAssets,
 } from "../shared/game-assets.ts";
@@ -47,7 +49,8 @@ const JOB_CACHE_MAX = 512;
 const JOB_CACHE_BYTES = 8 * 1024 * 1024;
 const jobJsonCache = new Map<string, { stamp: string; value: Record<string, unknown>; bytes: number }>();
 let jobCacheBytes = 0;
-const PROMPT_MAX = 500;
+/** The longest prompt the inventory keeps (a 3D provider's own limit is 1024); a longer one is cut with an ellipsis. */
+const PROMPT_MAX = 1000;
 /** How many files an asset walk lists, and how deep below an asset root it goes. */
 const WALK_MAX_ENTRIES = 2000;
 const WALK_MAX_DEPTH = 6;
@@ -373,7 +376,9 @@ function jobManifest(value: unknown): ProjectAsset["variants"] {
 function requestPrompt(request: Record<string, unknown> | null): string | undefined {
   const requested =
     request?.request && typeof request.request === "object" ? (request.request as Record<string, unknown>) : request;
-  return typeof requested?.prompt === "string" ? requested.prompt.slice(0, PROMPT_MAX) : undefined;
+  if (typeof requested?.prompt !== "string") return undefined;
+  const prompt = requested.prompt;
+  return prompt.length > PROMPT_MAX ? `${prompt.slice(0, PROMPT_MAX - 1)}…` : prompt;
 }
 
 /** One job folder's record, when it is this project's and named by its own id. */
@@ -791,7 +796,9 @@ function genexAvailability(
 
 /** One retained Genex original: joined onto its copies in the game, or listed on its own. */
 async function joinGenexOutput(ctx: Reconcile, job: AssetJobRecord, output: string, name: string): Promise<void> {
-  if (name.startsWith(".")) return;
+  // As in the game's own asset folders, data a generation came with (a clip's trajectory, its pose
+  // check) is the game's input, not an asset: only media is listed.
+  if (name.startsWith(".") || !isMediaFile(name)) return;
   const file = path.join(output, name);
   const info = await lstat(file).catch(() => null);
   if (!info?.isFile() || info.isSymbolicLink()) return;
@@ -962,23 +969,39 @@ function markUnretainedGenex(inventory: ProjectAssets): void {
   }
 }
 
-/** Jobs with no file in the game yet, one per generation. */
-function pendingGenexJobs(assets: readonly ProjectAsset[], jobs: readonly AssetJobRecord[]): ProjectAssets["jobs"] {
+/**
+ * Genex's jobs with no file in the game yet, one per generation, in the shared words: what each
+ * makes, where it is and the tool its lane is routed to. A call that makes nothing and an approved
+ * review (its run goes on in a new job) have none.
+ */
+function pendingGenexJobs(assets: readonly ProjectAsset[], jobs: readonly AssetJobRecord[], now: number): MakingJob[] {
   const completed = new Set(assets.map((a) => a.generationId).filter(Boolean));
   const pending = new Map<string, AssetJobRecord>();
   for (const job of jobs) {
     const landed = completed.has(job.generationId) || assets.some((a) => a.jobId === job.id);
-    if (!landed) pending.set(job.generationId ?? job.id, job);
+    if (!landed && genexJobShown(job)) pending.set(job.generationId ?? job.id, job);
   }
-  return [...pending.values()].map((j) => ({
-    source: "genex",
+  return [...pending.values()].map((job) => genexWaitingJob(job, now));
+}
+
+/** One Genex job still on its way, in the shared words, as of `now`. */
+function genexWaitingJob(j: AssetJobRecord, now: number): MakingJob {
+  const made = genexMaking(j.operation);
+  const delivered = j.files.length > 0;
+  const started = j.createdAt ? Date.parse(j.createdAt) : Number.NaN;
+  const ageMs = Number.isFinite(started) ? now - started : null;
+  return {
+    source: GENEX_PLUGIN_ID,
     jobId: j.generationId ?? j.id,
-    at: j.createdAt,
-    operation: j.operation,
-    prompt: j.prompt,
+    phase: genexPhase(j.status, { delivered, ageMs }),
+    ...(made ? { kind: made.kind } : {}),
+    ...(made?.tool ? { tool: made.tool } : {}),
+    ...(j.createdAt ? { at: j.createdAt } : {}),
+    ...(j.operation ? { operation: j.operation } : {}),
+    ...(j.prompt ? { prompt: j.prompt } : {}),
     ...(j.status ? { pluginStatus: j.status } : {}),
-    ...(j.files.length ? { delivered: true } : {}),
-  }));
+    ...(delivered ? { delivered: true } : {}),
+  };
 }
 
 export async function reconcileGeneratedAssets(
@@ -988,6 +1011,7 @@ export async function reconcileGeneratedAssets(
   jobs: readonly AssetJobRecord[],
   workspaces: AssetWorkspace[] = [],
   deliveries: readonly AssetDeliveryRecord[] = [],
+  now: number = Date.now(),
 ): Promise<ProjectAssets> {
   const ctx: Reconcile = {
     inventory,
@@ -1002,6 +1026,6 @@ export async function reconcileGeneratedAssets(
   await joinNativeDerivatives(ctx);
   inventory.assets = oneAssetPerId(inventory.assets);
   markUnretainedGenex(inventory);
-  inventory.jobs = pendingGenexJobs(inventory.assets, jobs);
+  inventory.jobs = pendingGenexJobs(inventory.assets, jobs, now);
   return inventory;
 }

@@ -1,4 +1,5 @@
 import { GameStack } from "./game-project.ts";
+import type { PluginToolAsset } from "./asset-making.ts";
 import type { GameEngine } from "./game-engine.ts";
 import type { RuntimeInstallPhase } from "./model-install.ts";
 import type { ObserveContext, PluginObserver } from "./observers.ts";
@@ -203,6 +204,11 @@ export interface PluginManifestTool extends PluginTool {
   needs?: string[];
   /** API 3, agent tools with `makes` only: the harness tool that answers whether what it makes is ready to make. */
   ready?: string;
+  /**
+   * API 3, agent tools only: the kind of asset a call makes. While a call runs it is a card on the
+   * Assets canvas and in the chat, in the spot its files will land.
+   */
+  asset?: PluginToolAsset;
 }
 /** Whether agents are handed a manifest tool: every one but those only the harness calls. */
 export const isAgentTool = (tool: Pick<PluginManifestTool, "audience">): boolean =>

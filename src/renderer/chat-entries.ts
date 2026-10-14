@@ -1468,10 +1468,16 @@ function narratePluginCall(chat: ChatDraft, event: EventEnvelope): void {
   row.state = pluginCallState(closing, payload.ok);
   row.failed = row.state === ToolState.Failed;
   row.detail = [{ text }, ...(raw.result ? [{ text: String(raw.result) }] : [])];
+  if (payload.making) row.making = { ids: makingIds(payload) };
   if (row.state === ToolState.Succeeded && keptGenexCover(payload)) holdCoverCard(chat, event, payload);
 }
 
 type PluginCallPayload = CustomPayload<typeof CustomEvent.PluginTool | typeof CustomEvent.PluginToolStarted>;
+
+/** The ids a call's job may go by in the game's inventory: the call's own while it runs, then the job it answered with. */
+function makingIds(payload: { callId?: string; jobId?: string; generationId?: string }): string[] {
+  return [payload.callId, payload.jobId, payload.generationId].filter((id): id is string => Boolean(id));
+}
 
 /**
  * A finished `genex__cover` shoot that kept a new shot: Genex's own tool asked to shoot, and its
@@ -1575,6 +1581,7 @@ function narrateConnector(chat: ChatDraft, event: EventEnvelope): void {
   if (call.pluginId || call.connectorName) row.source = { id: call.pluginId ?? call.connectorId ?? "", name: where };
   row.state = pluginCallState(closing, call.ok !== false);
   row.failed = row.state === ToolState.Failed;
+  if (call.making && call.callId) row.making = { ids: [call.callId] };
   if (closing) settleConnectorRow(chat, row, call, step);
 }
 

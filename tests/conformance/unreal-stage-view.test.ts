@@ -7,7 +7,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { PanelStep } from "../../src/plugins/unreal/backend.ts";
-import { StageAct, stageView } from "../../src/renderer/panels/stage/unreal-stage-view.ts";
+import {
+  keepStageStatus,
+  keptStageStatus,
+  StageAct,
+  stageView,
+} from "../../src/renderer/panels/stage/unreal-stage-view.ts";
 import { parseStageStatus, UnrealStageStep, type UnrealStageStatus } from "../../src/renderer/unreal-game.ts";
 
 const NAME = "Lantern";
@@ -148,8 +153,22 @@ describe("the Live card's Unreal step", () => {
     );
   });
 
-  it("before the plugin answers, offers Open in Unreal as before; an answer of another shape counts as none", () => {
+  it("before the plugin first answers, offers nothing that could vanish a moment later", () => {
+    const waiting = stageView(null, NAME, { linked: true, answered: false });
+    assert.equal(waiting.button, null);
+    assert.equal(waiting.line, "", "the line waits too, so no guess is replaced");
+  });
+
+  it("when the plugin answered nothing readable, offers Open in Unreal as before; an answer of another shape counts as none", () => {
     assert.equal(stageView(null, NAME).button?.act, StageAct.Open);
+    assert.equal(stageView(null, NAME, { linked: true, answered: true }).button?.act, StageAct.Open);
     for (const odd of [null, "ready", { next: "launch" }, { next: 3 }]) assert.equal(parseStageStatus(odd), null);
+  });
+
+  it("a card that comes back starts from its own game's last answer", () => {
+    const ready = { status: status(PanelStep.Connected), at: 1 };
+    keepStageStatus("lantern", ready);
+    assert.equal(keptStageStatus("lantern"), ready);
+    assert.equal(keptStageStatus("harbor"), null, "never another game's");
   });
 });

@@ -54,7 +54,7 @@ import { StageLoading } from "./stage/LiveLoaderArt.tsx";
 import { webBuildShown } from "../web-build-shown.ts";
 
 export { gateWords } from "./run-graph/gates.tsx";
-export { assetsStatus } from "./run-graph/nodes.tsx";
+export { assetsStatus } from "./inspector/asset-jobs.ts";
 
 interface Props {
   graph: RunGraphModel;

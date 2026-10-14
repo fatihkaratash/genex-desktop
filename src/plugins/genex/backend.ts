@@ -296,6 +296,7 @@ export async function createGenexPlugin(api?: string) {
       deliver: async (output, _root, jobId) =>
         service(PluginService.AssetsDeliver, { output, jobId }) as Promise<string[]>,
       preload: path.join(path.dirname(fileURLToPath(import.meta.url)), "preload.mjs"),
+      embedSdk: path.join(path.dirname(fileURLToPath(import.meta.url)), "embed-sdk"),
       observe: async (project, root, files) =>
         service(PluginService.Observe, { project, root, files }) as ReturnType<GenexObserver>,
     });

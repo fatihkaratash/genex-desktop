@@ -123,9 +123,9 @@
   --dur-2: var(--duration-fast);
   --ease: var(--ease-smooth-out);
   --sidebar: #0b0b0d;
-  --danger-fill: #f08287;
-  --danger-foreground: #000000;
-  --danger-hover: color-mix(in oklab, #f08287 92%, #ffffff);
+  --danger-fill: #b54e55;
+  --danger-foreground: #ffffff;
+  --danger-hover: #bd565c;
   --success-foreground: #000000;
   --image-outline: #ffffff1a;
   --error-foreground: #000000;
@@ -347,6 +347,7 @@
   .home-backdrop-glint,
   .animate-ping,
   .animate-spin,
+  .making-spinner,
   .loader-grid > span,
   [style*="infinite"]
 ),
@@ -1410,6 +1411,14 @@ button.chat-header-title:hover {
   transition:
     background-color var(--duration-quick),
     color var(--duration-quick);
+}
+/* A header control that says something beside its icon: the Free button. */
+.header-control[data-label] {
+  display: flex;
+  gap: 6px;
+  width: auto;
+  padding-inline: 8px;
+  font: 12px / 1 var(--font-family-code);
 }
 .header-control:hover,
 .header-control[aria-expanded="true"] {
@@ -4733,6 +4742,173 @@ a:focus-visible {
 }
 .asset-thumbnail {
   animation: fade-in 150ms ease-out;
+}
+/* An asset card while its asset is being made (panels/MakingCard.tsx), in the spot it will land:
+   the kind's drawing, the tool at top left, the clock at top right, the kind and prompt below. */
+.making-card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--inset);
+}
+.making-card[data-making="review"] {
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+.making-art-slot {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  width: 160px;
+  height: 112px;
+  pointer-events: none;
+}
+/* The drawing's line colour, and (outline) the beam's light: the accent mixed toward the ink, so it
+   reads on the card in either theme (the empty states' paler --wire-art is too faint for a status). */
+.making-art {
+  color: color-mix(in oklab, var(--accent-primary) 62%, var(--ink));
+  outline-color: color-mix(in oklab, var(--accent-primary) 30%, var(--ink));
+  outline-style: none;
+}
+/* Waiting for its tool, or ended without its files: grey and still. */
+.making-card:is(
+  [data-making="queued"],
+  [data-making="failed"],
+  [data-making="stopped"],
+  [data-making="unsure"],
+  [data-making="not-fetched"],
+  [data-making="not-in-game"]
+) .making-art {
+  color: var(--ink-3);
+  opacity: 0.45;
+}
+.making-card[data-making="failed"] .making-art {
+  opacity: 0.3;
+}
+.making-chip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  /* Room for the clock at the other corner, up to an hour's worth. */
+  max-width: calc(100% - 66px);
+  height: 22px;
+  padding: 0 8px 0 3px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 14px;
+  pointer-events: none;
+}
+/* The tools' marks are drawn for a dark tile (the Genex page's), so they sit on one in either theme. */
+.making-chip-mark {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  padding: 2px;
+  border-radius: 4px;
+  object-fit: contain;
+  background: #1d1e21;
+}
+.making-corner {
+  position: absolute;
+  top: 12px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--ink-3);
+}
+.making-spinner {
+  animation: spin 0.9s linear infinite;
+}
+.making-label {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.making-title,
+.making-prompt {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.making-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--ink-3);
+}
+.making-title[data-tone="failed"] {
+  color: var(--red);
+}
+.making-prompt {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-3);
+}
+.making-tooltip {
+  max-width: 280px;
+  text-align: left;
+  text-wrap: pretty;
+}
+.making-picture {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* Approve keeps a card's own width: it fills a canvas card, and sits at the right of a larger one. */
+.making-actions {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+.making-actions > * {
+  max-width: 168px;
+}
+.making-tabs {
+  top: 7px;
+  right: 7px;
+  gap: 2px;
+}
+.making-tab {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--background) 66%, transparent);
+  cursor: pointer;
+}
+.making-tab[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--background);
+}
+.making-tab:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .making-spinner {
+    animation: none;
+  }
 }
 /* A row for what has no picture: a sound, an animation, a file. The trailing slot shows the sound's
    length at rest and gives way to the row's action on hover or focus. */

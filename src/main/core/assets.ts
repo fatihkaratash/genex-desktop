@@ -16,6 +16,7 @@ import {
   walkGameAssets,
 } from "../game-assets.ts";
 import type { ProjectAssets } from "../../shared/game-assets.ts";
+import { type AssetCall, assetCallJobs } from "./asset-calls.ts";
 import { type AssetFolder, assetFoldersFor, DEFAULT_ASSET_FOLDERS } from "../../shared/project-workspace.ts";
 import path from "node:path";
 import { rewindsOf, withoutRewound } from "../../shared/chat-rewind.ts";
@@ -96,11 +97,19 @@ export class AssetService {
   readonly #folders = new Map<string, { at: number; folders: Promise<AssetFolder[]> }>();
   /** The clock the folders' reuse window is read on. */
   readonly #now: () => number;
+  /** The calls making an asset right now, which the plugin tools note (`asset-calls.ts`). */
+  readonly #calls: ReadonlyMap<string, AssetCall>;
 
-  constructor(core: StudioCore, runGit: typeof git = git, now: () => number = Date.now) {
+  constructor(
+    core: StudioCore,
+    runGit: typeof git = git,
+    now: () => number = Date.now,
+    calls: ReadonlyMap<string, AssetCall> = new Map(),
+  ) {
     this.#core = core;
     this.#git = runGit;
     this.#now = now;
+    this.#calls = calls;
   }
 
   /**
@@ -232,7 +241,8 @@ export class AssetService {
 
   /**
    * What the game holds, read-only: the walk of its own asset folders joined with the project's
-   * delivery ledger and the Genex plugin's job records. The ledger is passed in because the
+   * delivery ledger and the Genex plugin's job records, and what is on its way: Genex's waiting
+   * jobs and every call making an asset right now. The ledger is passed in because the
    * renderer's bootstrap tail is not the project's whole log — `RunSummaryReader.forProject`
    * reads that, and the join ignores every event belonging to another project.
    */
@@ -249,7 +259,7 @@ export class AssetService {
       this.#core.assetCheckpoints.records(),
     ]);
     const workspaces = assetWorkspaces(listing, this.#core.layout.scratch, scratchRoot);
-    return reconcileGeneratedAssets(
+    const inventory = await reconcileGeneratedAssets(
       this.#core.games.dirFor(project),
       this.#core.layout.engineHomes,
       joinProjectAssets({
@@ -264,6 +274,8 @@ export class AssetService {
       workspaces,
       checkpoints,
     );
+    inventory.jobs = [...(inventory.jobs ?? []), ...assetCallJobs(this.#calls, project)];
+    return inventory;
   }
 
   /**

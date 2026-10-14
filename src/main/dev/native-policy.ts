@@ -188,9 +188,9 @@ const FIXTURE_SAFE = [
   "studio:snapshots",
   "studio:rollback",
   "studio:game.archive",
-  // A game's history space and clearing its side tracks: git in the game's own folder.
-  "studio:game.history",
-  "studio:game.history.clear",
+  // What freeing space deletes, and deleting it: git in the games' folders, Genex's own copies.
+  "studio:storage",
+  "studio:storage.free",
   "studio:game.engine.undo",
   // Stops a process this profile's own agent started; nothing outside the profile changes.
   "studio:jobs.stop",

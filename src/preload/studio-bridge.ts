@@ -159,8 +159,8 @@ function gameCalls(bridge: BridgeCalls) {
   const { invoke } = bridge;
   return {
     archiveGame: (project) => invoke("studio:game.archive", { project }),
-    gameHistory: (project) => invoke("studio:game.history", { project }),
-    clearGameHistory: (project) => invoke("studio:game.history.clear", { project }),
+    storageSpace: (project) => invoke("studio:storage", project === undefined ? {} : { project }),
+    freeStorage: (project) => invoke("studio:storage.free", project === undefined ? {} : { project }),
     undoEngineLink: (request) => invoke("studio:game.engine.undo", request),
     stopJob: (project, jobId) => invoke("studio:jobs.stop", { project, jobId }),
     openPrivacySettings: (pane) => invoke("studio:app-look.open-settings", { pane }),

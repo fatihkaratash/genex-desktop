@@ -52,7 +52,7 @@ import {
   XcodeStatus,
 } from "../shared/toolchain.ts";
 import { sizeWords } from "../shared/byte-size.ts";
-import type { GameHistoryCleared, GameHistorySpace } from "../shared/game-history.ts";
+import { freeableBytes, StorageKind, type StorageFreed, type StorageSpace } from "../shared/storage-space.ts";
 import { SkippedBy, type SkippedFile } from "../shared/chat-rewind.ts";
 import { LiveBehindReason } from "../shared/live-behind.ts";
 import { type SeedRetakeAnswer, SeedRetakeRefusal } from "../shared/seed-retake.ts";
@@ -73,6 +73,7 @@ import { EngineFailureKind } from "../shared/engine-requests.ts";
 import { LocalServerProblem } from "../shared/local-server.ts";
 import type { GithubLookupProblem } from "../shared/plugins.ts";
 import type { GenexPublishPhase } from "../shared/genex.ts";
+import { MakingKind } from "../shared/asset-making.ts";
 import { RoundOutcome, roundOutcome, stoppedSource } from "../shared/run-state.ts";
 import type { OutcomeView } from "../shared/run-summary.ts";
 import { CoreFact, LoopProfile } from "../shared/project-facts.ts";
@@ -2851,45 +2852,62 @@ export function toolActivityWords(icon: ToolIcon): string {
 
 // ── The chat panel ─────────────────────────────────────────────────────────────────────────
 
-/** The chat ⋯ menu's history item and its confirmation. */
-export const HISTORY_WORDS = {
-  menu: "Clear Rewind history…",
-  title: "Clear Rewind history?",
+/** Freeing space: Settings → Storage, the chat header's button and their confirmation. */
+export const STORAGE_WORDS = {
+  tab: "Storage",
+  title: "Free up space",
+  keeps: "Your games, save points, paused builds and each game’s latest build stay.",
+  measuring: "Measuring…",
+  freeing: "Freeing…",
+  nothing: "Nothing to free up",
+  none: "None",
   keep: "Keep",
-  clear: "Clear",
-  cleared: "Cleared Rewind history.",
-  nothingCleared: "There was nothing to clear.",
+  freedNothing: "There was nothing to free.",
 } as const;
 
-/** The confirmation's body: how much space history takes, what clearing frees now and later, and what stays. */
-export function historySpaceWords(space: GameHistorySpace): string {
-  const total = `Version history takes ${sizeWords(space.totalBytes)}.`;
-  const recent = sizeWords(space.recentBytes);
-  const later = space.recentBytes > 0 ? ` About ${recent} from the last hour stays until a later clear.` : "";
-  if (space.rewindTracks + space.finishedRunTracks === 0) {
-    if (space.clearableBytes > 0)
-      return `${total} Copies cleared earlier still take about ${sizeWords(space.clearableBytes)} of it. Clearing frees that space.${later}`;
-    if (space.recentBytes > 0)
-      return `${total} Nothing beside it to clear now; about ${recent} from the last hour goes at a later clear.`;
-    return `${total} Nothing beside it to clear.`;
-  }
-  return (
-    `${total} Rewind’s saved copies and finished builds’ side tracks hold about ` +
-    `${sizeWords(space.clearableBytes)} of it. Clearing them frees that space.${later} Your save points, the ` +
-    "game’s own history and paused builds stay; older messages can still rewind the chat, but not " +
-    "its files, and builds you didn’t make live can no longer be opened."
-  );
+/** Each kind of space freeing deletes: its name and what it is. */
+export const STORAGE_KIND_WORDS = {
+  [StorageKind.Copies]: { label: "Build copies", about: "Folders Genex made to run and show builds." },
+  [StorageKind.Pictures]: { label: "Build pictures", about: "Screenshots and recordings of finished builds." },
+  [StorageKind.History]: { label: "Rewind copies", about: "Versions of your games saved for Rewind and builds." },
+} as const satisfies Record<StorageKind, { label: string; about: string }>;
+
+/** A size in running text, kept on one line ("1.2 GB" never breaks before its unit). */
+function unbrokenSize(bytes: number): string {
+  return sizeWords(bytes).replace(" ", "\u00a0");
 }
 
-/** The menu item's size beside its label: what clearing frees, once it is known. */
-export function historyMenuSize(space: GameHistorySpace | null): string | null {
-  return space ? sizeWords(space.clearableBytes) : null;
+/** The button that frees `space`: how much it frees, or that there is nothing to. */
+export function freeUpWords(space: StorageSpace): string {
+  const bytes = freeableBytes(space);
+  return bytes > 0 ? `Free up ${sizeWords(bytes)}` : STORAGE_WORDS.nothing;
 }
 
-/** The notice after clearing a game's Rewind history. */
-export function historyClearedWords(cleared: GameHistoryCleared): string {
-  if (cleared.freedBytes > 0) return `Cleared ${sizeWords(cleared.freedBytes)}.`;
-  return cleared.removedTracks > 0 ? HISTORY_WORDS.cleared : HISTORY_WORDS.nothingCleared;
+/** The chat header's button: how much freeing this game frees. */
+export function freeGameWords(space: StorageSpace): string {
+  return `Free ${sizeWords(freeableBytes(space))}`;
+}
+
+/** The confirmation's title. */
+export function freeConfirmTitle(space: StorageSpace): string {
+  return `Free up ${unbrokenSize(freeableBytes(space))}?`;
+}
+
+/** What freeing deletes and what stays: the tooltip and the confirmation's body, for one game or all. */
+export function freeSpaceWords(space: StorageSpace, game?: string): string {
+  const of = game ? ` of ${game}` : "";
+  const holds = `Older builds${of} and Rewind copies take ${unbrokenSize(freeableBytes(space))}.`;
+  const stays = game ? "The game, its save points, paused builds and latest build stay." : STORAGE_WORDS.keeps;
+  return `${holds} ${stays} Older messages can still rewind the chat, but not its files.`;
+}
+
+/** The notice after freeing space: how much, and which working games it left alone. */
+export function freedWords(freed: StorageFreed, titleOf: (game: string) => string = (game) => game): string {
+  const done = freed.freedBytes > 0 ? `Freed ${sizeWords(freed.freedBytes)}.` : STORAGE_WORDS.freedNothing;
+  const [only, ...more] = freed.skipped;
+  if (only === undefined) return done;
+  if (more.length === 0) return `${done} Left ${titleOf(only)} alone while it works.`;
+  return `${done} Left ${plural(freed.skipped.length, "game")} alone while they work.`;
 }
 
 /** How many included files an export notice names before it says "and N more". */
@@ -2974,6 +2992,50 @@ export const ASSET_WORDS = {
   animations: "Animations",
   speed: "Speed",
   playFailed: "This sound could not be played",
+} as const;
+
+/** What an asset card says while its asset is being made (`asset-making.ts`). */
+export const MAKING_WORDS = {
+  /** What a job makes (`MakingKind`), and an asset of a kind the plugin did not say. */
+  kind: {
+    [MakingKind.Character]: "Character",
+    [MakingKind.Creature]: "Creature",
+    [MakingKind.Model]: "3D model",
+    [MakingKind.RiggedModel]: "Rigged model",
+    [MakingKind.Animation]: "Animation",
+    [MakingKind.Image]: "Image",
+    [MakingKind.Texture]: "Texture",
+    [MakingKind.Video]: "Video",
+    [MakingKind.SoundEffect]: "Sound effect",
+    [MakingKind.Music]: "Music",
+    [MakingKind.Voice]: "Voice",
+    asset: "Asset",
+  } satisfies Record<MakingKind | "asset", string>,
+  queued: "Queued",
+  failed: "Didn’t finish",
+  stopped: "Stopped",
+  unsure: "Not confirmed",
+  notFetched: "Not downloaded",
+  notInGame: "Not in your game",
+  /** A clock that ran past the hours it spells out. */
+  overHours: (hours: number) => `${hours}+ h`,
+  approve: "Approve",
+  approving: "Approving…",
+  /** The Approve button's full name: which candidate, or the remesh. */
+  approveLabel: (candidate: number | null) =>
+    candidate === null ? "Approve the remesh" : `Approve candidate ${candidate}`,
+  /** A candidate's tab, and its picture. */
+  candidate: (n: number) => `Candidate ${n}`,
+  candidates: "Candidates",
+  /** The chat's cards of the assets a piece of work is still making. */
+  inChat: "Assets being made",
+  spoken: {
+    making: (kind: string, tool: string) => `${kind} being made with ${tool}`,
+    queued: (kind: string, tool: string) => `${kind} queued for ${tool}`,
+    review: (kind: string, tool: string) => `${kind} from ${tool} waits for your choice`,
+    ended: (kind: string, tool: string, title: string) => `${kind} from ${tool}: ${title}`,
+    withPrompt: (said: string, prompt: string) => `${said}. ${prompt}`,
+  },
 } as const;
 
 /** "1 animation", "3 animations". */
@@ -3382,17 +3444,17 @@ export const GENEX_WORDS = {
     toolsTitle: "Tools it routes",
     toolsIntro:
       "Ask in any game chat. Genex picks the tool, runs it on your balance and saves the file in your game. No accounts or keys of your own.",
-    /** Each routed tool's name and what it does, by `RoutedTool`. */
+    /** Each routed tool's name and what it does, by `GenexTool`. */
     tools: {
-      tripo: { name: "Tripo", line: "3D · rig · animate" },
-      meshy: { name: "Meshy", line: "3D · characters" },
-      uthana: { name: "Uthana", line: "Rigging · animation" },
-      "gpt-image": { name: "GPT Image 2.5", line: "Images · sprites" },
-      "nano-banana": { name: "Nano Banana 2", line: "Textures" },
-      minimax: { name: "MiniMax H3 Max Turbo", line: "Video" },
-      blender: { name: "Blender", line: "Scenes · blockouts" },
-      elevenlabs: { name: "ElevenLabs", line: "SFX · music · voice" },
-      publishing: { name: "Genex", line: "Publishing" },
+      tripo: { name: "Tripo", short: "Tripo", line: "3D · rig · animate" },
+      meshy: { name: "Meshy", short: "Meshy", line: "3D · characters" },
+      uthana: { name: "Uthana", short: "Uthana", line: "Rigging · animation" },
+      "gpt-image": { name: "GPT Image 2.5", short: "GPT Image", line: "Images · sprites" },
+      "nano-banana": { name: "Nano Banana 2", short: "Nano Banana", line: "Textures" },
+      minimax: { name: "MiniMax H3 Max Turbo", short: "MiniMax", line: "Video" },
+      blender: { name: "Blender", short: "Blender", line: "Scenes · blockouts" },
+      elevenlabs: { name: "ElevenLabs", short: "ElevenLabs", line: "SFX · music · voice" },
+      publishing: { name: "Genex", short: "Genex", line: "Publishing" },
     },
   },
   /** The Publish dialog on the game's stage, drawn by Studio. */
@@ -3507,20 +3569,6 @@ export const GENEX_WORDS = {
     stopped: "Stopped",
     unsure: "Not confirmed",
   } satisfies Record<JobState, string>,
-  kind: {
-    model: "3D model",
-    character: "Character",
-    animation: "Animation",
-    rig: "Rigged model",
-    creature: "Creature",
-    image: "Image",
-    texture: "Texture",
-    video: "Video",
-    sfx: "Sound effect",
-    music: "Music",
-    voice: "Voice",
-    asset: "Asset",
-  },
   credits: (count: number) => plural(count, "credit"),
   refunded: "Refunded",
 } as const;

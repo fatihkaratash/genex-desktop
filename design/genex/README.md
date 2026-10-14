@@ -64,7 +64,8 @@ keyboard selection, focus, pointer cursors and reduced motion, and writes screen
 ## Contrast and customization
 
 The selected theme drives semantic roles; primary/destructive fills choose black or white
-labels. Hover shifts the fill away from its label luminance, preserving readable contrast. Text roles are measured against
+labels. A dark theme's destructive fill is its red (OKLCH chroma at most 0.15) deepened under a
+white label as the accent fill is, so Delete pairs with the accent button; red text keeps the red. Hover shifts the fill away from its label luminance, preserving readable contrast. Text roles are measured against
 canvas, card, sidebar, menu, field and hover backgrounds. Preset acceptance and real computed
 contrast checks live in `appearance.test.ts` and `run-appearance-ui.mjs`. User overrides remain
 editable and portable; derived text adjustments preserve readability. Contradictory surface
@@ -181,7 +182,21 @@ length, which gives way to Open in Assets on hover; the row is the player, with 
 colour is the theme's, so models, pictures and sounds sit alike in light and dark; the Assets tab's
 sound tile draws its waveform live the same way. Only files present in the game folder appear;
 Loop-run files wait for the landed build result. Large deliveries reveal six previews at a time.
-Asset grids omit per-file metadata and job headers. The viewer is the file on the page's own colour
+Asset grids omit per-file metadata and job headers. A job still on its way is a card in the spot
+its asset will land: its kind drawn about half the card's size (a body scan, the Utah teapot, flat
+image/video/sound marks with depth, cobblestones on a plane) with a beam sweeping up and down it,
+built below and faint above; the tool's mark (Genex's routed tool, else the plugin's own icon) and
+short name at top left; a spinner and the run's clock at top right; the kind (shimmering) over the
+prompt in one line, a cut prompt shown whole in a tooltip to the card's right, its arrow on the
+line. A job that waits on the person wears the 1.5px accent ring, its candidate's picture with
+1 2 3 tabs and Approve; one that queued, failed or left the game is grey and still and says so. The
+drawing rests with the window. Any plugin's or MCP server's call that says what it makes gets the
+same card, and the chat shows each card its work is making, at the canvas's size, under the work's
+line until the job lands. A request Genex refused before it started gets no card (nor a row in a
+build's Assets panel, where a generation that failed says why), and a job that
+still says it is being made two hours on reads Not confirmed (in that panel too, grey and still); a generation's data (a clip's
+trajectory, its pose check) and its provider's source copies are never cards of their own.
+The viewer is the file on the page's own colour
 (88%, blurred), with only Reveal in Finder and Close in the top corner and no title; a click on a
 picture shows it at full size around the point clicked; a model opens playing its first clip, with
 play, the clips and speed in one floating bar and "Drag to turn · Scroll to zoom · Double-click to
@@ -511,7 +526,9 @@ upright plate; theme colours, 30 fps only while visible, a still under Reduce Mo
 title-only state (Game stopped) keeps no subtitle room: its title sits 6px under the art and its
 button 15px under the title. Idea → building turns the computer to face you, boots its screen and
 hands off to the rising crane; any other change of
-scene cross-fades the art while the words rise out and in. Reuse it for new empty states.
+scene cross-fades the art while the words rise out and in. Reuse it for new empty states; any
+new drawing (a loading, empty or being-made state, an icon with depth) follows the
+[wire-art skill](../../.agents/skills/wire-art/SKILL.md).
 With no runs, Activity shows only that empty state, centred: **A self-improving harness**, “Runs and
 improvements will show up here.” and **Start building** (the last game chat, composer focused), or
 **New game** when the library is empty.
@@ -608,7 +625,12 @@ trash button, **Stop allowing** (focus moves to the rule taking its place); with
 line says Always allow in a chat adds one. Each chat's mode stays in its composer.
 Opening Settings preserves the workspace and draft, traps focus and occludes the native game.
 Games comes first: the games folder as a mono path with **Change…** (a native folder picker).
-Every tab (Games, Appearance, Model Providers, Local Models, Toolchains, Harness and Permissions) uses the same
+Storage follows Games: a Free up space card (what stays, one primary **Free up N GB** whose tooltip
+says what goes and what stays, Nothing to free up when there is none) above one list row per kind
+(Build copies, Build pictures, Rewind copies) with its size in mono or None. Freeing asks first and
+then says what it freed under the cards. The chat header offers the same per game as a labelled
+**Free N GB** header control once a game's space reaches 1 GB.
+Every tab (Games, Storage, Appearance, Model Providers, Local Models, Toolchains, Harness and Permissions) uses the same
 viewport-capped 860px width and 720px content height; changing tabs
 must not resize or reposition the dialog.
 Escape/Close restores its entry point; arrow keys and Home/End navigate sections.

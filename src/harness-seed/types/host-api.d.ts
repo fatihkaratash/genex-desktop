@@ -567,22 +567,44 @@ export interface ProjectAsset {
 }
 // ↑ src/shared/game-assets.ts
 
+export type MakingKind = 'character' | 'creature' | 'model' | 'rigged-model' | 'animation' | 'image' | 'texture' | 'video' | 'sound-effect' | 'music' | 'voice';
+// ↑ src/shared/asset-making.ts
+
+export type MakingPhase = 'queued' | 'making' | 'review' | 'not-fetched' | 'not-in-game' | 'failed' | 'stopped' | 'unsure';
+// ↑ src/shared/asset-making.ts
+
+/**
+ * One job still on its way, as the Assets inventory lists it and every surface reads it. `source` is
+ * the plugin id (or `genex`), or a connector's id for a server no plugin ships; `sourceName` how the
+ * person knows it. `tool` is the outside service doing the work, when known (a `GenexTool`, or a
+ * plugin's own word). `kind` absent: an asset of a kind the plugin did not say. A call making an
+ * asset is its own job while it runs: its `jobId` is the call's id.
+ */
+export interface MakingJob {
+  source: string;
+  sourceName?: string;
+  jobId: string;
+  at?: string;
+  kind?: MakingKind;
+  phase: MakingPhase;
+  tool?: string;
+  prompt?: string;
+  /** The plugin's own word for the job and its own name for what was asked: kept for its own page. */
+  pluginStatus?: string;
+  operation?: string;
+  /** It delivered files earlier that the game no longer holds. */
+  delivered?: boolean;
+}
+// ↑ src/shared/asset-making.ts
+
 export interface ProjectAssets {
   project: string;
   assets: ProjectAsset[];
   /**
-   * Jobs with no file in the game yet: the plugin's own word for each (`pluginStatus`), and
-   * `delivered` when the job did deliver files earlier that the game no longer holds.
+   * Jobs with no file in the game yet, any plugin's, in the shared words (`shared/asset-making.ts`):
+   * what each makes, where it is and who makes it.
    */
-  jobs?: Array<{
-    source: string;
-    jobId: string;
-    at?: string;
-    operation?: string;
-    prompt?: string;
-    pluginStatus?: string;
-    delivered?: boolean;
-  }>;
+  jobs?: MakingJob[];
   /** The walk hit its entry or depth cap: some files under `assets/` are not listed. */
   truncated: boolean;
   skipped: Array<{ file: string; why: string }>;
@@ -1316,7 +1338,7 @@ export type GameCover =
 export type BuildTarget = 'web' | 'macos' | 'windows' | 'linux' | 'ios' | 'android';
 // ↑ src/shared/game-project.ts
 
-export type DestinationBadge = 'building' | 'built' | 'failed' | 'not-built' | 'not-run-here' | 'ci-passed' | 'verified-in-vm';
+export type DestinationBadge = 'failed' | 'building' | 'built' | 'not-built' | 'not-run-here' | 'ci-passed' | 'verified-in-vm';
 // ↑ src/shared/game-targets.ts
 
 export type NativeRefusal = 'unsupported' | 'extra-mach-o' | 'symlink' | 'hard-link' | 'links-opengl' | 'missing-angle-import' | 'foreign-rpath' | 'not-an-executable' | 'angle-digest' | 'extra-pe' | 'imports-opengl32' | 'extra-shared-object' | 'imports-libgl' | 'runpath-not-origin' | 'glibc-too-new' | 'bad-handshake' | 'ready-timeout' | 'reply-too-large' | 'reply-invalid' | 'capture-too-large' | 'capture-digest' | 'memory-cap' | 'unresponsive' | 'not-runnable-here' | 'no-game-box' | 'not-a-destination' | 'kind-unsupported' | 'stack-gated' | 'toolchain-offline' | 'lane-missing' | 'build-failed' | 'harness-predates-native' | 'embed-unsupported' | 'slot-unknown' | 'slot-mismatch' | 'too-many-slots' | 'frame-rate' | 'electron-untested' | 'frames-invalid' | 'frames-stalled' | 'game-predates-embedding' | 'wrong-machine' | 'foreign-import' | 'gpu-unsupported' | 'device-lost' | 'gpu-hang' | 'native-feature-missing' | 'native-features-web' | 'gpu-pass-invalid' | 'touch-not-taken' | 'conformance-required';
@@ -1790,7 +1812,7 @@ export interface PreviewPortStatus {
 export type ReadyVia = 'shim' | 'contract' | 'none';
 // ↑ src/shared/preview-contract.ts
 
-export type ReadyPhase = 'ready' | 'failed' | 'boot' | 'unknown';
+export type ReadyPhase = 'failed' | 'ready' | 'boot' | 'unknown';
 // ↑ src/shared/preview-contract.ts
 
 /** What the studio waited for, and what it got. `preview.ready` answers with exactly this. */
@@ -1937,7 +1959,7 @@ export interface NativeAdmissionFacts {
 }
 // ↑ src/shared/native-contract.ts
 
-export type NativeRunState = 'ready' | 'building' | 'killed' | 'crashed' | 'admitting' | 'starting' | 'paused' | 'stopping' | 'stopped' | 'refused';
+export type NativeRunState = 'stopped' | 'ready' | 'building' | 'killed' | 'crashed' | 'admitting' | 'starting' | 'paused' | 'stopping' | 'refused';
 // ↑ src/shared/native-contract.ts
 
 export type NativeRunMode = 'window' | 'headless' | 'embedded';

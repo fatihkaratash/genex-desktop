@@ -10,6 +10,7 @@
  * `SecretStore` under `engine-homes/mcp/secrets` and are materialized only into a child's
  * environment (or a request header) at launch.
  */
+import type { CallMaking } from "./asset-making.ts";
 import type { CallCutOff } from "./plugins.ts";
 import type { SecretStorageIssue } from "./secret-storage.ts";
 
@@ -223,6 +224,8 @@ export interface ConnectorCall {
    * {@link CONNECTOR_ARGS_RECORD_MAX} characters of JSON, credential-named fields redacted.
    */
   args?: Record<string, unknown>;
+  /** What the call makes, when the server's listing of the tool says (`_meta["genex/asset"]`). */
+  making?: CallMaking;
 }
 
 /** Payload of the `connector_tool_started` thread custom event: the call, on its way out. */

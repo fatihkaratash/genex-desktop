@@ -22,6 +22,7 @@
  * games. A connection with no lease and no call for `idleCloseMs` is closed, and the next use
  * opens it again.
  */
+import type { PluginToolAsset } from "../../shared/asset-making.ts";
 import {
   MCP_ID,
   MCP_QUALIFIED_TOOL,
@@ -339,6 +340,8 @@ export class McpRegistry {
   #connections = new Map<string, Map<string | null, McpConnection>>();
   #errors = new Map<string, string>();
   #exposed = new Map<string, Map<string | null, Map<string, string>>>();
+  /** What each connector's tools say they make, by raw tool name, from their latest listing. */
+  #assets = new Map<string, Map<string, PluginToolAsset>>();
   #leases = new Map<string, number>();
   /** Leases and calls in flight per connection key: a busy connection is never idle-closed. */
   #busy = new Map<string, Map<string | null, number>>();
@@ -595,6 +598,7 @@ export class McpRegistry {
     const connections = this.#connections.get(id);
     this.#connections.delete(id);
     this.#exposed.delete(id);
+    this.#assets.delete(id);
     for (const cancel of this.#idleTimers.get(id)?.values() ?? []) cancel();
     this.#idleTimers.delete(id);
     await Promise.all([...(connections?.values() ?? [])].map((c) => c.close().catch(() => {})));
@@ -1042,6 +1046,7 @@ export class McpRegistry {
    */
   #publish(entry: Entry, tools: McpRawTool[], project: string | null): McpLiveTool[] {
     const id = entry.connector.id;
+    this.#noteAssets(id, tools);
     const exposed = new Map<string, string>();
     const live: McpLiveTool[] = [];
     const cap = Math.min(entry.maxTools ?? MAX_TOOLS_PER_CONNECTOR, MAX_TOOLS_PER_CONNECTOR);
@@ -1083,6 +1088,21 @@ export class McpRegistry {
       if (raw) return raw;
     }
     return undefined;
+  }
+
+  /** What the tools of a connector's latest listing say they make. */
+  #noteAssets(id: string, tools: readonly McpRawTool[]): void {
+    const declared = new Map<string, PluginToolAsset>();
+    for (const tool of tools) if (tool.asset) declared.set(tool.name, tool.asset);
+    if (declared.size) this.#assets.set(id, declared);
+    else this.#assets.delete(id);
+  }
+
+  /** What a call of a proxied tool makes, when its server's listing says; undefined otherwise. */
+  assetOf(name: string): PluginToolAsset | undefined {
+    const raw = this.rawName(name);
+    if (raw === undefined) return undefined;
+    return this.#assets.get(name.slice(0, name.indexOf("__")))?.get(raw);
   }
 
   /** The display name of the connector a proxied tool belongs to, for words a person reads. */
@@ -1302,6 +1322,7 @@ export class McpRegistry {
 
   /** Cache the exposed names of a connected connector's allowed tools for this project. */
   #cacheNames(id: string, entry: Entry, project: string | null, tools: McpRawTool[]): void {
+    this.#noteAssets(id, tools);
     const scoped = this.#exposed.get(id) ?? new Map();
     const names = new Map<string, string>();
     for (const tool of tools

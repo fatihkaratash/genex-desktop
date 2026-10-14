@@ -19,11 +19,12 @@ import { formatTokens } from "../chat-labels.ts";
 import { TOGGLE_TERMINAL_EVENT } from "./terminal-events.ts";
 import type { ContextUsage } from "../../shared/context.ts";
 import { hostPlatform } from "../platform.ts";
-import { EXPORT_WORDS, fileManagerWords, HISTORY_WORDS, historyMenuSize, historySpaceWords } from "../words.ts";
+import { EXPORT_WORDS, fileManagerWords, freeGameWords, freeSpaceWords } from "../words.ts";
 import type { BuildTarget } from "../../shared/game-project.ts";
 import { exportDestinationLabel, useExportCaveat, useExportDestinations } from "../chat/use-chat-export.ts";
-import { ConfirmSheet } from "../ui/Confirm.tsx";
-import type { GameHistoryMenu } from "../chat/use-game-history.ts";
+import type { GameStorage } from "../chat/use-game-storage.ts";
+import { freeableBytes } from "../../shared/storage-space.ts";
+import { FreeSpaceSheet } from "./FreeSpaceSheet.tsx";
 import { HarnessGuideButton } from "../chat/HarnessGuide.tsx";
 
 interface Props {
@@ -40,11 +41,14 @@ interface Props {
   /** Exports the game: to the browser folder when no destination is named, as a three.js game always does. */
   onExport?: (destination?: BuildTarget) => void;
   exporting?: boolean;
-  /** A game chat's history space and its clearing (the ⋯ menu's history item). */
-  history?: GameHistoryMenu;
+  /** A game chat's space and freeing it (the Free button, once it is worth it). */
+  storage?: GameStorage;
   sidebarHidden: boolean;
   onToggleSidebar: () => void;
 }
+
+/** How much a game's space must reach before the header offers to free it. */
+const OFFER_FREE_BYTES = 1024 ** 3;
 
 /** A 32px icon-only header control with its tooltip. */
 function HeaderButton({
@@ -239,39 +243,36 @@ function ExportDestinations({
   );
 }
 
-/** The confirmation before clearing a game's Rewind history: Keep first, Clear as the danger. */
-function ClearHistorySheet({ history, onDone }: { history: GameHistoryMenu; onDone: () => void }): JSX.Element | null {
-  if (!history.space) return null;
+/**
+ * Free: shown once a game's older builds and Rewind copies reach `OFFER_FREE_BYTES`; its tooltip
+ * says what goes and what stays, and a confirmation asks before anything is deleted.
+ */
+function FreeSpaceButton({ storage, game }: { storage: GameStorage; game: string }): JSX.Element | null {
+  const [confirming, setConfirming] = useState(false);
+  const { space } = storage;
+  if (!space || freeableBytes(space) < OFFER_FREE_BYTES) return null;
   return (
-    <ConfirmSheet
-      title={HISTORY_WORDS.title}
-      body={historySpaceWords(history.space)}
-      testId="clear-history"
-      onDismiss={onDone}
-      choices={[
-        { label: HISTORY_WORDS.keep, onChoose: onDone },
-        {
-          label: HISTORY_WORDS.clear,
-          danger: true,
-          onChoose: () => {
-            history.clear();
-            onDone();
-          },
-        },
-      ]}
-    />
-  );
-}
-
-/** The ⋯ menu's history item: its label, and what clearing frees once that is known. */
-function ClearHistoryItem({ history, onChoose }: { history: GameHistoryMenu; onChoose: () => void }): JSX.Element {
-  const size = historyMenuSize(history.space);
-  return (
-    <DropdownMenuItem data-chat-action="clear-history" disabled={history.clearing || !size} onSelect={onChoose}>
-      <Icon name="rewind" />
-      <span className="flex-1">{HISTORY_WORDS.menu}</span>
-      {size && <span className="text-ink-3">{size}</span>}
-    </DropdownMenuItem>
+    <>
+      {confirming && (
+        <FreeSpaceSheet space={space} game={game} onFree={storage.free} onDone={() => setConfirming(false)} />
+      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            data-free-space
+            data-label
+            disabled={storage.freeing}
+            onClick={() => setConfirming(true)}
+            className="no-drag header-control"
+          >
+            <Icon name="drive" />
+            {freeGameWords(space)}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-64">{freeSpaceWords(space, game)}</TooltipContent>
+      </Tooltip>
+    </>
   );
 }
 
@@ -287,9 +288,8 @@ interface ExportChoice {
 }
 
 /**
- * The ⋯ menu: export the game, clear its Rewind history, rename the chat. Closing it returns focus
- * to the rename field. A compiled game's Export item opens its destinations in place instead of
- * exporting at once.
+ * The ⋯ menu: export the game, rename the chat. Closing it returns focus to the rename field. A
+ * compiled game's Export item opens its destinations in place instead of exporting at once.
  */
 function ChatActions({
   input,
@@ -297,40 +297,31 @@ function ChatActions({
   exporting,
   onExport,
   onRename,
-  history,
 }: {
   input: RefObject<HTMLInputElement | null>;
   project: string | null;
   exporting?: boolean;
   onExport?: (destination?: BuildTarget) => void;
   onRename: () => void;
-  history?: GameHistoryMenu;
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [confirming, setConfirming] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const destinations = useExportDestinations(project);
   const caveat = useExportCaveat(project);
   const openMenu = (open: boolean): void => {
-    if (open) history?.refresh();
     setMenuOpen(open);
     if (!open) setChoosing(false);
   };
   return (
-    <>
-      {confirming && history && <ClearHistorySheet history={history} onDone={() => setConfirming(false)} />}
-      <ChatActionsMenu
-        input={input}
-        open={menuOpen}
-        onOpenChange={openMenu}
-        exporting={exporting}
-        onExport={onExport}
-        onRename={onRename}
-        history={history}
-        onClearHistory={() => setConfirming(true)}
-        choice={{ destinations, caveat, choosing, onChoose: () => setChoosing(true) }}
-      />
-    </>
+    <ChatActionsMenu
+      input={input}
+      open={menuOpen}
+      onOpenChange={openMenu}
+      exporting={exporting}
+      onExport={onExport}
+      onRename={onRename}
+      choice={{ destinations, caveat, choosing, onChoose: () => setChoosing(true) }}
+    />
   );
 }
 
@@ -342,8 +333,6 @@ function ChatActionsMenu({
   exporting,
   onExport,
   onRename,
-  history,
-  onClearHistory,
   choice,
 }: {
   input: RefObject<HTMLInputElement | null>;
@@ -352,8 +341,6 @@ function ChatActionsMenu({
   exporting?: boolean;
   onExport?: (destination?: BuildTarget) => void;
   onRename: () => void;
-  history?: GameHistoryMenu;
-  onClearHistory: () => void;
   choice: ExportChoice;
 }): JSX.Element {
   const { destinations } = choice;
@@ -399,7 +386,6 @@ function ChatActionsMenu({
         {choice.choosing && destinations && (
           <ExportDestinations destinations={destinations} caveat={choice.caveat} onExport={onExport} />
         )}
-        {history && <ClearHistoryItem history={history} onChoose={onClearHistory} />}
         <DropdownMenuItem data-chat-action="rename" onSelect={onRename}>
           <Icon name="rename" />
           Rename
@@ -422,7 +408,7 @@ export function ChatHeader({
   onReveal,
   onExport,
   exporting,
-  history,
+  storage,
   sidebarHidden,
   onToggleSidebar,
 }: Props): JSX.Element {
@@ -471,6 +457,7 @@ export function ChatHeader({
       {isStudio && <HarnessGuideButton />}
       <span className="min-w-2 flex-1 self-stretch" />
 
+      {project && storage && <FreeSpaceButton storage={storage} game={chatTitle} />}
       {contextUsage && contextWindow ? (
         <ContextMeter usage={{ ...contextUsage, contextWindow }} compacting={compacting} onCompact={onCompact} />
       ) : null}
@@ -507,7 +494,6 @@ export function ChatHeader({
           exporting={exporting}
           onExport={onExport}
           onRename={() => setEditing(true)}
-          history={project ? history : undefined}
         />
       )}
     </div>

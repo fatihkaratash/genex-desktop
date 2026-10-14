@@ -37,6 +37,18 @@ export const GENEX_GAME_PACKAGES = {
 } as const;
 /** A Genex SDK package a game may add. */
 export type GenexGamePackage = keyof typeof GENEX_GAME_PACKAGES;
+
+/**
+ * Where Studio's copy of `@genex-ai/embed-sdk` sits under a vendor folder (the app's, served as
+ * `/vendor/`, and a published copy's `vendor/`), and the module beside it that connects a page to
+ * Genex: a template game imports the SDK through its import map from there, and a published game
+ * that brings no SDK of its own is connected by that module.
+ */
+export const GENEX_EMBED_VENDOR = {
+  Sdk: "genex/embed-sdk",
+  Entry: "genex/embed-sdk/index.js",
+  Connect: "genex/connect.js",
+} as const;
 /** Whether a name is one of those packages: an own key, never an inherited one. */
 export function isGenexGamePackage(name: unknown): name is GenexGamePackage {
   return typeof name === "string" && Object.hasOwn(GENEX_GAME_PACKAGES, name);
@@ -300,6 +312,44 @@ export type GenexCoverOutcome = (typeof GenexCoverOutcome)[keyof typeof GenexCov
 
 /** The cover tool plugin.json declares (`genex__cover`): its kept shot is the card the chat shows. */
 export const GENEX_COVER_TOOL = "cover";
+
+/** The tool plugin.json declares for every generation (`genex__asset`): its `operation` says what it makes. */
+export const GENEX_ASSET_TOOL = "asset";
+
+/** How many characters of a generation's id Genex puts in the names of its output files. */
+const GENERATION_IN_NAME = 8;
+
+/**
+ * Whether a Genex output file is the provider's unprocessed source of another. Genex names each
+ * output after its generation and its role code (`…-cmv6qk2b-walk-animation-a1-source-glb.glb`),
+ * and a role with a `source` part is the copy from before Genex rigged or retargeted it.
+ */
+export function isGenexSourceOutput(file: string, generationId: string | null | undefined): boolean {
+  if (!generationId) return false;
+  const name = file.split("/").pop() ?? "";
+  const marker = `-${generationId.slice(0, GENERATION_IN_NAME)}-`;
+  const at = name.indexOf(marker);
+  if (at < 0) return false;
+  const role = name.slice(at + marker.length).replace(/\.[^.]+$/, "");
+  return role.split("-").includes("source");
+}
+
+/** A delivered file as far as folding sources needs it. */
+type Output = { file: string; kind: string; source?: string; generationId?: string };
+
+/**
+ * The files to show, less each Genex source copy whose generation also delivered a finished model:
+ * the copy is still in the game, it is just never a second card of the same thing. A source that
+ * came alone is shown.
+ */
+export function withoutGenexSources<T extends Output>(files: readonly T[]): T[] {
+  const isSource = (file: T) =>
+    file.source === GENEX_PLUGIN_ID && file.kind === "model" && isGenexSourceOutput(file.file, file.generationId);
+  const finished = new Set(
+    files.filter((file) => file.kind === "model" && file.generationId && !isSource(file)).map((f) => f.generationId),
+  );
+  return files.filter((file) => !(isSource(file) && finished.has(file.generationId)));
+}
 
 /** What genex__cover does: photograph the genex-cover demo and keep it, or report the cover's state. */
 export const GenexCoverOperation = { Shoot: "shoot", Status: "status" } as const;

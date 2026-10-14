@@ -23,6 +23,7 @@
  *    and every one of them is cancellable by the delegation's abort signal, so stopping a build
  *    really does stop the tool.
  */
+import { MCP_ASSET_META, type PluginToolAsset, readToolAsset } from "../../shared/asset-making.ts";
 import type { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -75,6 +76,8 @@ export interface McpRawTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** What a call of it makes, when its listing's `_meta` says ({@link MCP_ASSET_META}); a display hint, never authority. */
+  asset?: PluginToolAsset;
 }
 
 /**
@@ -168,7 +171,10 @@ interface SdkClient {
   listTools(
     params?: { cursor?: string },
     options?: { timeout?: number; signal?: AbortSignal },
-  ): Promise<{ tools: Array<{ name: string; description?: string; inputSchema?: unknown }>; nextCursor?: string }>;
+  ): Promise<{
+    tools: Array<{ name: string; description?: string; inputSchema?: unknown; _meta?: unknown }>;
+    nextCursor?: string;
+  }>;
   callTool(
     params: { name: string; arguments?: Record<string, unknown> },
     resultSchema?: unknown,
@@ -194,18 +200,26 @@ function text(value: unknown): string {
 
 /** One listed tool with a name, its schema defaulting to an empty object schema; undefined otherwise. */
 function rawTool(
-  tool: { name?: unknown; description?: unknown; inputSchema?: unknown } | null,
+  tool: { name?: unknown; description?: unknown; inputSchema?: unknown; _meta?: unknown } | null,
 ): McpRawTool | undefined {
   if (!tool || typeof tool.name !== "string" || !tool.name) return undefined;
   const schema =
     tool.inputSchema && typeof tool.inputSchema === "object"
       ? (tool.inputSchema as Record<string, unknown>)
       : { type: "object", properties: {} };
+  const asset = listedAsset(tool._meta);
   return {
     name: tool.name,
     description: typeof tool.description === "string" ? tool.description : "",
     inputSchema: schema,
+    ...(asset ? { asset } : {}),
   };
+}
+
+/** What a listed tool says it makes, read off its own `_meta` only; anything malformed says nothing. */
+function listedAsset(meta: unknown): PluginToolAsset | null {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta) || !Object.hasOwn(meta, MCP_ASSET_META)) return null;
+  return readToolAsset((meta as Record<string, unknown>)[MCP_ASSET_META]);
 }
 
 /** One content part of an MCP tool result, as the wire may carry it. */

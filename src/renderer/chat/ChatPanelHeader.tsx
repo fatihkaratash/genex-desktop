@@ -2,12 +2,12 @@ import type { JSX } from "react";
 import { ChatHeader } from "../panels/ChatHeader.tsx";
 import { ExportSheet } from "../panels/ExportSheet.tsx";
 import type { ChatExport } from "./use-chat-export.ts";
-import { useGameHistory } from "./use-game-history.ts";
+import { useGameStorage } from "./use-game-storage.ts";
 import type { ChatParts } from "./use-chat-panel.ts";
 
 /**
  * The chat's header, keyed by thread: its title (a game chat renames its game), export (a phone
- * opens the export sheet), reveal, its game's history space and compaction.
+ * opens the export sheet), reveal, freeing its game's space and compaction.
  */
 export function ChatPanelHeader({
   props,
@@ -39,7 +39,7 @@ function ChatHeaderBar({
   chatExport,
 }: Pick<ChatParts, "props" | "chat" | "composer"> & { chatExport: ChatExport }): JSX.Element {
   const { project, threadId } = chat;
-  const history = useGameHistory(project, props.onNotice);
+  const storage = useGameStorage(project, chat.working, props.onNotice);
   return (
     <ChatHeader
       key={threadId}
@@ -47,7 +47,7 @@ function ChatHeaderBar({
       onToggleSidebar={props.onToggleSidebar}
       exporting={chatExport.exporting}
       onExport={project ? chatExport.exportGame(project) : undefined}
-      history={project ? history : undefined}
+      storage={project ? storage : undefined}
       chatTitle={chat.chatTitle}
       isStudio={chat.isStudioThread}
       isDraft={chat.isDraft}

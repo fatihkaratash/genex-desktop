@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { cp, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
 import { inlinePanelFonts, inlinePanelSdk } from "../src/plugin-sdk/inline-panel-sdk.mjs";
 const require = createRequire(import.meta.url);
@@ -71,6 +71,32 @@ async function copyDependencyTree(copying, name, from) {
   for (const dep of Object.keys(meta.dependencies ?? {})) await copyDependencyTree(copying, dep, pkg);
 }
 
+/** The plugin module that knows the SDK's files and writes the preview's connect module. */
+const entryPage = (root) => import(pathToFileURL(path.join(root, "src/plugins/genex/entry-page.ts")).href);
+
+/**
+ * The browser files of the pinned `@genex-ai/embed-sdk` (its entry and the modules it reaches) into
+ * `target`: the Genex plugin connects a published game with them, and template games import them
+ * from the app's vendor folder.
+ */
+export async function copyEmbedSdk(root, target) {
+  const { embedSdkFiles } = await entryPage(root);
+  const dist = path.join(root, "node_modules/@genex-ai/embed-sdk/dist");
+  await rm(target, { recursive: true, force: true });
+  await mkdir(target, { recursive: true });
+  for (const file of await embedSdkFiles(dist)) await cp(path.join(dist, file), path.join(target, file));
+}
+
+/**
+ * The app's vendor copy of the SDK (`vendor/genex/embed-sdk/`) and the connect module beside it,
+ * which the preview serves to a template game whose import map names the SDK.
+ */
+export async function vendorEmbedSdk(root, vendor) {
+  const { previewConnectScript } = await entryPage(root);
+  await copyEmbedSdk(root, path.join(vendor, "genex/embed-sdk"));
+  await writeFile(path.join(vendor, "genex/connect.js"), previewConnectScript());
+}
+
 async function buildGenex(root, resources, { dependencies }) {
   const target = path.join(resources, "plugins/genex");
   await mkdir(target, { recursive: true });
@@ -94,6 +120,7 @@ async function buildGenex(root, resources, { dependencies }) {
     outfile: path.join(target, "creator-mcp.mjs"),
     banner: { js: "import {createRequire} from 'node:module'; const require = createRequire(import.meta.url);" },
   });
+  await copyEmbedSdk(root, path.join(target, "embed-sdk"));
   if (!dependencies) return;
   const copying = { target, dependencyRoot: await realpath(path.join(root, "node_modules")), seen: new Set() };
   await copyDependencyTree(copying, "@genex-ai/cli-demo", require.resolve("@genex-ai/cli-demo/package.json"));

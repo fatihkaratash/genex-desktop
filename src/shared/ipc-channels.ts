@@ -50,8 +50,8 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:thread.rename": "renameThread",
   "studio:compact": "compactThread",
   "studio:game.archive": "archiveGame",
-  "studio:game.history": "gameHistory",
-  "studio:game.history.clear": "clearGameHistory",
+  "studio:storage": "storageSpace",
+  "studio:storage.free": "freeStorage",
   "studio:game.engine.undo": "undoEngineLink",
   "studio:jobs.stop": "stopJob",
   "studio:app-look.open-settings": "openPrivacySettings",
@@ -272,8 +272,8 @@ export interface StudioInvokePayloads {
   "studio:thread.rename": { threadId: string; title: string };
   "studio:compact": { threadId: string } & NonNullable<Arg<"compactThread", 1>>;
   "studio:game.archive": { project: string };
-  "studio:game.history": { project: string };
-  "studio:game.history.clear": { project: string };
+  "studio:storage": { project?: string };
+  "studio:storage.free": { project?: string };
   "studio:game.engine.undo": Arg<"undoEngineLink", 0>;
   "studio:jobs.stop": { project: string; jobId: string };
   "studio:app-look.open-settings": { pane: Arg<"openPrivacySettings", 0> };

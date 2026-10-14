@@ -29,6 +29,11 @@ export interface ToolChipRow {
   source?: { id: string; name: string };
   /** The pictures the step answered with (game-relative paths); `play` ones go up to the work's strip. */
   shots?: Array<{ path: string; play: boolean }>;
+  /**
+   * A step that makes an asset (its record says what, `CallMaking`): the ids its job may go by in
+   * the game's inventory, the call's own first, then the job and generation it answered with.
+   */
+  making?: { ids: string[] };
 }
 const icons: Record<ToolIcon, IconName> = {
   think: "harness",

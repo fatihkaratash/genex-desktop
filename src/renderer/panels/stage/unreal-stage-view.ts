@@ -124,16 +124,17 @@ function runningView(status: UnrealStageStatus, name: string): StageView {
 }
 
 /**
- * The card for the game's project `name` at `status`; before the plugin answers (or when it can't),
- * Open in Unreal as before, which the plugin refuses with its own reason when that is wrong. A game
- * with no link to its Unreal project yet (`linked: false`) is told to choose it, not that it moved.
+ * The card for the game's project `name` at `status`. Before the plugin first answers it says and
+ * offers nothing, so no guess shows and then vanishes; when it answered nothing readable, Open in
+ * Unreal as before, which the plugin refuses with its own reason when that is wrong. A game with no
+ * link to its Unreal project yet (`linked: false`) is told to choose it, not that it moved.
  */
 export function stageView(
   status: UnrealStageStatus | null,
   name: string,
-  { linked }: { linked: boolean } = { linked: true },
+  { linked, answered = true }: { linked: boolean; answered?: boolean } = { linked: true },
 ): StageView {
-  if (!status) return offers(UNREAL_WORDS.stageStatus, UNREAL_WORDS.open, StageAct.Open);
+  if (!status) return answered ? offers(UNREAL_WORDS.stageStatus, UNREAL_WORDS.open, StageAct.Open) : said("");
   const busy = busyView(status, name);
   if (busy) return busy;
   switch (status.next) {
@@ -154,4 +155,26 @@ export function stageView(
     default:
       return runningView(status, name);
   }
+}
+
+/** A status as it arrived: the plugin's answer and when (0 before the first), so the opening timer runs on between asks. */
+export type ReceivedStatus = { status: UnrealStageStatus | null; at: number };
+
+/** How many games' last answers outlive their card; the oldest is forgotten past this. */
+const KEPT_STATUSES_MAX = 32;
+const keptStatuses = new Map<string, ReceivedStatus>();
+
+/** Keep a game's last answer, so its card coming back to the stage starts from it instead of from nothing. */
+export function keepStageStatus(game: string, received: ReceivedStatus): void {
+  keptStatuses.delete(game);
+  keptStatuses.set(game, received);
+  while (keptStatuses.size > KEPT_STATUSES_MAX) {
+    const oldest = keptStatuses.keys().next().value;
+    if (oldest !== undefined) keptStatuses.delete(oldest);
+  }
+}
+
+/** The game's last answer while its card was on the stage, or null before it ever answered. */
+export function keptStageStatus(game: string): ReceivedStatus | null {
+  return keptStatuses.get(game) ?? null;
 }

@@ -1,4 +1,5 @@
 import { markDeployment, verifyDeployment } from "./deployment.ts";
+import { bringsOwnSdk, connectPublishedCopy } from "./entry-page.ts";
 import path from "node:path";
 import { recordGenexUse, type GenexObserver } from "../../substrate/genex-outcomes.ts";
 import { fileURLToPath } from "node:url";
@@ -139,6 +140,7 @@ import {
   publicSteps,
   publishArgs,
   publishPhaseFor,
+  publishedConnection,
   recordPages,
   PUBLISH_ERROR_TAIL_CHARS,
   PublishLinkTarget,
@@ -217,6 +219,8 @@ async function readJsonOr<T>(file: string, fallback: T | null = null): Promise<T
 
 /** The CLI's record of a publish workspace's hosted project. */
 const metaFile = (dir: string) => path.join(dir, ".genex/project.json");
+/** The installed SDK's browser files, where a run from source (no build beside the backend) finds them. */
+const installedEmbedSdk = () => path.dirname(fileURLToPath(import.meta.resolve("@genex-ai/embed-sdk")));
 
 /** An approval as the agent sees it: the images stay in Studio for the user to review. */
 const approvalSummary = (approval: NonNullable<GenexJob["approval"]>) => ({
@@ -344,6 +348,8 @@ export class GenexTools {
   readonly #coverTimeouts: CoverTimeouts;
   /** The tools' clock: a publish's shot is measured against the invocation it runs in. */
   readonly #now: () => number;
+  /** The folder of the browser SDK a published game that brings none of its own is connected with. */
+  readonly #embedSdk: string | undefined;
   constructor(
     root: string,
     api = "https://api.genex.games",
@@ -355,6 +361,8 @@ export class GenexTools {
       draftTestMs?: number;
       coverTimeouts?: Partial<CoverTimeouts>;
       now?: () => number;
+      /** Where the build put the SDK's browser files beside the backend; else the installed package's. */
+      embedSdk?: string;
     } = {},
   ) {
     this.root = root;
@@ -366,6 +374,7 @@ export class GenexTools {
       viewMs: options.coverTimeouts?.viewMs ?? COVER_VIEW_TIMEOUT_MS,
     };
     this.#now = options.now ?? Date.now;
+    this.#embedSdk = options.embedSdk;
     this.#credentials = options.credentials;
     this.#observe = options.observe;
     this.#deliver = options.deliver ?? deliverGenexFiles;
@@ -698,7 +707,7 @@ export class GenexTools {
     };
     if (kind === GenexPublishKind.Gallery)
       job.title = cleanGenexTitle(title) ?? state.title ?? defaultGenexTitle(project);
-    if (exportStage) await this.#exportGame(project, state, job, dir, exportStage);
+    const connect = exportStage ? await this.#exportGame(project, state, job, dir, exportStage) : false;
     const cover = coverRides(kind, state);
     // The shot is taken here, inside the invocation: a detached upload gets no answer from host services.
     const shotLines = cover && camera ? await this.#reshoot(project, camera) : [];
@@ -707,7 +716,7 @@ export class GenexTools {
     if (shotLines.length) state.warnings = shotLines;
     delete state.lastError;
     await this.#savePublishState(project, state);
-    const done = this.#runPublishJob(project, kind, job, cover);
+    const done = this.#runPublishJob(project, kind, job, { cover, connect });
     this.#publishJobs.set(project, { job, done });
     this.#exporting.delete(project);
     void done.finally(() => {
@@ -715,14 +724,17 @@ export class GenexTools {
     });
     return this.#withCover(project, { ...state, job });
   }
-  /** Export the game into the publish workspace and mark it, inside the invocation that asked. */
+  /**
+   * Export the game into the publish workspace and mark it, inside the invocation that asked. True
+   * when the game brings no SDK of its own, so Studio connects the copy once Genex names its project.
+   */
   async #exportGame(
     project: string,
     state: GenexPublishState,
     job: GenexPublishJob,
     dir: string,
     exportStage: () => Promise<unknown>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.#exporting.add(project);
     try {
       const startPhase = job.phase;
@@ -733,9 +745,11 @@ export class GenexTools {
       state.lastExportAt = new Date().toISOString();
       const files = exported?.files;
       if (Number.isSafeInteger(files)) job.export = { files: files as number };
-      await this.#writeWorkspaceManifest(dir, project, job, exported?.genex);
+      const connect = !bringsOwnSdk(exported?.genex);
+      await this.#writeWorkspaceManifest(dir, project, job, exported?.genex, connect);
       job.deployment = await markDeployment(path.join(dir, "dist"), job.id);
       job.phase = startPhase;
+      return connect;
     } catch (error) {
       job.state = GenexPublishJobState.Failed;
       job.phase = GenexPublishPhase.Failed;
@@ -748,23 +762,35 @@ export class GenexTools {
   }
   /**
    * The CLI tells Genex what the game ships (sign-in support above all) from the package.json of
-   * the folder it runs in: Studio's copy gets the game's Genex part of it, or none.
+   * the folder it runs in: Studio's copy gets the game's Genex part of it, plus the SDK Studio ships
+   * with a game that brings none (`studioSdk`), or none at all.
    */
   async #writeWorkspaceManifest(
     dir: string,
     project: string,
     job: GenexPublishJob,
     manifest: GenexGameManifest | undefined,
+    studioSdk: boolean,
   ): Promise<void> {
-    const pkg = workspaceManifest(project, manifest);
+    const pkg = workspaceManifest(project, manifest, studioSdk);
     const file = path.join(dir, "package.json");
     if (!pkg) {
       await rm(file, { force: true });
       return;
     }
     await atomicWriteJson(file, pkg);
-    const embed = manifest?.dependencies["@genex-ai/embed-sdk"];
+    const embed = pkg.dependencies["@genex-ai/embed-sdk"];
     if (embed) job.embedSdkVersion = embed;
+  }
+  /**
+   * Connect Studio's copy to the project Genex keeps for the game, which a first publish has only
+   * just created, then mark it again: the draft test checks the files that really go up.
+   */
+  async #connectCopy(run: PublishRun, meta: HostedMeta): Promise<void> {
+    const dist = path.join(run.dir, "dist");
+    await connectPublishedCopy(dist, this.#embedSdk ?? installedEmbedSdk(), publishedConnection(meta, this.api));
+    run.job.deployment = await markDeployment(dist, run.job.id);
+    await this.#persistJob(run.project, run.job);
   }
   /**
    * The upload itself, detached from the invocation that asked for it. Every phase is persisted. A
@@ -774,7 +800,12 @@ export class GenexTools {
    * asks again then, from what Genex just said: a game its owner listed on genex.games since
    * Studio last looked is public, and its draft sends nothing.
    */
-  async #runPublishJob(project: string, kind: GenexPublishKind, job: GenexPublishJob, cover: boolean): Promise<void> {
+  async #runPublishJob(
+    project: string,
+    kind: GenexPublishKind,
+    job: GenexPublishJob,
+    { cover, connect }: { cover: boolean; connect: boolean },
+  ): Promise<void> {
     const dir = this.#publishDir(project);
     const home = path.join(dir, "home");
     const controller = new AbortController();
@@ -783,6 +814,7 @@ export class GenexTools {
     try {
       const meta = await this.#ensureHostedProject(project, dir, home, job, controller.signal);
       run.attempt.slug = meta.slug;
+      if (connect) await this.#connectCopy(run, meta);
       const outs = kind === GenexPublishKind.Draft ? [await this.#uploadDraft(run)] : await this.#uploadTested(run);
       if (!outs) return;
       const relist = needsRelisting(meta, (await this.#publishState(project)).title, job.title);

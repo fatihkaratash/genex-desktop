@@ -99,7 +99,7 @@ import { createIpcHandle, pushToRenderer } from "./ipc-handle.ts";
 import { registerBootIpc } from "./ipc/boot.ts";
 import { registerUpdateIpc } from "./ipc/update.ts";
 import { registerGamesIpc } from "./ipc/games.ts";
-import { registerGameHistoryIpc } from "./ipc/game-history.ts";
+import { registerStorageIpc } from "./ipc/storage.ts";
 import { registerJobsIpc } from "./ipc/jobs.ts";
 import { registerLearningIpc } from "./ipc/learning.ts";
 import { registerLoginIpc } from "./ipc/login.ts";
@@ -1240,7 +1240,7 @@ function registerIpc(studio: StudioCore): void {
     rustCreation: developmentStacksOpen(studio.options),
   });
   registerGamesIpc(handle, { core: studio, runSummaryReader, pushUiEvent });
-  registerGameHistoryIpc(handle, { core: studio });
+  registerStorageIpc(handle, { core: studio });
   registerJobsIpc(handle, { core: studio, openExternal: (url) => shell.openExternal(url) });
   registerModelsIpc(handle, { core: studio, subscription, pushUiEvent, openRouterLogin });
   registerPreviewIpc(handle, {

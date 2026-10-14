@@ -72,9 +72,20 @@ export const TranscriptEntry = memo(function TranscriptEntry({
     [onNotice],
   );
   const deliveries = useMemo(() => (entry.kind === EntryKind.Assets ? [entry.delivery] : []), [entry]);
+  const making = useMemo(
+    () => (context.project ? { project: context.project, onNotice } : undefined),
+    [context.project, onNotice],
+  );
   switch (entry.kind) {
     case WORK_KIND:
-      return <WorkLog items={entry.items} deliveries={entry.deliveries} onOpenAssets={context.onShowAssets} />;
+      return (
+        <WorkLog
+          items={entry.items}
+          deliveries={entry.deliveries}
+          onOpenAssets={context.onShowAssets}
+          making={making}
+        />
+      );
     case EntryKind.Assets:
       return <AssetResults deliveries={deliveries} onOpenAssets={context.onShowAssets} />;
     case EntryKind.GenexCover:

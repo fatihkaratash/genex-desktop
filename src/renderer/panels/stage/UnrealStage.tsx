@@ -30,7 +30,14 @@ import {
 } from "../../unreal-game.ts";
 import { problemWords, UNREAL_WORDS } from "../../words.ts";
 import { openPluginSetup } from "../../plugin-setup.ts";
-import { StageAct, type StageView, stageView } from "./unreal-stage-view.ts";
+import {
+  keepStageStatus,
+  keptStageStatus,
+  type ReceivedStatus,
+  StageAct,
+  type StageView,
+  stageView,
+} from "./unreal-stage-view.ts";
 
 /** How often the card asks where the project stands; the panel asks as often. */
 const STATUS_POLL_MS = 3 * SECOND_MS;
@@ -52,18 +59,24 @@ function elapsedText(ms: number): string {
 /** Opens the Unreal button's panel (where Get Unreal and the project list are), else the Plugins page at Unreal. */
 const openUnrealPanel = () => openPluginSetup(UNREAL_PLUGIN_ID);
 
-/** A status as it arrived: the plugin's answer and when, so the opening timer runs on between asks. */
-type Received = { status: UnrealStageStatus | null; at: number };
+/** Before the plugin's first answer for a game. */
+const NOT_ASKED: ReceivedStatus = { status: null, at: 0 };
 
-/** The plugin's `stage-status` for this game, asked every few seconds while the card shows; null until it answers. */
+/**
+ * The plugin's `stage-status` for this game, asked every few seconds while the card shows. A card
+ * that comes back starts from the game's last answer, so switching tabs never replays a guess.
+ */
 function useStageStatus(plugin: PluginInfo | null, game: string) {
-  const [received, setReceived] = useState<Received>({ status: null, at: 0 });
+  const [latest, setLatest] = useState(() => ({ game, received: keptStageStatus(game) ?? NOT_ASKED }));
+  const received = latest.game === game ? latest.received : (keptStageStatus(game) ?? NOT_ASKED);
   const refresh = useCallback(async () => {
     if (!plugin) return;
     const answer = await window.studio
       .pluginAction(plugin.manifest.id, UnrealPluginAction.StageStatus, {}, game)
       .catch(() => null);
-    setReceived({ status: parseStageStatus(answer), at: Date.now() });
+    const next = { status: parseStageStatus(answer), at: Date.now() };
+    keepStageStatus(game, next);
+    setLatest({ game, received: next });
   }, [plugin, game]);
   useEffect(() => {
     void refresh();
@@ -74,7 +87,7 @@ function useStageStatus(plugin: PluginInfo | null, game: string) {
 }
 
 /** The timer while the project opens: the plugin's elapsed time when it answered, counted on since. */
-function useOpeningTimer({ status, at }: Received): string {
+function useOpeningTimer({ status, at }: ReceivedStatus): string {
   const [now, setNow] = useState(() => Date.now());
   const elapsed = status?.opening?.elapsedMs;
   useEffect(() => {
@@ -175,7 +188,8 @@ function usePress(deps: PressDeps, status: UnrealStageStatus | null) {
 function StageLine({ view, timer }: { view: StageView; timer: string }): JSX.Element {
   return (
     <>
-      <p className="empty-state-subtitle max-w-full" role="status">
+      {/* One line tall even before the first answer, so the line arriving moves nothing. */}
+      <p className="empty-state-subtitle min-h-lh max-w-full" role="status">
         {view.line}
         {view.timer && timer ? <span className="tabular-nums"> {timer}</span> : null}
       </p>
@@ -205,7 +219,7 @@ export function UnrealStage({
   const timer = useOpeningTimer(received);
   const { busy, run } = usePress({ plugin, game: game.name, project, refresh, onNotice }, status);
   const name = project ? projectName(project) : game.title;
-  const view = stageView(status, name, { linked: project !== null });
+  const view = stageView(status, name, { linked: project !== null, answered: received.at > 0 });
   const button = view.button;
   return (
     <div

@@ -22,6 +22,7 @@ import { CustomEvent } from "../shared/custom-events.ts";
 import { finishRecordOf } from "../shared/finish-check.ts";
 import { HOUR_MS } from "../shared/duration.ts";
 import { type EventEnvelope, EventKind } from "../shared/event-log.ts";
+import type { MakingPhase } from "../shared/asset-making.ts";
 import type { ProjectAsset, ProjectAssets } from "../shared/game-assets.ts";
 import { messageQueueState, QueueState, type QueueView } from "../shared/message-queue.ts";
 import { normalizeOptimization, type OptimizationResultV1 } from "../shared/optimization.ts";
@@ -498,6 +499,8 @@ export interface AssetInfo {
   preview?: ProjectAsset;
   /** a copy is in the game itself, not only in a build workspace */
   inGame?: boolean;
+  /** where the game's inventory says the job is while it lists it as waiting; set by the Builds page */
+  waiting?: MakingPhase;
   generationId?: string;
   name: string;
   file: string | null;
@@ -2051,8 +2054,9 @@ export interface Rect extends Size {
 
 /**
  * Each asset job of the graph joined to the game's asset inventory: the inventory's record of it
- * (by job id, the remote generation id, else one of its files) for its thumbnail, and whether a
- * copy is in the game itself rather than only in a build workspace. An inventory entry with no
+ * (by job id, the remote generation id, else one of its files) for its thumbnail, whether a copy
+ * is in the game itself rather than only in a build workspace, and where the inventory says a job
+ * still on its way is (a Genex job still making two hours on is Not confirmed). An inventory entry with no
  * delivery record is a plain file walked in the game folder itself.
  */
 export function joinAssetInventory(nodes: GraphNode[], inventory: ProjectAssets | null): GraphNode[] {
@@ -2068,7 +2072,15 @@ function joinJob(job: AssetInfo, inventory: ProjectAssets | null): AssetInfo {
     return Boolean(job.generationId) && a.generationId === job.generationId;
   };
   const asset = inventory?.assets.find(ofJob) ?? inventory?.assets.find((a) => job.files.includes(a.file));
-  return { ...job, preview: asset, inGame: asset ? inGameCopy(asset) : undefined };
+  // A waiting job goes by the call's id, the plugin's job id, or (Genex) the generation's.
+  const ids = [job.callId, job.jobId, job.generationId];
+  const waiting = inventory?.jobs?.find((w) => ids.includes(w.jobId));
+  return {
+    ...job,
+    preview: asset,
+    inGame: asset ? inGameCopy(asset) : undefined,
+    ...(waiting ? { waiting: waiting.phase } : {}),
+  };
 }
 
 /** A delivered asset is in the game when a present copy is the project's; a walked file with no delivery record is. */

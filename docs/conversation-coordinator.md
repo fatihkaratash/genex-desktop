@@ -607,8 +607,10 @@ when only the chat goes back); `stopsBuild` says a build is
 stopped first. The host restores nothing then: it ignores the request for a running or landed
 build, a joined message and a message with no checkpoint (no queue record, or none kept), and a
 checkpoint that no longer applies refuses it.
-The person may clear Rewind history (`studio:game.history.clear`, `core/history-space.ts`): every
-`refs/studio/chat/**` of the game and the `refs/studio/runs/<run>/**` of runs that ended go in one
+The person may free a game's space (`studio:storage.free`, `core/storage-space.ts`), which also
+deletes Genex's folders for older builds (`substrate/storage-folders.ts`): every
+`refs/studio/chat/**` of the game and the `refs/studio/runs/<run>/**` of runs that ended (but the
+game's newest ended run) go in one
 `update-ref` transaction, Genex's own copies under its scratch folder whose folder is gone are
 forgotten (never `worktree prune`: a worktree of the person's on an unmounted drive keeps its
 commits), then `repack -A -d` and `prune` remove what nothing else reaches and is older than an
