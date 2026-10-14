@@ -137,7 +137,8 @@ draws as a magenta checker, never a crash. A model the renderer could not load (
 `assets/`, or malformed) is named in `state().__render.missingModels`, a key that is absent
 while every model loads. The Studio's asset import writes a compressed (Draco, meshopt) or
 quantized (`KHR_mesh_quantization`, gltfpack's default) GLB back plain with float attributes; at
-runtime an attribute stored in any other layout than core glTF's is refused, never misread. `Camera::look_at(position, target)` places a view;
+runtime an attribute stored in any other layout than core glTF's is refused, never misread.
+`Camera::look_at(position, target)` places a view;
 `Camera { projection: Projection::Orthographic, fovy: 12.0, ..Camera::look_at(position, target) }`
 draws it orthographic, `fovy` then being the view's height in world units (a 2D or isometric
 game: an object keeps its size at any distance).
