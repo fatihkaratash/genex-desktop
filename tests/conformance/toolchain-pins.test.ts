@@ -62,7 +62,7 @@ const ANGLES: Array<{
   {
     id: ToolchainId.AngleMac,
     tool: "angleMac",
-    manifestSha256: "1ee8a157ea594f48a8b35fed872f4cba0feedef6839a4e0e501abb8d91ab92cc",
+    manifestSha256: "bcc4bb790a505e58c30b3586721ef7a63fe945df5103c4bca063a705714ba3f4",
     manifestBytes: 8_231,
     files: 28,
     bytes: 7_053_062,
@@ -70,7 +70,7 @@ const ANGLES: Array<{
   {
     id: ToolchainId.AngleWindows,
     tool: "angleWindows",
-    manifestSha256: "6e999bfa091c2d1ec6d5244a4e9691ad9555ab742e99f1a460b10ab1f5c88669",
+    manifestSha256: "07e0f306c0bbf880c3ee73842e7e11969c70d7b71c4380f635b52e2bf51c70b2",
     manifestBytes: 6_480,
     files: 29,
     bytes: 11_994_569,
@@ -78,7 +78,7 @@ const ANGLES: Array<{
   {
     id: ToolchainId.AngleLinux,
     tool: "angleLinux",
-    manifestSha256: "fb4e9c2b480e7a100ffc3aca6b8c78a6148cc646936cb900cfd513e54ed9d493",
+    manifestSha256: "5f3e2089b5b63e4774c984b06015eee652964f27eaf02982b2e74b285841fded",
     manifestBytes: 8_943,
     files: 40,
     bytes: 17_376_008,
