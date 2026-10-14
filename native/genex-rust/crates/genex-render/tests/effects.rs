@@ -68,13 +68,18 @@ fn scene() -> Scene {
     scene
 }
 
+/// The contact-shadow ray the scene's look casts: contact shadows fade out where the ray is under
+/// 16 depth texels long at the receiver (P2-0.7), and at 256x144 the default 25 cm ray is 6 texels
+/// long at the pebble 7 m away; 60 cm is 15.
+const CONTACT_RAY: f32 = 0.6;
+
 /// One frame of [`scene`] under `quality`, with `fog` as the look's, from a fresh renderer.
 fn frame(gpu: &Gpu, quality: &Quality, fog: Fog) -> Capture {
     let mut renderer = Renderer::with_options(gpu, WIDTH, HEIGHT, RenderOptions::default()).expect("renderer");
     renderer.set_scene_format(SceneFormat::Rgba16Float);
     renderer.set_device_class(DeviceClass::new(FormFactor::Desktop, PerformanceTier::Ultra));
     renderer.set_quality(quality);
-    renderer.set_look(renderer.look().with_fog(fog));
+    renderer.set_look(renderer.look().with_fog(fog).with_contact_shadow_length(CONTACT_RAY));
     renderer.set_environment(&Environment::sky());
     renderer.render(gpu, &scene(), CullPath::Gpu).expect("frame");
     renderer.capture(gpu).expect("capture")
