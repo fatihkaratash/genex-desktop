@@ -25,8 +25,9 @@
 //!   the floor is [`STILL_ALPHA_SHARE`] of `alpha_min` on a pixel moving under
 //!   [`STILL_MOTION_PX`]), blended with weights `1 / (1 + max(luma - 1, 0))` in pre-exposed space,
 //!   so highlights cannot flicker and display-range values average exactly (a box filter over the
-//!   jitter cycle). Still transparents under a still camera write no reactive coverage
-//!   ([`transparent_coverage`]), so they accumulate too.
+//!   jitter cycle). Still transparents write no reactive coverage, under a moving camera too, and
+//!   moving ones their alpha capped at [`TRANSPARENT_COVERAGE`] ([`transparent_coverage`]), so
+//!   still ones accumulate too.
 //!
 //! The resolved colour is the history written this frame (rgb), and its alpha carries the pixel's
 //! depth key (`d` under reverse-Z, `1 - d` under standard Z: both proportional to 1 / view depth),
@@ -172,33 +173,37 @@ fn fs_reactive_particle(in: ReactiveParticleOut) -> @location(0) vec4<f32> {
 "
 );
 
-/// The coverage a transparent mesh writes into the reactive mask: whole, so a moving transparent
-/// never smears (its edges are not temporally anti-aliased; FSR2's mask makes the same trade).
-pub const TRANSPARENT_COVERAGE: f32 = 1.0;
-/// The coverage the transparent meshes write on a frame where the camera and every one of them
-/// stood still since the last ([`transparent_coverage`]): none, so they accumulate and clip as
-/// opaque surfaces do. Whole coverage there took the current sample every frame, and a reactive
-/// pixel's current sample moves with the jitter wherever an edge crosses it: a still lake's shore
-/// and the trees standing in it flickered by more than 3 levels frame to frame (pass-1 gate
-/// finding 04: about 60% of a still camera's flickering pixels at high). The core materials draw
-/// no time-driven change, so a still transparent draw looks the same next frame.
+/// The most coverage a transparent mesh writes into the reactive mask where it needs any: its
+/// material's alpha, capped here, so a moving transparent keeps at least a tenth of its history
+/// (renderer pass 2, P2-0.2, T-01 step 2; FSR2's reactive-mask guidance: write alpha, clamped to
+/// about 0.9, since a reactive value near 1 never resolves well). It was whole coverage: the
+/// current sample every frame, with no anti-aliasing of the edges.
+pub const TRANSPARENT_COVERAGE: f32 = 0.9;
+/// The coverage the transparent meshes write on a frame where every one of them stood still since
+/// the last ([`transparent_coverage`]): none, so they accumulate and clip as opaque surfaces do,
+/// whether the camera moved or not (the camera's reprojection holds for a still surface). Whole
+/// coverage there took the current sample every frame, and a reactive pixel's current sample moves
+/// with the jitter wherever an edge crosses it: a still lake's shore and the trees standing in it
+/// flickered by more than 3 levels frame to frame (pass-1 gate finding 04: about 60% of a still
+/// camera's flickering pixels at high), and while the camera moved the lake's shadows showed every
+/// frame's raw noise (pass 2, T-01: its box 179 pixels still, 4,724 creeping at high). The core
+/// materials draw no time-driven change, so a still transparent draw looks the same next frame.
 pub const SETTLED_TRANSPARENT_COVERAGE: f32 = 0.0;
 
-/// The coverage this frame's transparent meshes write into the reactive mask:
-/// [`SETTLED_TRANSPARENT_COVERAGE`] when the camera (`view_proj` against last frame's
-/// `prev_view_proj`, both unjittered) and every transparent row (`transparent`, rows of
-/// `prev_models`, drawn from `sources`) stood still, else [`TRANSPARENT_COVERAGE`]. A row stands
-/// still when its model matched last frame's (`MOTION_FLAG_STILL` without
-/// `MOTION_FLAG_NO_HISTORY`) and it is not skinned (its vertices may move under a still model).
-pub fn transparent_coverage(view_proj: &[f32; 16], prev_view_proj: Option<&[f32; 16]>, transparent: &[u32], prev_models: &[crate::layout::GpuPrevModel], sources: &[crate::scene::DrawSource]) -> f32 {
-    let camera_still = prev_view_proj == Some(view_proj);
+/// The coverage this frame's transparent meshes write into the reactive mask at most (each its
+/// material's alpha below it): [`SETTLED_TRANSPARENT_COVERAGE`] when the frame has last frame's
+/// `history` and every transparent row (`transparent`, rows of `prev_models`, drawn from
+/// `sources`) stood still, else [`TRANSPARENT_COVERAGE`]. A row stands still when its model
+/// matched last frame's (`MOTION_FLAG_STILL` without `MOTION_FLAG_NO_HISTORY`) and it is not
+/// skinned (its vertices may move under a still model). The camera's motion does not count.
+pub fn transparent_coverage(history: bool, transparent: &[u32], prev_models: &[crate::layout::GpuPrevModel], sources: &[crate::scene::DrawSource]) -> f32 {
     let row_still = |row: &u32| {
         prev_models.get(*row as usize).is_some_and(|prev| {
             let flags = prev.flags[0];
             flags & crate::motion::MOTION_FLAG_STILL != 0 && flags & crate::motion::MOTION_FLAG_NO_HISTORY == 0
         })
     };
-    let settled = camera_still && transparent.iter().all(row_still) && sources.iter().all(|source| !source.skinned);
+    let settled = history && transparent.iter().all(row_still) && sources.iter().all(|source| !source.skinned);
     if settled { SETTLED_TRANSPARENT_COVERAGE } else { TRANSPARENT_COVERAGE }
 }
 
@@ -283,8 +288,9 @@ impl GpuTaaParams {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct GpuReactiveJitter {
-    /// xy: this frame's jitter in NDC (y up, [`crate::jitter::offset_ndc`]); z: a transparent
-    /// mesh's coverage ([`TRANSPARENT_COVERAGE`]); w: reserved.
+    /// xy: this frame's jitter in NDC (y up, [`crate::jitter::offset_ndc`]); z: the most coverage
+    /// a transparent mesh writes (its material's alpha below it; [`transparent_coverage`]); w:
+    /// reserved.
     pub ndc: [f32; 4],
 }
 
@@ -1067,25 +1073,28 @@ mod tests {
         crate::scene::DrawSource { skinned, first_index: 0, index_count: 3, base_vertex: 0 }
     }
 
+    /// Renderer pass 2, P2-0.2 (T-01 step 2) flipped "the camera moved" (named in the log): a
+    /// still transparent row under a moving camera keeps its history (the camera's reprojection
+    /// holds for it), so it writes no coverage; it wrote whole coverage, and the lake's shadows
+    /// showed every frame's raw noise while the camera moved (lake box 179 -> 4,724 pixels at high).
+    /// Where coverage is needed, it is at most [`TRANSPARENT_COVERAGE`] (0.9, FSR2's reactive cap).
     #[test]
-    fn still_transparents_under_a_still_camera_write_no_reactive_coverage() {
+    fn still_transparents_write_no_reactive_coverage_while_the_camera_moves() {
         use crate::motion::{MOTION_FLAG_NO_HISTORY, MOTION_FLAG_STILL};
-        let camera = IDENTITY;
-        let mut moved_camera = IDENTITY;
-        moved_camera[12] = 0.01;
         let prev_models = [prev(0), prev(MOTION_FLAG_STILL), prev(MOTION_FLAG_STILL | MOTION_FLAG_NO_HISTORY), prev(MOTION_FLAG_STILL)];
-        let coverage = |prev_view_proj: Option<&[f32; 16]>, rows: &[u32], skinned: bool| {
+        let coverage = |history: bool, rows: &[u32], skinned: bool| {
             let sources: Vec<_> = rows.iter().map(|_| source(skinned)).collect();
-            transparent_coverage(&camera, prev_view_proj, rows, &prev_models, &sources)
+            transparent_coverage(history, rows, &prev_models, &sources)
         };
-        assert_eq!(coverage(Some(&camera), &[1, 3], false), SETTLED_TRANSPARENT_COVERAGE, "still rows under a still camera");
-        assert_eq!(coverage(Some(&camera), &[], false), SETTLED_TRANSPARENT_COVERAGE, "no transparent rows");
-        assert_eq!(coverage(Some(&moved_camera), &[1, 3], false), TRANSPARENT_COVERAGE, "the camera moved");
-        assert_eq!(coverage(None, &[1, 3], false), TRANSPARENT_COVERAGE, "no last frame");
-        assert_eq!(coverage(Some(&camera), &[1, 0], false), TRANSPARENT_COVERAGE, "a row moved");
-        assert_eq!(coverage(Some(&camera), &[1, 2], false), TRANSPARENT_COVERAGE, "a row without history");
-        assert_eq!(coverage(Some(&camera), &[1, 9], false), TRANSPARENT_COVERAGE, "a row the table does not hold");
-        assert_eq!(coverage(Some(&camera), &[1, 3], true), TRANSPARENT_COVERAGE, "a skinned row");
+        assert_eq!(coverage(true, &[1, 3], false), SETTLED_TRANSPARENT_COVERAGE, "still rows, whether the camera moved or not");
+        assert_eq!(coverage(true, &[], false), SETTLED_TRANSPARENT_COVERAGE, "no transparent rows");
+        assert_eq!(coverage(false, &[1, 3], false), TRANSPARENT_COVERAGE, "no last frame");
+        assert_eq!(coverage(true, &[1, 0], false), TRANSPARENT_COVERAGE, "a row moved");
+        assert_eq!(coverage(true, &[1, 2], false), TRANSPARENT_COVERAGE, "a row without history");
+        assert_eq!(coverage(true, &[1, 9], false), TRANSPARENT_COVERAGE, "a row the table does not hold");
+        assert_eq!(coverage(true, &[1, 3], true), TRANSPARENT_COVERAGE, "a skinned row");
+        // A reactive transparent keeps a tenth of its history at least.
+        const { assert!(TRANSPARENT_COVERAGE <= 0.9 && TRANSPARENT_COVERAGE > SETTLED_TRANSPARENT_COVERAGE) };
         assert_eq!(GpuReactiveJitter::new([0.5, 0.25], (100, 50)).with_coverage(0.0).ndc, [0.01, -0.01, 0.0, 0.0]);
     }
 

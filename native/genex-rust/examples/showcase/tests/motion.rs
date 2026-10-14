@@ -90,8 +90,16 @@ const EYE_HEIGHT: f32 = 1.7;
 /// bench-outdoor's lake box (x, y, width, height at 1280x720): the water and the tree shadows on it
 /// (research-temporal.md T-01: 183 flickering pixels still, 4,706 creeping at high).
 const LAKE_BOX: [u32; 4] = [540, 380, 740, 300];
-/// The lake box's creeping flicker may reach this multiple of the still camera's (P2-0.2).
+/// The lake box's creeping or panning flicker may reach this multiple of the still camera's (P2-0.2).
 const LAKE_BOX_CREEP_RATIO_MAX: f64 = 1.2;
+/// How far the drifting lake moves a frame, world units: far below a pixel (P2-0.2).
+const LAKE_DRIFT_M: f32 = 1e-4;
+/// A pixel is away from the geometry's edges when its luma varies by less than this many levels
+/// within this radius (P2-0.2's drifting-lake row).
+const FLAT_LEVELS: f64 = 12.0;
+const FLAT_RADIUS: usize = 2;
+/// The pans the lake box is held on, pixels a frame at [`BENCH_DEPTH`] (P2-0.2).
+const LAKE_PAN_PX: [f32; 2] = [1.0, 4.0];
 /// The creeping camera's mean flicker share at high and ultra (G0, P2-0.8: medium's, MSAA).
 const CREEPING_SHARE_MAX: f64 = 0.0016;
 /// Frames the bench-outdoor rows draw, and the last ones they compare (each with the next).
@@ -545,6 +553,12 @@ fn flickering_in(run_frames: &[Capture], region: [u32; 4]) -> usize {
 /// frame (the pass-1 shimmer row's frames): the last [`BENCH_COMPARED`] frames, kept whole (the lake
 /// box reads every pair).
 fn bench_frames(gpu: &Gpu, class: DeviceClass, quality: &Quality, step: f32) -> Vec<Capture> {
+    bench_frames_drifting(gpu, class, quality, step, 0.0)
+}
+
+/// [`bench_frames`] with every transparent draw (the lake) also moved `drift` world units along x a
+/// frame: a moving transparent, which TAA's reactive mask marks.
+fn bench_frames_drifting(gpu: &Gpu, class: DeviceClass, quality: &Quality, step: f32, drift: f32) -> Vec<Capture> {
     use genex_render::FrameRenderer;
     use genex_render::immediate::ImmediateFrame;
     let options = RenderOptions { msaa: genex_render::renderer::landed_samples(quality.anti_aliasing) > 1 };
@@ -565,6 +579,9 @@ fn bench_frames(gpu: &Gpu, class: DeviceClass, quality: &Quality, step: f32) -> 
         let offset = side * step * k as f32;
         drawn.camera.eye = (Vec3::from(drawn.camera.eye) + offset).to_array();
         drawn.camera.target = (Vec3::from(drawn.camera.target) + offset).to_array();
+        for draw in drawn.draws.iter_mut().filter(|draw| draw.material.is_transparent()) {
+            draw.model[12] += drift * k as f32;
+        }
         let mut frame = ImmediateFrame::from_scene(drawn);
         frame.set_tick(u64::from(k));
         frames.render(gpu, &frame, CullPath::Gpu, None).expect("a Live frame");
@@ -575,10 +592,62 @@ fn bench_frames(gpu: &Gpu, class: DeviceClass, quality: &Quality, step: f32) -> 
     kept
 }
 
+/// The last of `frames` with every pixel that flickered between any two consecutive frames painted
+/// magenta (the pass-1 shimmer row's map).
+fn flicker_map(frames: &[Capture]) -> Capture {
+    let last = frames.last().expect("a frame");
+    let lumas: Vec<Vec<f32>> = frames.iter().map(lumas).collect();
+    let mut bgra = last.bgra().to_vec();
+    for i in 0..lumas[0].len() {
+        if lumas.windows(2).any(|pair| f64::from((pair[0][i] - pair[1][i]).abs()) > FLICKER_LEVELS) {
+            bgra[i * 4..i * 4 + 4].copy_from_slice(&[255, 0, 255, 255]);
+        }
+    }
+    Capture::new(last.width(), last.height(), bgra).expect("a capture of the same size")
+}
+
+/// `last` with every pixel of `flagged` (any frame's) painted magenta.
+fn flagged_map(last: &Capture, flagged: &[Vec<u32>]) -> Capture {
+    let mut bgra = last.bgra().to_vec();
+    for i in flagged.iter().flatten() {
+        let at = *i as usize * 4;
+        bgra[at..at + 4].copy_from_slice(&[255, 0, 255, 255]);
+    }
+    Capture::new(last.width(), last.height(), bgra).expect("a capture of the same size")
+}
+
+/// `quality` without the sun's shadows ([`SUN_SHADOWS`]).
+fn without_sun_shadows(quality: &Quality) -> Quality {
+    let mut off = *quality;
+    for feature in SUN_SHADOWS {
+        off.set_feature(*feature, false);
+    }
+    off
+}
+
+/// How many of the pixels inside `region` (of a `width`-wide frame) any frame of `flickers` flagged.
+fn flagged_in(flickers: &[Vec<u32>], width: u32, region: [u32; 4]) -> usize {
+    let [x0, y0, w, h] = region;
+    let mut flagged = std::collections::BTreeSet::new();
+    for i in flickers.iter().flatten() {
+        let (x, y) = (i % width, i / width);
+        if (x0..x0 + w).contains(&x) && (y0..y0 + h).contains(&y) {
+            flagged.insert(*i);
+        }
+    }
+    flagged.len()
+}
+
+/// What the sun's shadows add to `on`'s flicker over `off`'s, frame by frame, as a share of the frame.
+fn shadow_flicker(on: &Run, off: &Run) -> Vec<f64> {
+    attributed(&on.flickers, &off.flickers, on.popped.len()).iter().map(|count| *count as f64 / on.pixels()).collect()
+}
+
 /// T-01 / T-12 (b): bench-outdoor creeping a fiftieth of a pixel a frame at high and ultra (the
-/// pass-1 row's motion): the lake box flickers no more than 1.2x the still camera's, and the
-/// creeping mean flicker share stays within medium's (MSAA) 0.16%. Pass-1 left the lake's shadows
-/// blinking: 183 pixels still against 4,706 creeping at high.
+/// pass-1 row's motion): the lake box flickers no more than 1.2x the still camera's, the sun's
+/// shadows add at most 0.15% of flickering pixels a frame (P2-0.2, the row's own still bound), and
+/// the creeping mean flicker share stays within medium's (MSAA) 0.16%. Pass-1 left the lake's
+/// shadows blinking: 183 pixels still against 4,706 creeping at high.
 #[test]
 #[ignore = "needs a GPU: run with --ignored metal"]
 fn metal_bench_outdoor_lake_box_holds_still_while_the_camera_creeps() {
@@ -596,10 +665,22 @@ fn metal_bench_outdoor_lake_box_holds_still_while_the_camera_creeps() {
         for frame in creeping.iter().cloned() {
             run.push(frame);
         }
+        let mut off = Run::new(0);
+        for frame in bench_frames(&gpu, class, &without_sun_shadows(&quality), step) {
+            off.push(frame);
+        }
+        let shadows = shadow_flicker(&run, &off);
+        let width = support::SIZE[0];
+        let lake_shadows = flagged_in(&added_flickers(&run, &off), width, LAKE_BOX);
+        write_png(&out_dir().join(format!("lake-box-creeping-shadows-{}.png", preset.wire())), &flagged_map(creeping.last().expect("a frame"), &added_flickers(&run, &off)));
+        let (shadow_mean, shadow_max) = (mean(&shadows), shadows.iter().copied().fold(0.0, f64::max));
         let (mean, max) = (run.mean_flicker(), run.max_flicker());
         write_png(&out_dir().join(format!("lake-box-creeping-{}.png", preset.wire())), &run.pop_map());
+        write_png(&out_dir().join(format!("lake-box-still-{}.png", preset.wire())), still.last().expect("a frame"));
+        write_png(&out_dir().join(format!("lake-box-flicker-still-{}.png", preset.wire())), &flicker_map(&still));
+        write_png(&out_dir().join(format!("lake-box-flicker-creeping-{}.png", preset.wire())), &flicker_map(&creeping));
         let record = format!(
-            "{{\"row\": \"lake-box-{}\", \"lakeStill\": {lake_still}, \"lakeCreeping\": {lake_creeping}, \"meanFlicker\": {mean:.5}, \"maxFlicker\": {max:.5}, \"pops\": {}}}",
+            "{{\"row\": \"lake-box-{}\", \"lakeStill\": {lake_still}, \"lakeCreeping\": {lake_creeping}, \"meanFlicker\": {mean:.5}, \"maxFlicker\": {max:.5}, \"shadowFlickerMean\": {shadow_mean:.5}, \"shadowFlickerMax\": {shadow_max:.5}, \"lakeShadowCreeping\": {lake_shadows}, \"pops\": {}}}",
             preset.wire(),
             run.total_pops()
         );
@@ -608,11 +689,128 @@ fn metal_bench_outdoor_lake_box_holds_still_while_the_camera_creeps() {
         if lake_creeping as f64 > LAKE_BOX_CREEP_RATIO_MAX * lake_still.max(1) as f64 {
             problems.push(format!("{}: the lake box flickers on {lake_creeping} pixels creeping against {lake_still} still", preset.wire()));
         }
+        if shadow_mean > SHADOW_FLICKER_SHARE_MAX {
+            problems.push(format!("{}: the sun's shadows make {:.3}% of pixels flicker creeping (worst pair {:.3}%)", preset.wire(), shadow_mean * 100.0, shadow_max * 100.0));
+        }
         if mean > CREEPING_SHARE_MAX {
             problems.push(format!("{}: {:.3}% of pixels flicker creeping (max over pairs {:.3}%)", preset.wire(), mean * 100.0, max * 100.0));
         }
     }
     finish("bench-outdoor-lake-box", &records, &problems);
+}
+
+/// T-01 (P2-0.2): bench-outdoor panned sideways at 1 and 4 px a frame at high and ultra: inside the
+/// lake box, the pixels the motion does not explain (a luma found nowhere within the pan's radius
+/// in the frame before) are no more than 1.2x the still camera's under the same radius, and the
+/// sun's shadows add no more of them to the box than they add still.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_bench_outdoor_lake_box_holds_still_while_the_camera_pans() {
+    let Some(gpu) = gpu() else { return };
+    let class = classify(gpu.device_facts());
+    let pixel = bench_pixel(&gpu);
+    let width = support::SIZE[0];
+    let mut records = Vec::new();
+    let mut problems = Vec::new();
+    for preset in [QualityPreset::High, QualityPreset::Ultra] {
+        let quality = preset_quality(preset, class);
+        let shadowless = without_sun_shadows(&quality);
+        for px in LAKE_PAN_PX {
+            let radius = px.ceil() as usize + 1;
+            let runs = |step: f32| {
+                let mut on = Run::new(radius);
+                let mut off = Run::new(radius);
+                for frame in bench_frames(&gpu, class, &quality, step) {
+                    on.push(frame);
+                }
+                for frame in bench_frames(&gpu, class, &shadowless, step) {
+                    off.push(frame);
+                }
+                (on, off)
+            };
+            let (still_on, still_off) = runs(0.0);
+            let (pan_on, pan_off) = runs(px * pixel);
+            let lake_still = flagged_in(&still_on.flickers, width, LAKE_BOX);
+            let lake_pan = flagged_in(&pan_on.flickers, width, LAKE_BOX);
+            let added = |on: &Run, off: &Run| flagged_in(&added_flickers(on, off), width, LAKE_BOX);
+            let (shadow_still, shadow_pan) = (added(&still_on, &still_off), added(&pan_on, &pan_off));
+            let last = pan_on.last.as_ref().expect("a frame");
+            write_png(&out_dir().join(format!("lake-box-pan-{}-{px}px.png", preset.wire())), &flagged_map(last, &pan_on.flickers));
+            write_png(&out_dir().join(format!("lake-box-pan-shadows-{}-{px}px.png", preset.wire())), &flagged_map(last, &added_flickers(&pan_on, &pan_off)));
+            let record = format!(
+                "{{\"row\": \"lake-box-pan-{}-{px}px\", \"radiusPx\": {radius}, \"lakeStill\": {lake_still}, \"lakePan\": {lake_pan}, \"lakeShadowStill\": {shadow_still}, \"lakeShadowPan\": {shadow_pan}}}",
+                preset.wire()
+            );
+            eprintln!("{record}");
+            records.push(record);
+            if lake_pan as f64 > LAKE_BOX_CREEP_RATIO_MAX * lake_still.max(1) as f64 {
+                problems.push(format!("{} at {px} px a frame: the lake box flickers on {lake_pan} pixels against {lake_still} still", preset.wire()));
+            }
+            if shadow_pan as f64 > LAKE_BOX_CREEP_RATIO_MAX * shadow_still.max(1) as f64 {
+                problems.push(format!("{} at {px} px a frame: the shadows make {shadow_pan} lake-box pixels flicker against {shadow_still} still", preset.wire()));
+            }
+        }
+    }
+    finish("bench-outdoor-lake-box-pans", &records, &problems);
+}
+
+/// The pixels of `capture` away from any edge: their luma varies by less than [`FLAT_LEVELS`] within
+/// [`FLAT_RADIUS`] pixels (drawn without shadows, so a shadow's edge is no edge here).
+fn flat_pixels(capture: &Capture) -> Vec<bool> {
+    let envelope = Envelope::of(capture, FLAT_RADIUS);
+    envelope.least.iter().zip(&envelope.most).map(|(least, most)| f64::from(most - least) < FLAT_LEVELS).collect()
+}
+
+/// T-01 step 1 (P2-0.2): bench-outdoor under a still camera at high and ultra with the lake drifting
+/// a tenth of a millimetre a frame (no visible motion, but a moving transparent, so TAA's reactive
+/// mask takes most of its current sample): inside the lake box, away from the geometry's edges (the
+/// shore, the trees over the water: a reactive transparent's edges flicker with the jitter, FSR2's
+/// trade, which T-02's locks address), no more pixels flicker than on the still lake (1.2x). The
+/// transparent pipeline turned its soft shadow taps and cascade band with the frame, and that noise
+/// reached the screen unaveraged.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_bench_outdoor_lake_box_holds_still_while_the_lake_moves() {
+    let Some(gpu) = gpu() else { return };
+    let class = classify(gpu.device_facts());
+    let width = support::SIZE[0];
+    let mut records = Vec::new();
+    let mut problems = Vec::new();
+    for preset in [QualityPreset::High, QualityPreset::Ultra] {
+        let quality = preset_quality(preset, class);
+        let shadowless = bench_frames(&gpu, class, &without_sun_shadows(&quality), 0.0);
+        let flat = flat_pixels(shadowless.last().expect("a frame"));
+        let flat_flicker = |drift: f32| {
+            let mut run = Run::new(0);
+            for frame in bench_frames_drifting(&gpu, class, &quality, 0.0, drift) {
+                run.push(frame);
+            }
+            let kept: Vec<Vec<u32>> = run.flickers.iter().map(|frame| frame.iter().copied().filter(|i| flat[*i as usize]).collect()).collect();
+            (flagged_in(&kept, width, LAKE_BOX), flagged_map(run.last.as_ref().expect("a frame"), &kept))
+        };
+        let (lake_still, _) = flat_flicker(0.0);
+        let (lake_drifting, map) = flat_flicker(LAKE_DRIFT_M);
+        write_png(&out_dir().join(format!("lake-box-drifting-{}.png", preset.wire())), &map);
+        let record = format!("{{\"row\": \"lake-box-drifting-{}\", \"lakeFlatStill\": {lake_still}, \"lakeFlatDrifting\": {lake_drifting}}}", preset.wire());
+        eprintln!("{record}");
+        records.push(record);
+        if lake_drifting as f64 > LAKE_BOX_CREEP_RATIO_MAX * lake_still.max(1) as f64 {
+            problems.push(format!("{}: with the lake drifting {lake_drifting} flat lake-box pixels flicker against {lake_still} still", preset.wire()));
+        }
+    }
+    finish("bench-outdoor-lake-box-drifting", &records, &problems);
+}
+
+/// The pixels `on` flagged in each frame that `off` did not flag at the same pixel of that frame.
+fn added_flickers(on: &Run, off: &Run) -> Vec<Vec<u32>> {
+    on.flickers
+        .iter()
+        .zip(&off.flickers)
+        .map(|(on, off)| {
+            let off: std::collections::BTreeSet<u32> = off.iter().copied().collect();
+            on.iter().copied().filter(|i| !off.contains(i)).collect()
+        })
+        .collect()
 }
 
 /// The mean squared 4-neighbour Laplacian of `capture`'s luma: its high-frequency energy.

@@ -36,8 +36,11 @@
 // radius held to 16 of the receiver cascade's texels. Its taps follow a Vogel disk (a golden-angle
 // spiral, Poisson-like for every tap count) rotated by interleaved gradient noise of the pixel;
 // only under TAA (`GX_SHADOW_TEMPORAL`) does the frame key turn the pattern, so a frame without
-// TAA is the same bits every time. Taps are compared against the receiver's plane in light space
-// (receiver-plane depth bias), so a wide kernel on a sloped receiver does not shadow itself.
+// TAA is the same bits every time. The transparent pipeline compiles it off under TAA too
+// (renderer.rs `SurfaceKey::blended`): TAA takes a moving transparent's current sample almost
+// whole, so frame-keyed taps and a dithered band there reached the screen unaveraged. Taps are
+// compared against the receiver's plane in light space (receiver-plane depth bias), so a wide
+// kernel on a sloped receiver does not shadow itself.
 //
 // Cascade blending: inside the last `blend_band` fraction of a cascade's depth range the next
 // cascade fades in, by a dithered choice of one cascade under TAA (the history averages it) and by
@@ -65,8 +68,9 @@ const GX_GOLDEN_ANGLE: f32 = 2.3999632;
 const GX_TAU: f32 = 6.2831853;
 
 override GX_SHADOW_FILTER: u32 = GX_SHADOW_PCF3;
-// Whether a temporal resolve (TAA) follows the scene: the soft filters' tap pattern then also turns
-// with the frame key and the cascade band dithers. Off: a static pattern and a two-lookup blend.
+// Whether a temporal resolve (TAA) accumulates the surface: the soft filters' tap pattern then also
+// turns with the frame key and the cascade band dithers. Off (no TAA, or the transparent pipeline):
+// a static pattern and a two-lookup blend.
 override GX_SHADOW_TEMPORAL: bool = false;
 // Whether the quality blends cascades over a band or fades the last one out (RX.R1): off, both
 // are compiled out and every cascade switches and ends hard, as the features-off frame draws.

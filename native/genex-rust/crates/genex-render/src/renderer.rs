@@ -440,6 +440,15 @@ impl SurfaceKey {
             sun_cascades: quality.shadows.cascades.clamp(1, MAX_CASCADES as u8),
         }
     }
+
+    /// This key as the transparent pipeline compiles it: the soft filters' static tap pattern and
+    /// the two-lookup cascade band, never the frame-keyed ones (renderer pass 2, P2-0.2: SH-01,
+    /// T-01 step 1). TAA takes a moving transparent's current sample almost whole (its reactive
+    /// coverage), so the frame-keyed taps and band dither reached the screen unaveraged: the lake's
+    /// shadow edges blinked while the camera moved.
+    const fn blended(self) -> SurfaceKey {
+        SurfaceKey { shadow_temporal: false, ..self }
+    }
 }
 
 /// The depth/normal prepass's pipelines (graph node 7) and the world pass's `Equal`-depth forward
@@ -841,9 +850,9 @@ pub struct Renderer {
     /// The camera's reprojection of the frame being drawn (last frame's view_proj × this frame's
     /// inverse; the identity without motion history): TAA's disocclusion test reads it.
     taa_reproject: [f32; 16],
-    /// The coverage the frame's transparent meshes write into TAA's reactive mask
-    /// ([`crate::post::taa::transparent_coverage`]), read before the uploads take the plan's
-    /// previous-model table.
+    /// The most coverage the frame's transparent meshes write into TAA's reactive mask, each its
+    /// material's alpha below it ([`crate::post::taa::transparent_coverage`]), read before the
+    /// uploads take the plan's previous-model table.
     transparent_coverage: f32,
 }
 
@@ -1038,7 +1047,8 @@ fn mesh_buffers_layout() -> [Option<wgpu::VertexBufferLayout<'static>>; 2] {
 }
 
 /// The scene-colour pipelines drawing into `format` with standard or `reversed` depth, their
-/// surfaces made for `surface` (specular AA on the HDR scene, the sun's shadow filter).
+/// surfaces made for `surface` (specular AA on the HDR scene, the sun's shadow filter; the
+/// transparent pipeline's for [`SurfaceKey::blended`]).
 fn scene_pipelines(device: &Device, layouts: &Layouts, samples: u32, format: TextureFormat, reversed: bool, surface: SurfaceKey) -> Result<ScenePipelines, RenderError> {
     let forward_module = shader(device, "forward", crate::shaders::FORWARD)?;
     let lines_module = shader(device, "lines", crate::shaders::LINES)?;
@@ -1055,6 +1065,7 @@ fn scene_pipelines(device: &Device, layouts: &Layouts, samples: u32, format: Tex
     // sRGB with no branch on the frame, so the off path draws exactly as before the follow-up.
     let hdr = [("GX_SCENE_HDR", f64::from(u8::from(reversed)))];
     let surfaces = surface_constants(reversed, surface);
+    let blended = surface_constants(reversed, surface.blended());
     let mesh_spec = |label, fragment, depth_write, blend| PipelineSpec {
         label,
         module: &forward_module,
@@ -1070,7 +1081,7 @@ fn scene_pipelines(device: &Device, layouts: &Layouts, samples: u32, format: Tex
     };
     Ok(ScenePipelines {
         forward: render_pipeline_with(device, &mesh_spec("forward", "fs_main", true, None), &surfaces),
-        blend: render_pipeline_with(device, &mesh_spec("transparent", "fs_blend", false, Some(BLEND_OVER)), &surfaces),
+        blend: render_pipeline_with(device, &mesh_spec("transparent", "fs_blend", false, Some(BLEND_OVER)), &blended),
         lines: render_pipeline_with(
             device,
             &PipelineSpec {
@@ -3262,8 +3273,7 @@ impl Renderer {
         let row = self.motion_history[set_index(temporal.set)].apply(plan, step);
         self.taa_reproject = crate::post::taa::reprojection(&row.prev_view_proj, &plan.frame.view_proj);
         // Read before the uploads take the previous-model table out of the plan.
-        let prev_view_proj = (!temporal.reset).then_some(&row.prev_view_proj);
-        self.transparent_coverage = crate::post::taa::transparent_coverage(&plan.frame.view_proj, prev_view_proj, &plan.transparent, &plan.prev_models, &plan.transparent_sources);
+        self.transparent_coverage = crate::post::taa::transparent_coverage(!temporal.reset, &plan.transparent, &plan.prev_models, &plan.transparent_sources);
         self.motion_row = Some(row);
         self.skinned_prev.written = Some((temporal.set, bytes));
         previous
@@ -4876,6 +4886,27 @@ mod surface_constants_tests {
         let mut faded = Quality::off();
         faded.shadows.fade_percent = 15;
         assert_eq!(constant(&faded, "GX_SUN_SOFT_EDGES"), 1.0, "a game's end fade on the legacy cascades is drawn");
+    }
+
+    /// Renderer pass 2, P2-0.2 (SH-01, T-01 step 1): under TAA the opaque pipelines turn the soft
+    /// shadow filters' taps with the frame, but the transparent pipeline compiles the static
+    /// pattern and the two-lookup cascade band (`GX_SHADOW_TEMPORAL` off): a blended pixel TAA does
+    /// not accumulate must carry no frame-keyed noise (the lake's shadows blinked while the camera
+    /// moved). Every other constant is the opaque pipeline's.
+    #[test]
+    fn the_transparent_pipeline_shades_a_static_shadow_kernel_under_taa() {
+        let desktop = DeviceClass::new(FormFactor::Desktop, PerformanceTier::High);
+        for preset in [QualityPreset::Medium, QualityPreset::High, QualityPreset::Ultra] {
+            let quality = preset_quality(preset, desktop);
+            let surface = SurfaceKey::of(&quality, true, true);
+            let value = |constants: &[(&'static str, f64)], name: &str| constants.iter().find(|(key, _)| *key == name).map(|(_, value)| *value);
+            let opaque = surface_constants(true, surface);
+            let blended = surface_constants(true, surface.blended());
+            assert_eq!(value(&opaque, "GX_SHADOW_TEMPORAL"), Some(1.0), "{preset:?}: the opaque surfaces turn with the frame under TAA");
+            assert_eq!(value(&blended, "GX_SHADOW_TEMPORAL"), Some(0.0), "{preset:?}: the transparent surfaces do not");
+            let others = |constants: &[(&'static str, f64)]| constants.iter().filter(|(key, _)| *key != "GX_SHADOW_TEMPORAL").copied().collect::<Vec<_>>();
+            assert_eq!(others(&opaque), others(&blended), "{preset:?}");
+        }
     }
 
     /// The legacy key the renderer starts from is the features-off quality's.
