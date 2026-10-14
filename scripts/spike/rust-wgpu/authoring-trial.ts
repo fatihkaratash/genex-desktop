@@ -156,7 +156,7 @@ const USAGE_EXIT = 2;
 const REPORT_SCHEMA = "genex-authoring-trial/1";
 const ASKS_SCHEMA = "genex-authoring-asks/1";
 const TRANSCRIPTS_SCHEMA = "genex-authoring-transcripts/1";
-const DRY_RUN_OUT = path.join(REPO, ".studio-dev/evidence/rust-wgpu-run/m0a/m0a.14a/dry-run");
+const DRY_RUN_OUT = path.join(REPO, ".studio-dev/evidence/rust-authoring-trial/dry-run");
 /** Said under a dry run's table, so its synthetic verdict is never read as a measurement. */
 const DRY_RUN_NOTE =
   "Dry run: synthetic fixture transcripts through the stub provider. These numbers test the driver, not the stacks.";

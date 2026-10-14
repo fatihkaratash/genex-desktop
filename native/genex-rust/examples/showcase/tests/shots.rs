@@ -7,7 +7,7 @@
 //!   GENEX_REQUIRE_METAL=1 node scripts/toolchains/rust-env.ts -- cargo test -p showcase --release \
 //!     --offline --locked --test shots -- --ignored metal --nocapture
 //!
-//! `GENEX_SHOWCASE_OUT` names the folder (default `.studio-dev/evidence/rust-wgpu-run/renderer/captures/latest`;
+//! `GENEX_SHOWCASE_OUT` names the folder (default `.studio-dev/evidence/rust-renderer/captures/latest`;
 //! the `captures/before` baseline only with `GENEX_SHOWCASE_WRITE_BEFORE=1`).
 //! Every shot is taken at tick 600 (ten seconds after seed 1): wind, water, fireflies and the
 //! animals are where they are at that tick; the scene has no history (no temporal effect). The
@@ -339,7 +339,7 @@ fn metal_studio_captures_keep_the_look_at_every_preset_and_phone_class() {
         return;
     }
     let dir = out_dir();
-    // RQ5 review: mobile-high (the owner's iPhone class: medium at 0.75 with FSR1) and desktop-high's
+    // RQ5 review: mobile-high (a typical iPhone's class: medium at 0.75 with FSR1) and desktop-high's
     // high at its lowest dynamic-resolution step (TAA, then EASU and RCAS) are looked at too.
     let classes = [
         DeviceClass::new(FormFactor::Mobile, PerformanceTier::High),

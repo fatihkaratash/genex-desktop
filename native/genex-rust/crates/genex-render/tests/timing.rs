@@ -355,7 +355,7 @@ fn timed_frame(gpu: &Gpu, busy: &Busy, timer: &mut GpuTimer) -> (Option<f32>, f3
 }
 
 fn write_evidence(name: &str, text: &str) {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../.studio-dev/evidence/rust-wgpu-run/renderer/perf");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../.studio-dev/evidence/rust-renderer/perf");
     if std::fs::create_dir_all(&dir).is_ok() {
         let _ = std::fs::write(dir.join(name), text);
     }

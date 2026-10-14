@@ -23,9 +23,9 @@ pub const SIZE: [u32; 2] = showcase_game::showcase::WORLD_SIZE;
 /// The tick every lakeside shot is taken at.
 pub const SHOT_TICK: u32 = 600;
 
-/// The evidence folder under the repository's `.studio-dev/evidence/rust-wgpu-run/renderer/`.
+/// The evidence folder under the repository's `.studio-dev/evidence/rust-renderer/`.
 pub fn evidence_dir(leaf: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../.studio-dev/evidence/rust-wgpu-run/renderer").join(leaf)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../.studio-dev/evidence/rust-renderer").join(leaf)
 }
 
 /// Whether `GENEX_REQUIRE_METAL=1` asks for the Metal adapter (a missing one fails the row).

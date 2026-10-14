@@ -9,7 +9,7 @@
 //!     --release --offline --locked --test template -- --ignored metal --nocapture
 //!
 //! It writes `template-<preset|class>.png` and `template-digests.json` to `GENEX_TEMPLATE_OUT`
-//! (default `.studio-dev/evidence/rust-wgpu-run/renderer/captures/RX/RX.3/template`).
+//! (default `.studio-dev/evidence/rust-renderer/captures/template`).
 
 #[path = "../../../../../src/game-template-rust/src/game.rs"]
 mod game;
@@ -145,7 +145,7 @@ fn the_gear_button_opens_the_settings_panel_and_a_choice_there_leaves_the_checks
 
 /// The captures folder: `GENEX_TEMPLATE_OUT`, or the RX.3 evidence folder.
 fn out_dir() -> PathBuf {
-    let evidence = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../.studio-dev/evidence/rust-wgpu-run/renderer/captures/RX/RX.3/template");
+    let evidence = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../.studio-dev/evidence/rust-renderer/captures/template");
     let dir = std::env::var_os("GENEX_TEMPLATE_OUT").map_or(evidence, PathBuf::from);
     std::fs::create_dir_all(&dir).expect("the captures folder");
     dir

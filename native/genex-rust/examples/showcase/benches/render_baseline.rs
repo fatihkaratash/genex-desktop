@@ -1,6 +1,6 @@
 //! The renderer perf harness (baseline row of the renderer follow-up): headless on the host GPU,
 //! fixed camera paths, CPU and GPU frame times as p50/p95, one JSON record per run in
-//! `.studio-dev/evidence/rust-wgpu-run/renderer/perf/`.
+//! `.studio-dev/evidence/rust-renderer/perf/`.
 //!
 //!   GENEX_REQUIRE_METAL=1 node scripts/toolchains/rust-env.ts -- cargo bench -p showcase --offline \
 //!     --locked --bench render-baseline

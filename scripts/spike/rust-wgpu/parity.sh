@@ -31,7 +31,7 @@
 #
 # Environment: GENEX_PARITY_TICKS (600), GENEX_PARITY_SEED (1), GENEX_PARITY_DEMO (cast),
 # GENEX_PARITY_WORK (<repo>/.studio-dev/parity), GENEX_PARITY_EVIDENCE
-# (<repo>/.studio-dev/evidence/rust-wgpu-run/m0a/m0a.9), GENEX_PARITY_CLIPPY_CONF_DIR (the folder
+# (<repo>/.studio-dev/evidence/rust-parity), GENEX_PARITY_CLIPPY_CONF_DIR (the folder
 # holding the store clippy.toml; pointing it at an empty folder is the lint row's red run),
 # GENEX_PARITY_LINUX_RECORD.
 #
@@ -47,7 +47,7 @@ PARITY_REPO="$(cd -P "$PARITY_SCRIPTS/../../.." && pwd -P)"
 PARITY_RUST_ENV="$PARITY_SCRIPTS/rust-env.sh"
 PARITY_WORKSPACE="$PARITY_REPO/native/genex-rust"
 PARITY_WORK="${GENEX_PARITY_WORK:-$PARITY_REPO/.studio-dev/parity}"
-PARITY_EVIDENCE="${GENEX_PARITY_EVIDENCE:-$PARITY_REPO/.studio-dev/evidence/rust-wgpu-run/m0a/m0a.9}"
+PARITY_EVIDENCE="${GENEX_PARITY_EVIDENCE:-$PARITY_REPO/.studio-dev/evidence/rust-parity}"
 PARITY_CLIPPY_CONF_DIR="${GENEX_PARITY_CLIPPY_CONF_DIR:-$PARITY_WORKSPACE}"
 PARITY_TICKS="${GENEX_PARITY_TICKS:-600}"
 PARITY_SEED="${GENEX_PARITY_SEED:-1}"

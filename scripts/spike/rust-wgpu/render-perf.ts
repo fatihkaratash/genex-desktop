@@ -24,7 +24,7 @@
  *   missing from the run. Other profiles, and the Lakeside scenes' `off` rows (remastered content,
  *   `INFORMATIONAL_OFF_SCENES`), report their ratios and never fail the gate.
  * - Records from different adapters, power sources or thermal states are never compared (refusal
- *   exit 78); the baseline is a local evidence file (`.studio-dev/evidence/rust-wgpu-run/renderer/perf/baseline.json`).
+ *   exit 78); the baseline is a local evidence file (`.studio-dev/evidence/rust-renderer/perf/baseline.json`).
  * - `--ab <tier>` interleaves runs of the saved executable `perf/bin/<tier>/` (`perf_matrix`, or the
  *   pre-refactor `render-baseline` bench, compared on the whole-frame metric both have) with the current
  *   build's, and compares the medians: old commits are never rebuilt. `--save-bin <tier>` saves the
@@ -58,7 +58,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 const REPO = path.resolve(import.meta.dirname, "../../..");
-const RENDERER_EVIDENCE = path.join(REPO, ".studio-dev", "evidence", "rust-wgpu-run", "renderer");
+const RENDERER_EVIDENCE = path.join(REPO, ".studio-dev", "evidence", "rust-renderer");
 /** The local perf evidence folder. */
 export const PERF_DIR = path.join(RENDERER_EVIDENCE, "perf");
 /** The recorded baseline (a local evidence file; the gate row skips without it). */

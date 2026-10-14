@@ -1,5 +1,5 @@
 //! The renderer perf matrix (plan RQ0.9): scenes × profiles × sizes on the host GPU, CPU and GPU
-//! frame times as p50/p95, one JSON record per run in `.studio-dev/evidence/rust-wgpu-run/renderer/perf/`.
+//! frame times as p50/p95, one JSON record per run in `.studio-dev/evidence/rust-renderer/perf/`.
 //! `scripts/spike/rust-wgpu/render-perf.ts` drives it (records the baseline, compares against it, runs
 //! the interleaved A/B against saved executables) and prints the feature costs against the plan's budgets.
 //!
