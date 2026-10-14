@@ -35,6 +35,7 @@ use crate::extension::{CustomMaterialId, PostPassId, PostStage};
 use crate::settle::HistoryReset;
 use crate::gpu::Gpu;
 use crate::immediate::{FrameReport, FrameRenderer, ImmediateFrame};
+use crate::letterbox::present::{PresentInto, WindowPresent};
 use crate::mesh::MeshData;
 use crate::meshlet::MeshletSet;
 use crate::overlay::OverlayPainter;
@@ -206,6 +207,8 @@ pub struct Resilient {
     keep_spare: bool,
     /// The renderer kept for other options, when one is.
     spare: Option<Spare>,
+    /// The window present's pipelines and letterbox-sized images, on this device.
+    window: WindowPresent,
 }
 
 impl Resilient {
@@ -232,6 +235,7 @@ impl Resilient {
             builds: 1,
             keep_spare: false,
             spare: None,
+            window: WindowPresent::default(),
         })
     }
 
@@ -391,12 +395,21 @@ impl Resilient {
     }
 
     /// Letterbox the world target into `target` (`window` pixels of `format`): Live's ring and a
-    /// window's frame; nothing is drawn while the device is lost.
+    /// window's frame, upscaled with FSR1 into a larger letterbox and filtered into a smaller one
+    /// ([`crate::letterbox::present`]); nothing is drawn while the device is lost.
     pub fn present(&mut self, target: &wgpu::TextureView, format: wgpu::TextureFormat, window: (u32, u32)) {
+        self.present_with(target, format, window, None);
+    }
+
+    /// [`Resilient::present`], then `overlay` (the HUD) painted over the letterbox at the window's
+    /// pixels, after the upscale. Answers the overlay's draws (0 while the device is lost).
+    pub fn present_with(&mut self, target: &wgpu::TextureView, format: wgpu::TextureFormat, window: (u32, u32), overlay: Option<&mut dyn OverlayPainter>) -> u32 {
         if self.watch.is_lost() {
-            return;
+            return 0;
         }
-        self.renderer.renderer_mut().present(&self.gpu, target, format, window);
+        let renderer = self.renderer.renderer();
+        let into = PresentInto { world: (renderer.world_view(), renderer.size()), target, format, window };
+        self.window.present(&self.gpu, &into, overlay)
     }
 
     /// Replace a custom material's uniforms (the replay keeps the new ones).
@@ -563,8 +576,9 @@ impl Resilient {
         }
         // A new device starts every history over (auto exposure adapts at once).
         renderer.reset_history(HistoryReset::DeviceRecreated);
-        // A spare was made on the lost device.
+        // A spare and the window present were made on the lost device.
         self.spare = None;
+        self.window = WindowPresent::default();
         self.watch = DeviceWatch::attach(&gpu);
         self.renderer = renderer;
         self.gpu = gpu;

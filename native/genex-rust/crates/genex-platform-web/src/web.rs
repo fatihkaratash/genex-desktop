@@ -436,7 +436,7 @@ fn present_to_canvas(graphics: &mut Graphics) {
         _ => return,
     };
     let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
-    screen.presenter.resilient.present(&view, canvas.config.format, size);
+    screen.presenter.present(&view, canvas.config.format, size);
     screen.presenter.gpu().queue.present(texture);
 }
 

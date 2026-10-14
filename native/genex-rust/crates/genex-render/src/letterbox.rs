@@ -1,5 +1,9 @@
 //! The letterbox: the world target keeps its aspect inside any window, centred, with black bars.
 //! Integer arithmetic, so the same sizes always give the same rectangle on every target.
+//! [`present`] draws the world into it, filtered by the ratio.
+
+/// The window present: the world target filtered into a window's letterbox.
+pub mod present;
 
 /// A rectangle of window pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

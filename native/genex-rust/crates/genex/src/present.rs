@@ -106,6 +106,7 @@ use genex_render::immediate::HUD_TAG;
 use genex_render::mesh::{CUBE_TRIANGLES, GlbMaterial, GlbModel, MeshData, SPHERE_TRIANGLES, decode_image};
 use genex_render::meshlet::MeshletSet;
 use genex_render::motion::DrawId;
+use genex_render::letterbox::letterbox;
 use genex_render::overlay::OverlayPainter;
 use genex_render::lights::SpotLight;
 use genex_render::scene::{CameraDesc, Lighting, Material, MeshId, PointLight, Scene, scaled};
@@ -119,8 +120,9 @@ use genex_render::{CullPath, Gpu, GpuCounters, ImmediateFrame, RenderCode, Rende
 /// The renderer's planes for a facade camera, which carries none.
 const NEAR_PLANE: f32 = 0.1;
 const FAR_PLANE: f32 = 1000.0;
-/// The world target is painted at one device pixel per world pixel: captures are taken at the
-/// logical world size, and Live and the canvas letterbox that picture.
+/// A capture paints the HUD into the world target at one device pixel per world pixel (captures
+/// are taken at the logical world size); Live paints it over the window after the upscale, at the
+/// letterbox's own ratio ([`Presenter::present`]).
 pub const WORLD_PIXELS_PER_POINT: f32 = 1.0;
 /// The native-enhanced features a game declares, as the lane compiles them in: wire names
 /// (`subgroup`, `ray-query`, ...) joined by commas. Absent or empty: WebGPU core only. The web is
@@ -523,6 +525,12 @@ pub struct Presenter {
     /// Every texture the HUD set so far (the font atlas first), frees applied: what a painter on
     /// a re-created device receives before anything else.
     hud_history: TexturesDelta,
+    /// The last Live frame's HUD, painted over the window after the upscale at every present
+    /// (its texture changes wait in `hud_unsent`); None after a capture, whose world carries its own.
+    live_hud: Option<HudPaint>,
+    /// Device pixels per HUD point of the last window present: what the next Live HUD is
+    /// tessellated at.
+    window_pixels_per_point: f32,
     source: Box<dyn ModelSource>,
     assets: AssetCache,
     /// Why the last frame was not drawn, until one is.
@@ -674,6 +682,8 @@ impl Presenter {
             hud,
             hud_unsent: TexturesDelta::default(),
             hud_history: TexturesDelta::default(),
+            live_hud: None,
+            window_pixels_per_point: WORLD_PIXELS_PER_POINT,
             source,
             assets: AssetCache::default(),
             failed: None,
@@ -974,7 +984,16 @@ impl Presenter {
         if std::mem::take(&mut self.keep_warm_frame) {
             self.warm_frame = Some(immediate.clone());
         }
-        let painted = paints(hud);
+        // Live paints the HUD over the window after the upscale (`Presenter::present`), so the world
+        // target is drawn without it; its texture changes stay in `hud` for `draw` to keep. A
+        // capture's world carries its own HUD, so a present after it paints none over it.
+        let live_hud = if self.capturing {
+            self.live_hud = None;
+            0
+        } else {
+            self.keep_live_hud(hud)
+        };
+        let painted = self.capturing && paints(hud);
         let mut overlay = HudOverlay { painter: &mut self.hud, paint: hud };
         let overlay: Option<&mut dyn OverlayPainter> = if painted { Some(&mut overlay) } else { None };
         let report = if self.capturing {
@@ -988,9 +1007,52 @@ impl Presenter {
             draw_once(&mut self.resilient, &mut self.passes, self.custom_passes, passes, tick, &immediate, overlay)?
         };
         let extra = |tag: &str| report.tags.iter().find(|(name, _)| name == tag).map_or(0, |(_, count)| *count);
-        drawn.draw_calls = drawn.draw_calls.saturating_add(extra(CUSTOM_TAG)).saturating_add(extra(HUD_TAG));
+        let hud_draws = extra(HUD_TAG).saturating_add(live_hud);
+        drawn.draw_calls = drawn.draw_calls.saturating_add(extra(CUSTOM_TAG)).saturating_add(hud_draws);
         drawn.gpu = report.gpu;
         Ok(drawn)
+    }
+
+    /// The window the next presents go to is `window` pixels: Live's HUD is tessellated at its
+    /// letterbox's ratio from the next frame on. A shell that knows its window before the first
+    /// frame says so (every present says so again), so even that frame's HUD lands on the
+    /// window's pixels.
+    pub fn set_window_size(&mut self, window: (u32, u32)) {
+        let world = self.resilient.renderer().renderer().size();
+        let view = letterbox(window, world);
+        if view.width > 0 && world.0 > 0 {
+            self.window_pixels_per_point = view.width as f32 / world.0 as f32;
+        }
+    }
+
+    /// Keep a Live frame's HUD primitives for the window presents (a capture keeps none); answers
+    /// how many, the frame's `hud`-tagged draws.
+    fn keep_live_hud(&mut self, hud: &mut HudPaint) -> u32 {
+        let primitives = std::mem::take(&mut hud.primitives);
+        let draws = u32::try_from(primitives.len()).unwrap_or(u32::MAX);
+        self.live_hud = Some(HudPaint { primitives, textures_delta: TexturesDelta::default(), pixels_per_point: hud.pixels_per_point });
+        draws
+    }
+
+    /// Letterbox the world target into a window's `target` (`window` pixels of `format`) through
+    /// the renderer's window present (FSR1 up, Catmull-Rom down), then paint the last Live frame's
+    /// HUD over the letterbox at the window's own pixels. Every shell presents through this: a
+    /// window's frame, the web canvas, a phone's surface and Studio's Live ring.
+    pub fn present(&mut self, target: &wgpu::TextureView, format: wgpu::TextureFormat, window: (u32, u32)) {
+        self.set_window_size(window);
+        let Some(mut paint) = self.live_hud.take() else {
+            self.resilient.present(target, format, window);
+            return;
+        };
+        paint.textures_delta = std::mem::take(&mut self.hud_unsent);
+        paint.pixels_per_point = self.window_pixels_per_point;
+        let painted = paints(&paint);
+        let mut overlay = HudOverlay { painter: &mut self.hud, paint: &mut paint };
+        let overlay: Option<&mut dyn OverlayPainter> = if painted { Some(&mut overlay) } else { None };
+        self.resilient.present_with(target, format, window, overlay);
+        // What the painter did not take (a lost device paints nothing) waits for the next one.
+        self.hud_unsent = std::mem::take(&mut paint.textures_delta);
+        self.live_hud = Some(paint);
     }
 
     /// Hand the pass registry this frame's render size and the renderer's pipeline-shaping facts;
@@ -1011,7 +1073,8 @@ impl Presenter {
     pub fn draw_view<W: Default + 'static>(&mut self, runtime: &mut Runtime<W>, view: View<'_>) -> Option<Result<Drawn, RenderError>> {
         let camera = runtime.camera(view)?;
         let frame = runtime.frame(view)?;
-        let mut hud = runtime.hud_paint(WORLD_PIXELS_PER_POINT);
+        let pixels_per_point = if self.capturing { WORLD_PIXELS_PER_POINT } else { self.window_pixels_per_point };
+        let mut hud = runtime.hud_paint(pixels_per_point);
         let handle = self.attach(runtime);
         let live = !self.capturing;
         // The frame's Level-2 extensions first: a v1 material it brings keeps it on the legacy LDR

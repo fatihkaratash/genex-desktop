@@ -145,7 +145,7 @@ mod mac {
             if sender.free_slot().is_none() {
                 return Presented::Skipped;
             }
-            presenter.resilient.present(&letterbox.view, WORLD_FORMAT, letterbox.size);
+            presenter.present(&letterbox.view, WORLD_FORMAT, letterbox.size);
             let gpu = presenter.gpu();
             match sender.present(&gpu.device, &gpu.queue, &letterbox.view) {
                 Ok(Some(_)) => {

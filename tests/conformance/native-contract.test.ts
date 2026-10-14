@@ -45,6 +45,7 @@ import {
   NativeBackend,
   NativeEnv,
   NativeError,
+  type NativeEmbedSize,
   NativeEvent,
   NativeFramesCode,
   NativeInputKind,
@@ -553,6 +554,16 @@ describe("Live's embedded size", () => {
     ["dpr Infinity", { width: 800, height: 600, dpr: Number.POSITIVE_INFINITY }],
     ["no dpr", { width: 800, height: 600 }],
     ["no height", { width: 800, dpr: 1 }],
+    ["device pixels as text", { width: 800, height: 600, dpr: 2, device: "1600x1200" }],
+    ["fractional device pixels", { width: 800, height: 600, dpr: 2, device: { width: 1600.5, height: 1200 } }],
+    ["zero device pixels", { width: 800, height: 600, dpr: 2, device: { width: 0, height: 1200 } }],
+    ["NaN device pixels", { width: 800, height: 600, dpr: 2, device: { width: Number.NaN, height: 1200 } }],
+    ["a missing device side", { width: 800, height: 600, dpr: 2, device: { width: 1600 } }],
+    ["device pixels far from the CSS size", { width: 800, height: 600, dpr: 2, device: { width: 1e6, height: 1200 } }],
+    [
+      "device pixels a few pixels off the CSS size",
+      { width: 800, height: 600, dpr: 2, device: { width: 1603, height: 1200 } },
+    ],
     ["null", null],
     ["an array", [800, 600, 2]],
     ["a string", "800x600"],
@@ -578,13 +589,30 @@ describe("Live's embedded size", () => {
     });
   });
 
-  const rings: Array<[string, { width: number; height: number; dpr: number }, { width: number; height: number }]> = [
+  it("accepts the canvas's device pixels within one CSS pixel of its CSS size, as a fresh copy", () => {
+    const device = { width: 1625, height: 915 };
+    const parsed = parseNativeEmbedSize({ width: 813, height: 458, dpr: 2, device });
+    assert.deepEqual(parsed, { width: 813, height: 458, dpr: 2, device });
+    assert.notEqual(parsed?.device, device);
+  });
+
+  const rings: Array<[string, NativeEmbedSize, { width: number; height: number }]> = [
     ["device pixels of a Retina canvas", { width: 800, height: 600, dpr: 2 }, { width: 1600, height: 1200 }],
     ["a fractional dpr rounds", { width: 333, height: 201, dpr: 1.5 }, { width: 500, height: 302 }],
     ["one pixel", { width: 1, height: 1, dpr: 1 }, { width: 1, height: 1 }],
     ["a square past the side cap halves", { width: 4096, height: 4096, dpr: 2 }, { width: 4096, height: 4096 }],
     ["a wide strip keeps its aspect", { width: 4000, height: 1000, dpr: 2 }, { width: 4096, height: 1024 }],
     ["a thin strip never reaches zero", { width: 4096, height: 1, dpr: 4 }, { width: 4096, height: 1 }],
+    [
+      "the canvas's device pixels when it reports them",
+      { width: 813, height: 458, dpr: 2, device: { width: 1625, height: 915 } },
+      { width: 1625, height: 915 },
+    ],
+    [
+      "device pixels past the side cap keep the cap and the aspect",
+      { width: 4000, height: 1000, dpr: 2, device: { width: 7999, height: 2000 } },
+      { width: 4096, height: 1024 },
+    ],
   ];
   for (const [label, size, expected] of rings)
     it(`rings: ${label}`, () => {

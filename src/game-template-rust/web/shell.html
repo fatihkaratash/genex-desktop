@@ -432,24 +432,48 @@
         return JSON.stringify(hints);
       }
 
-      /** The canvas's drawing buffer at its displayed size in device pixels (left alone when already there). */
-      function fitCanvas() {
+      /**
+       * The canvas's drawing buffer at its displayed size in device pixels (left alone when already
+       * there): the `device` box the observer reported when it covers the CSS size (within one CSS
+       * pixel a side), else the CSS size times the ratio. A CSS side is often fractional, and its
+       * rounded product a device pixel off, which the compositor would resample every frame.
+       */
+      function fitCanvas(device) {
         const ratio = window.devicePixelRatio || 1;
-        const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
-        const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
+        const css = [canvas.clientWidth * ratio, canvas.clientHeight * ratio];
+        const covers = device && Math.abs(device.width - css[0]) <= ratio && Math.abs(device.height - css[1]) <= ratio;
+        const width = Math.max(1, covers ? device.width : Math.round(css[0]));
+        const height = Math.max(1, covers ? device.height : Math.round(css[1]));
         if (canvas.width !== width) canvas.width = width;
         if (canvas.height !== height) canvas.height = height;
+      }
+
+      /** The device-pixel box a ResizeObserver entry reports, or undefined where the browser has none. */
+      function devicePixels(entry) {
+        const box = entry?.devicePixelContentBoxSize?.[0];
+        return box ? { width: box.inlineSize, height: box.blockSize } : undefined;
       }
 
       /**
        * Keep the canvas at its displayed size from the moment it is shown. The studio's Live view
        * can get its size while studio_boot still runs (it keeps a loading page at no size), so a
-       * listener added after the boot missed it and the game drew into a 1×1 canvas: black.
+       * listener added after the boot missed it and the game drew into a 1×1 canvas: black. Where
+       * the observer reports the device-pixel box it alone follows the canvas (a move to another
+       * screen changes that box too); elsewhere the window's resizes do as well.
        */
       function followCanvasSize() {
         fitCanvas();
-        window.addEventListener("resize", fitCanvas);
-        if (typeof ResizeObserver === "function") new ResizeObserver(fitCanvas).observe(canvas);
+        if (typeof ResizeObserver !== "function") {
+          window.addEventListener("resize", () => fitCanvas());
+          return;
+        }
+        const observer = new ResizeObserver((entries) => fitCanvas(devicePixels(entries.at(-1))));
+        try {
+          observer.observe(canvas, { box: "device-pixel-content-box" });
+        } catch {
+          observer.observe(canvas);
+          window.addEventListener("resize", () => fitCanvas());
+        }
       }
 
       function hex(bytes) {

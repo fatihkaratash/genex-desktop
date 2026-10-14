@@ -604,7 +604,7 @@ impl App {
                 return;
             }
         };
-        self.presenter.present(&mut device.presenter.resilient, &texture.texture, live.config.format, &presentation);
+        self.presenter.present(&mut device.presenter, &texture.texture, live.config.format, &presentation);
         device.gpu().queue.present(texture);
         let rendered = self.gate.tally().rendered;
         if !self.presented && rendered > 0 {

@@ -207,13 +207,24 @@ function useEmbedHold(box: RefObject<HTMLDivElement | null>, project: string, re
         })
         .catch(() => {});
     };
+    // The slot's exact device pixels, from the observer's device-pixel box where the browser
+    // reports one: the ring then matches the canvas pixel for pixel (no compositor resample).
+    let device: { width: number; height: number } | undefined;
     schedule.current = () => {
-      measured.current = embedSizeOf(element.getBoundingClientRect(), window.devicePixelRatio);
+      measured.current = embedSizeOf(element.getBoundingClientRect(), window.devicePixelRatio, device);
       if (!frame) frame = requestAnimationFrame(flush);
     };
     const observe = (): void => schedule.current();
-    const observer = new ResizeObserver(observe);
-    observer.observe(element);
+    const observer = new ResizeObserver((entries) => {
+      const box = entries.at(-1)?.devicePixelContentBoxSize?.[0];
+      device = box ? { width: box.inlineSize, height: box.blockSize } : undefined;
+      observe();
+    });
+    try {
+      observer.observe(element, { box: "device-pixel-content-box" });
+    } catch {
+      observer.observe(element);
+    }
     window.addEventListener("resize", observe);
     observe();
     return () => {

@@ -391,6 +391,8 @@ impl<W: Default + 'static> StudioGame for StudioRun<'_, W> {
         cfg!(target_os = "macos")
     }
     fn make_ring(&mut self, ring: &SurfaceArgs) -> Result<(), RingFault> {
+        // Live's HUD is tessellated for the new ring from the next frame on.
+        self.presenter.set_window_size((ring.width, ring.height));
         self.live.make_ring(&self.presenter, ring)
     }
     fn release_slot(&mut self, generation: u32, slot: u32) {

@@ -49,10 +49,19 @@ renderer enables it. In-pass nodes draw inside one world pass.
 | 12-15 | opaque, sky, Level-2 materials and `after-opaque`, transparent | in the world pass |
 | 15a, 16, 17 | reactive mask, MSAA resolve, TAA | pass |
 | 18-21 | `post-hdr`, bloom, exposure, tonemap | pass / compute |
-| 22-25 | upscale, 2D and `ldr` post, HUD, timestamps | pass / queue |
+| 22-25 | upscale, 2D and `ldr` post, HUD (captures), timestamps | pass / queue |
 
 The HDR path draws camera views reverse-Z (`Greater`, cleared to 0) on `Depth32Float`; the
 legacy path keeps standard Z. `GxFrameV2` and `GxPostV2` expose `depth_reversed`.
+
+## Window present
+
+Captures and goldens read the world target at the game's world size. Every shell (a window, the
+web canvas, a phone, Studio's Live ring) shows it through `Resilient::present`, which letterboxes
+it with `letterbox::present`: FSR1 EASU + RCAS into a letterbox larger than the world, a
+Catmull-Rom filter widened to the ratio into a smaller one, and a texel-for-texel copy only at the
+world's own size. Live paints the HUD over the letterbox after that, at the window's pixels
+(`genex::present::Presenter::present`); a capture paints it into the world target (node 24).
 
 ## Extension layouts
 

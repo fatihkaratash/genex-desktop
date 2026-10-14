@@ -24,6 +24,7 @@ import {
   NativeRunState,
   type NativeRunStatus,
   type NativeTextAction,
+  deviceSideFits,
   ringSizeFor,
 } from "../../../shared/native-contract.ts";
 import { NATIVE_WORDS } from "../../words.ts";
@@ -34,16 +35,36 @@ const DPR_MAX = 4;
 
 const clamp = (value: number, low: number, high: number): number => Math.min(high, Math.max(low, value));
 
-/** The size Live's canvas asks the game for: the slot's whole CSS pixels and the screen's ratio; null while it has no area. */
-export function embedSizeOf(rect: { width: number; height: number }, dpr: number): NativeEmbedSize | null {
+/**
+ * The size Live's canvas asks the game for: the slot's whole CSS pixels and the screen's ratio,
+ * with the slot's exact `device` pixels (`devicePixelContentBoxSize`) when the browser reported
+ * them and they still cover the CSS size (a report from before a resize is left out); null while
+ * the slot has no area.
+ */
+export function embedSizeOf(
+  rect: { width: number; height: number },
+  dpr: number,
+  device?: { width: number; height: number },
+): NativeEmbedSize | null {
   const width = Math.round(rect.width);
   const height = Math.round(rect.height);
   if (!(width >= 1 && height >= 1)) return null;
-  return {
+  const size = {
     width: Math.min(width, NATIVE_FRAME_SIDE_MAX),
     height: Math.min(height, NATIVE_FRAME_SIDE_MAX),
     dpr: Number.isFinite(dpr) ? clamp(dpr, DPR_MIN, DPR_MAX) : DPR_MIN,
   };
+  if (!device || !coversSlot(device, size)) return size;
+  return { ...size, device: { width: device.width, height: device.height } };
+}
+
+/** Whether `device` pixels are a whole-pixel box that covers `size`'s CSS sides at its ratio. */
+function coversSlot(device: { width: number; height: number }, size: NativeEmbedSize): boolean {
+  const whole =
+    Number.isInteger(device.width) && Number.isInteger(device.height) && device.width >= 1 && device.height >= 1;
+  return (
+    whole && deviceSideFits(device.width, size.width, size.dpr) && deviceSideFits(device.height, size.height, size.dpr)
+  );
 }
 
 /** The canvas's backing store before the first frame says otherwise: the ring the game makes for `size`. */
@@ -284,7 +305,9 @@ export function padChanges(
 /** The size to send the game after a frame's observations, or null when it already has `measured` (or nothing was measured). */
 export function resizeDue(sent: NativeEmbedSize | null, measured: NativeEmbedSize | null): NativeEmbedSize | null {
   if (!measured) return null;
-  const same = sent?.width === measured.width && sent.height === measured.height && sent.dpr === measured.dpr;
+  const sameDevice = sent?.device?.width === measured.device?.width && sent?.device?.height === measured.device?.height;
+  const same =
+    sent?.width === measured.width && sent.height === measured.height && sent.dpr === measured.dpr && sameDevice;
   return same ? null : measured;
 }
 

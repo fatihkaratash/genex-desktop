@@ -98,6 +98,7 @@ impl<W: Default + 'static> DesktopGame<W> {
             color_space: wgpu::SurfaceColorSpace::default(),
         };
         surface.configure(&gpu.device, &config);
+        self.presenter.set_window_size((config.width, config.height));
         self.window = Some(Window { surface, config });
     }
 
@@ -122,7 +123,7 @@ impl<W: Default + 'static> DesktopGame<W> {
     /// Letterbox the world target into `target`, `size` pixels of `format`: a window's frame and
     /// [`desktop_shot`]'s offscreen window alike.
     fn present_into(&mut self, target: &wgpu::TextureView, format: wgpu::TextureFormat, size: [u32; 2]) {
-        self.presenter.resilient.present(target, format, (size[0], size[1]));
+        self.presenter.present(target, format, (size[0], size[1]));
     }
 
     /// Present into an offscreen window of `size` in the window's format and read it back.
@@ -177,6 +178,8 @@ impl<W: Default + 'static> ShellGame for DesktopGame<W> {
         window.config.width = size[0].max(1);
         window.config.height = size[1].max(1);
         window.surface.configure(&device, &window.config);
+        let size = (window.config.width, window.config.height);
+        self.presenter.set_window_size(size);
     }
 
     fn surface_lost(&mut self) {
@@ -313,7 +316,9 @@ pub fn desktop_shot<W: Default + 'static>(
     window: [u32; 2],
 ) -> Result<DesktopShot, DesktopShotError> {
     let runtime = Runtime::new(game).unwrap_or_else(|error| panic!("genex::desktop_shot: {error}"));
-    let presenter = Presenter::open_with_root(runtime.world_size(), assets, None).map_err(DesktopShotError::Gpu)?;
+    let mut presenter = Presenter::open_with_root(runtime.world_size(), assets, None).map_err(DesktopShotError::Gpu)?;
+    // As a window's surface is configured before its first frame.
+    presenter.set_window_size((window[0], window[1]));
     let options = ShellOptions { max_frames: Some(frames.max(1)), studio: false };
     let shell = run_with(DesktopGame::new(runtime, presenter), ShellMode::Headless, options);
     let (mut game, exit) = shell.map_err(DesktopShotError::Shell)?;

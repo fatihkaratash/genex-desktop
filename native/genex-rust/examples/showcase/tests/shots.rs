@@ -575,6 +575,9 @@ fn metal_live_taa_frames_leave_no_trails_against_a_settled_capture() {
     for name in ["forest", "closeup", "wide"] {
         let Ok(mut presenter) = Presenter::open(showcase_game::showcase::WORLD_SIZE, showcase_game::assets()) else { return };
         let mut runtime = lakeside_at(SHOT_TICK - LIVE_TICKS);
+        // Live paints the HUD over the window after the upscale, never into the world target this
+        // reads, while a settled capture carries it: neither draws one here.
+        runtime.sim_mut().world.hud_hidden = true;
         assert!(presenter.install_for(&mut runtime).is_empty());
         presenter.draw_view(&mut runtime, View::Named(name)).expect("a view").expect("drawn");
         let reference_class = DeviceClass::new(FormFactor::Desktop, PerformanceTier::High);

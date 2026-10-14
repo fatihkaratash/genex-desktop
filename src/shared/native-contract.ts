@@ -654,6 +654,12 @@ export interface NativeEmbedSize {
   width: number;
   height: number;
   dpr: number;
+  /**
+   * The canvas's exact device pixels, when the browser reports them (`devicePixelContentBoxSize`):
+   * a slot's CSS side is often fractional, and its rounded CSS side times the ratio can be a
+   * device pixel off, which the compositor would then resample every frame.
+   */
+  device?: { width: number; height: number };
 }
 
 /** The highest device-pixel ratio Live sends. */
@@ -663,23 +669,52 @@ const isEmbedSide = (value: unknown): value is number =>
   Number.isInteger(value) && Number(value) >= 1 && Number(value) <= NATIVE_FRAME_SIDE_MAX;
 const isEmbedDpr = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= EMBED_DPR_MAX;
+const isDeviceSide = (value: unknown): value is number =>
+  Number.isInteger(value) && Number(value) >= 1 && Number(value) <= NATIVE_FRAME_SIDE_MAX * EMBED_DPR_MAX;
 
-/** Checks a renderer-sent embed size: integer CSS sides 1..`NATIVE_FRAME_SIDE_MAX`, a dpr in [1, 4]; a copy, or null. */
-export function parseNativeEmbedSize(value: unknown): NativeEmbedSize | null {
+/**
+ * Whether `device` pixels cover a `css`-pixel side at `dpr`: within one CSS pixel (the CSS side is
+ * the rounded one, the device side the snapped box).
+ */
+export const deviceSideFits = (device: number, css: number, dpr: number): boolean =>
+  Math.abs(device - css * dpr) <= dpr;
+
+/** Checks an embed size's device pixels against its CSS sides: a copy, or null. */
+function parseEmbedDevice(
+  value: unknown,
+  width: number,
+  height: number,
+  dpr: number,
+): { width: number; height: number } | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const { width, height, dpr } = value as Record<string, unknown>;
-  if (!isEmbedSide(width) || !isEmbedSide(height) || !isEmbedDpr(dpr)) return null;
-  return { width, height, dpr };
+  const device = value as Record<string, unknown>;
+  if (!isDeviceSide(device.width) || !isDeviceSide(device.height)) return null;
+  const fits = deviceSideFits(device.width, width, dpr) && deviceSideFits(device.height, height, dpr);
+  return fits ? { width: device.width, height: device.height } : null;
 }
 
 /**
- * The ring a canvas of `size` asks the game for, in device pixels: the CSS sides times the dpr,
- * scaled down with the aspect kept until each side is at most `NATIVE_FRAME_SIDE_MAX` and the slot
- * at most `NATIVE_FRAME_PIXELS_MAX` pixels; never below one pixel a side.
+ * Checks a renderer-sent embed size: integer CSS sides 1..`NATIVE_FRAME_SIDE_MAX`, a dpr in [1, 4]
+ * and, when sent, integer device sides within one CSS pixel of the CSS sides; a copy, or null.
+ */
+export function parseNativeEmbedSize(value: unknown): NativeEmbedSize | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const { width, height, dpr, device } = value as Record<string, unknown>;
+  if (!isEmbedSide(width) || !isEmbedSide(height) || !isEmbedDpr(dpr)) return null;
+  if (device === undefined) return { width, height, dpr };
+  const pixels = parseEmbedDevice(device, width, height, dpr);
+  return pixels ? { width, height, dpr, device: pixels } : null;
+}
+
+/**
+ * The ring a canvas of `size` asks the game for, in device pixels: the canvas's own device pixels
+ * when it reported them, else the CSS sides times the dpr, scaled down with the aspect kept until
+ * each side is at most `NATIVE_FRAME_SIDE_MAX` and the slot at most `NATIVE_FRAME_PIXELS_MAX`
+ * pixels; never below one pixel a side.
  */
 export function ringSizeFor(size: NativeEmbedSize): { width: number; height: number } {
-  const width = Math.max(1, Math.round(size.width * size.dpr));
-  const height = Math.max(1, Math.round(size.height * size.dpr));
+  const width = Math.max(1, size.device?.width ?? Math.round(size.width * size.dpr));
+  const height = Math.max(1, size.device?.height ?? Math.round(size.height * size.dpr));
   const longest = Math.max(width, height);
   const sided =
     longest <= NATIVE_FRAME_SIDE_MAX

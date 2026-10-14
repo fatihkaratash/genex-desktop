@@ -81,6 +81,43 @@ describe("the canvas's size and the pointer's place on the game", () => {
       }
   });
 
+  it("asks for the slot's exact device pixels when the browser reports them, so the ring is never resampled", () => {
+    // A flex slot 812.5 CSS px wide at dpr 2 covers 1625 device px; the rounded CSS side gave 1626,
+    // and the compositor stretched every frame by 1625/1626 (renderer pass 2, TS-F3).
+    const device = { width: 1625, height: 915 };
+    const size = embedSizeOf({ width: 812.5, height: 457.5 }, 2, device);
+    assert.deepEqual(size, { width: 813, height: 458, dpr: 2, device });
+    assert.deepEqual(
+      canvasBacking(size ?? { width: 0, height: 0, dpr: 1 }),
+      device,
+      "the ring is the device-pixel box",
+    );
+    assert.deepEqual(parseNativeEmbedSize(size), size, "main accepts it");
+    // At a fractional ratio (Windows 125%, page zoom) the rounding error is a whole device pixel too.
+    const zoomed = embedSizeOf({ width: 640.4, height: 360.2 }, 1.25, { width: 801, height: 450 });
+    assert.deepEqual(canvasBacking(zoomed ?? { width: 0, height: 0, dpr: 1 }), { width: 801, height: 450 });
+    // A report that no longer matches the slot (a resize between the two) is left out: CSS times the ratio.
+    const stale = embedSizeOf({ width: 812.5, height: 457.5 }, 2, { width: 1400, height: 915 });
+    assert.deepEqual(stale, { width: 813, height: 458, dpr: 2 });
+    assert.deepEqual(
+      embedSizeOf({ width: 9000, height: 20 }, 1, { width: 9000, height: 20 }),
+      {
+        width: NATIVE_FRAME_SIDE_MAX,
+        height: 20,
+        dpr: 1,
+      },
+      "a capped side drops the device pixels",
+    );
+  });
+
+  it("asks again when only the device pixels changed", () => {
+    const sent = { width: 813, height: 458, dpr: 2, device: { width: 1625, height: 915 } };
+    assert.equal(resizeDue(sent, { ...sent, device: { ...sent.device } }), null);
+    const moved = { ...sent, device: { width: 1626, height: 915 } };
+    assert.deepEqual(resizeDue(sent, moved), moved);
+    assert.deepEqual(resizeDue({ width: 813, height: 458, dpr: 2 }, sent), sent);
+  });
+
   it("backs the canvas with the ring (CSS pixels times the ratio, within the ring caps) while CSS keeps the slot", () => {
     assert.deepEqual(canvasBacking({ width: 800, height: 450, dpr: 2 }), { width: 1600, height: 900 });
     assert.deepEqual(canvasBacking({ width: 800, height: 450, dpr: 1 }), { width: 800, height: 450 });

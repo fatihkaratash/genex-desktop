@@ -606,6 +606,66 @@ describe("the Rust web shell sizes its canvas to the page, whenever the page get
       served.close();
     }
   });
+
+  // Renderer pass 2 (TS-F3): a canvas whose CSS side is fractional (a flex slot, a zoomed page)
+  // covers a device-pixel box its rounded CSS side times the ratio misses by a pixel, and the
+  // compositor then resampled every frame of the game.
+  it("backs a canvas of fractional CSS size with exactly its device-pixel box", async () => {
+    const root = await tmpDir("rust-shell-device-pixels-");
+    await mkdir(root, { recursive: true });
+    await writeFile(path.join(root, "index.html"), webShellPage(await readFile(SHELL, "utf8"), "Device pixels"));
+    await writeFile(path.join(root, "assets.json"), JSON.stringify({ version: 1, files: [] }));
+    await writeFile(path.join(root, "game.js"), HELD_BOOT_MODULE);
+    const served = await serve(root);
+    // Headless Chromium's emulated ratios leave the device-pixel box in CSS pixels, so the row runs
+    // at 1 and makes the box miss the rounded CSS size with a sub-pixel offset and width instead.
+    const context = await browser.newContext({ viewport: { width: 800, height: 450 }, deviceScaleFactor: 1 });
+    try {
+      const page = await context.newPage();
+      await page.addInitScript(CORE_ADAPTER);
+      await page.goto(`${served.origin}/index.html?paused`);
+      await page.waitForFunction(
+        () => typeof (window as unknown as { __releaseBoot?: unknown }).__releaseBoot === "function",
+        null,
+        { timeout: BOOT_TIMEOUT_MS },
+      );
+      await page.addStyleTag({
+        content: "#game { margin: 0.3px 0 0 0.3px; width: 640.4px !important; height: 360.4px !important; }",
+      });
+      await page.evaluate(() => (window as unknown as { __releaseBoot: () => void }).__releaseBoot());
+      await page.waitForFunction(
+        (running) => (window as unknown as ShellWindow).GenexShell?.status.state === running,
+        ShellState.Running,
+        { timeout: BOOT_TIMEOUT_MS },
+      );
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const seen = await page.evaluate(
+        () =>
+          new Promise<{ backing: number[]; box: number[]; css: number[] }>((done) => {
+            const canvas = document.getElementById("game") as HTMLCanvasElement;
+            const observer = new ResizeObserver((entries) => {
+              observer.disconnect();
+              const box = entries[0].devicePixelContentBoxSize[0];
+              const css = [
+                Math.round(canvas.clientWidth * devicePixelRatio),
+                Math.round(canvas.clientHeight * devicePixelRatio),
+              ];
+              done({ backing: [canvas.width, canvas.height], box: [box.inlineSize, box.blockSize], css });
+            });
+            observer.observe(canvas, { box: "device-pixel-content-box" });
+          }),
+      );
+      assert.notDeepEqual(
+        seen.css,
+        seen.box,
+        `the row needs a CSS size whose rounding misses the box: ${JSON.stringify(seen)}`,
+      );
+      assert.deepEqual(seen.backing, seen.box, `the drawing buffer is the device-pixel box: ${JSON.stringify(seen)}`);
+    } finally {
+      await context.close();
+      served.close();
+    }
+  });
 });
 
 // ── the shell's display frames on a jittery browser clock ──
