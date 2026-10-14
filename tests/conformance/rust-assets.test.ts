@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { type ImportSandbox, importRustAssets, type RustAssetImportDeps } from "../../src/main/rust-assets.ts";
 import { BuildTarget, GameStack } from "../../src/shared/game-project.ts";
 import { convertAsset } from "../../src/substrate/asset-import/convert.ts";
-import { meshToGlb, readGlb, writeGlb } from "../../src/substrate/asset-import/glb.ts";
+import { GltfComponent, meshToGlb, readGlb, writeGlb } from "../../src/substrate/asset-import/glb.ts";
 import { normalizeGltf } from "../../src/substrate/asset-import/gltf-decompress.ts";
 import {
   AssetImportRefusal,
@@ -24,6 +24,7 @@ import {
   planImport,
 } from "../../src/substrate/asset-import/import-plan.ts";
 import { transcodeKtx2 } from "../../src/substrate/asset-import/ktx2.ts";
+import { objToMesh } from "../../src/substrate/asset-import/obj.ts";
 import { isSafeAssetPath, readGameAsset } from "../../src/substrate/asset-import/safe-asset.ts";
 import {
   BASIS_TRANSCODE_FORMAT,
@@ -529,6 +530,119 @@ describe("glTF the runtime can read", () => {
     assert.equal(sha(await normalizeGltf(bytes, "glb")), sha(bytes));
   });
 });
+
+describe("quantized glTF (KHR_mesh_quantization, gltfpack's default)", () => {
+  it("gltfpack's quantized Suzanne is dequantized: float attributes, the same vertices, its uv transform baked", async () => {
+    const bytes = new Uint8Array(await readFile(path.join(IMPORT, "quantized.glb")));
+    assert.deepEqual((readGlb(bytes).json as Json).extensionsRequired, ["KHR_mesh_quantization"]);
+    const plain = await normalizeGltf(bytes, "glb");
+    const { json, bin } = readGlb(plain) as { json: Json; bin: Uint8Array };
+    assert.equal(json.extensionsUsed, undefined, "KHR_mesh_quantization and the baked KHR_texture_transform are gone");
+    assert.equal(json.extensionsRequired, undefined);
+    assert.equal(json.materials[0].pbrMetallicRoughness.baseColorTexture.extensions, undefined);
+    const primitive = json.meshes[0].primitives[0];
+    for (const semantic of ["POSITION", "NORMAL", "TEXCOORD_0"]) {
+      const accessor = json.accessors[primitive.attributes[semantic]];
+      assert.equal(accessor.componentType, GltfComponent.Float, semantic);
+      assert.equal(accessor.normalized, undefined, semantic);
+    }
+    const read = (semantic: string) => floatAttribute(json, bin, primitive.attributes[semantic]);
+    const [scale, offset] = [json.nodes[0].scale as number[], json.nodes[0].translation as number[]];
+    const positions = read("POSITION").map((p) => p.map((v, c) => v * (scale[c] ?? 1) + (offset[c] ?? 0)));
+    const box = json.accessors[primitive.attributes.POSITION];
+    assert.deepEqual([box.min, box.max], boundsOf(read("POSITION")), "POSITION's min and max are the float data's");
+    const normals = read("NORMAL");
+    const uvs = read("TEXCOORD_0");
+    const source = objToMesh(await readFile(path.join(SAMPLES, "model.obj"), "utf8"), null, "", "suzanne");
+    const original = source.primitives.flatMap((p) => vertices(p.positions, p.normals, p.uvs));
+    // One step of gltfpack's 14-bit grid along each axis: the node's scale.
+    const step = Math.hypot(...scale);
+    for (const [at, position] of positions.entries()) {
+      const found = original.some(
+        (v) =>
+          distance(v.position, position) < step &&
+          distance(v.normal, normals[at] ?? []) < 2e-2 &&
+          distance(v.uv, uvs[at] ?? []) < 1e-3,
+      );
+      assert.ok(found, `vertex ${at} is one of the OBJ's within the quantization step`);
+    }
+    assert.equal(sha(await normalizeGltf(bytes, "glb")), sha(plain), "deterministic");
+    const golden = new Uint8Array(await readFile(path.join(IMPORT, "quantized.plain.glb")));
+    assert.equal(sha(plain), sha(golden), "the runtime's fixture (genex-render tests/mesh.rs) is this output");
+  });
+
+  const hostileQuantized: Array<[string, (json: Json) => void]> = [
+    ["an accessor past its view's end", (json) => Object.assign(json.accessors[1], { count: 1_000_000 })],
+    ["a sparse quantized accessor", (json) => Object.assign(json.accessors[1], { sparse: { count: 1 } })],
+    ["an accessor that is both JOINTS_0 and NORMAL", (json) => (json.meshes[0].primitives[0].attributes.JOINTS_0 = 1)],
+    ["a component type glTF does not have", (json) => (json.accessors[1].componentType = 5124)],
+    ["a view outside the binary chunk", (json) => (json.bufferViews[2].byteOffset = 1 << 30)],
+  ];
+  for (const [what, damage] of hostileQuantized) {
+    it(`a quantized GLB with ${what} is refused malformed`, async () => {
+      const { json, bin } = readGlb(new Uint8Array(await readFile(path.join(IMPORT, "quantized.glb")))) as {
+        json: Json;
+        bin: Uint8Array;
+      };
+      damage(json);
+      const result = await convertAsset({
+        converter: ImportConverter.GltfDecompress,
+        ext: "glb",
+        name: "x",
+        bytes: writeGlb(json, bin),
+        targets: [BuildTarget.Mac],
+      });
+      assert.equal(!result.ok && result.refusal, AssetImportRefusal.Malformed, JSON.stringify(result));
+    });
+  }
+
+  it("a .gltf requiring KHR_mesh_quantization is refused unsupported-extension (deliver it as GLB)", async () => {
+    const json = {
+      asset: { version: "2.0" },
+      extensionsUsed: ["KHR_mesh_quantization"],
+      extensionsRequired: ["KHR_mesh_quantization"],
+    };
+    const result = await convertAsset({
+      converter: ImportConverter.GltfDecompress,
+      ext: "gltf",
+      name: "x",
+      bytes: new TextEncoder().encode(JSON.stringify(json)),
+      targets: [BuildTarget.Mac],
+    });
+    assert.equal(!result.ok && result.refusal, AssetImportRefusal.UnsupportedExtension);
+  });
+});
+
+/** A float accessor's elements, each an array of its components. */
+function floatAttribute(json: Json, bin: Uint8Array, at: number): number[][] {
+  const accessor = json.accessors[at];
+  const view = json.bufferViews[accessor.bufferView];
+  const width = ({ SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 } as Record<string, number>)[accessor.type] ?? 1;
+  const stride = view.byteStride ?? width * 4;
+  const data = new DataView(bin.buffer, bin.byteOffset + (view.byteOffset ?? 0) + (accessor.byteOffset ?? 0));
+  return Array.from({ length: accessor.count }, (_, i) =>
+    Array.from({ length: width }, (_, c) => data.getFloat32(i * stride + c * 4, true)),
+  );
+}
+
+/** Per-component bounds as glTF stores them (single-precision values). */
+function boundsOf(elements: number[][]): [number[], number[]] {
+  const width = elements[0]?.length ?? 0;
+  const min = Array.from({ length: width }, (_, c) => Math.min(...elements.map((e) => e[c] ?? 0)));
+  const max = Array.from({ length: width }, (_, c) => Math.max(...elements.map((e) => e[c] ?? 0)));
+  return [min.map(Math.fround), max.map(Math.fround)];
+}
+
+function vertices(positions: Float32Array, normals?: Float32Array, uvs?: Float32Array) {
+  return Array.from({ length: positions.length / 3 }, (_, i) => ({
+    position: [...positions.subarray(i * 3, i * 3 + 3)],
+    normal: normals ? [...normals.subarray(i * 3, i * 3 + 3)] : [0, 0, 0],
+    uv: uvs ? [...uvs.subarray(i * 2, i * 2 + 2)] : [0, 0],
+  }));
+}
+
+const distance = (a: readonly number[], b: readonly number[]) =>
+  Math.hypot(...a.map((value, c) => value - (b[c] ?? Number.NaN)));
 
 /**
  * `glb` with its first buffer view (the positions) re-encoded as meshopt ATTRIBUTES (codec

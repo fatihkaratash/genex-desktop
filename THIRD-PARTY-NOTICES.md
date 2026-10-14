@@ -371,6 +371,43 @@ this page ships beside the decoders.
 | `examples/jsm/libs/meshopt_decoder.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) 1.1.1 decoder | MIT |
 | `examples/jsm/libs/meshopt_clusterizer.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) meshlet clusterizer (a development build between 1.1.1 and 1.2.0); the importer stores its meshlets in glTF `extras` | MIT |
 
+## Asset importer ports
+
+Code of the Rust · wgpu asset import step (`src/substrate/asset-import/`) ported from other
+projects. The test fixture `tests/fixtures/asset-import/quantized.glb` is the output of
+[gltfpack](https://github.com/zeux/meshoptimizer) 1.3.0 (MIT, the meshoptimizer licence below);
+gltfpack itself is not in the repository.
+
+| Genex file | What | Source | Upstream author | Licence |
+| --- | --- | --- | --- | --- |
+| `src/substrate/asset-import/dequantize.ts` | `KHR_mesh_quantization` undone: which attributes become float32 (every one but `JOINTS_n`, morph targets too) and the normalized-integer division with its -1 clamp | glTF-Transform 4.5.1 (https://github.com/donmccurdy/glTF-Transform), `packages/functions/src/dequantize.ts` and `packages/core/src/utils/math-utils.ts` (`decodeNormalizedInt`) | Don McCurdy | MIT (see [glTF-Transform](#gltf-transform)) |
+
+### glTF-Transform
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2024 Don McCurdy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Components under other terms
 
 - Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) ships in the package. It is not open

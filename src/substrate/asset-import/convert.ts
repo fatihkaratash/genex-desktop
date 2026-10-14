@@ -5,7 +5,8 @@
  */
 import type { BuildTarget } from "../../shared/game-project.ts";
 import { meshToGlb } from "./glb.ts";
-import { GltfImportError, normalizeGltf } from "./gltf-decompress.ts";
+import { normalizeGltf } from "./gltf-decompress.ts";
+import { GltfImportError } from "./gltf-json.ts";
 import { checkRadiance, HdrError } from "./hdr.ts";
 import { AssetImportRefusal, ImportConverter } from "./import-plan.ts";
 import { isBasisKtx2, Ktx2Error, readKtx2Header, transcodeKtx2 } from "./ktx2.ts";

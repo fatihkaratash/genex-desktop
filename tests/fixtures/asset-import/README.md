@@ -13,3 +13,9 @@ texture inputs are the shared samples in `../asset-previews/`.
   digest. A transcoder change shows here first.
 - `texture-table.json`: the per-destination texture table both sides keep.
 - `hostile-importer.mjs`: a stand-in importer that tries what its sandbox must refuse.
+- `quantized.glb`: the Suzanne OBJ sample (`../asset-previews/model.obj`) with a 4x4 checker as its
+  base-colour texture, written as a GLB by the import step's converter and packed by
+  [gltfpack](https://github.com/zeux/meshoptimizer) 1.3.0 (npm `gltfpack`, MIT) with its defaults:
+  `KHR_mesh_quantization` (14-bit positions under a node scale, 8-bit normals, 12-bit uvs under
+  `KHR_texture_transform`). `quantized.plain.glb` is what the import step writes from it
+  (`normalizeGltf`); the runtime's mesh tests load that file.
