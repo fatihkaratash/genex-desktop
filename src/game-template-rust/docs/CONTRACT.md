@@ -86,6 +86,8 @@ the preview. Each forwards to the host verb of its name, except the page shapes 
 | `audio` | Mute with `{muted}`; the web build does not measure a level. |
 | `renderSettings` | As the host verb; a refusal comes back as `{__refused: code}`, which the studio reads as the host verb's refusal. |
 | `capture` | Draw a view, read back the world target (never the canvas) and hand the picture to the studio. |
+| `begin` | Not bound: the shell has no title flow to skip, so the call is refused and the harness presses the game's declared start keys or waits for play. |
+| `assist` | Not bound: the shell has no steering assist, so the call is refused and the harness's drive holds the throttle with nothing steering. |
 
 ## GPU floor and tiers
 
