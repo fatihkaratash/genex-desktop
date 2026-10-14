@@ -1313,8 +1313,17 @@ impl V2FrameKey {
     }
 }
 
+/// A Level-2 pipeline: made on the compile pool inside error scopes, `Err` with wgpu's message when
+/// the backend refused it (renderer pass 2, RC-04).
+type CheckedPipeline = Compiled<Result<RenderPipeline, String>>;
+
+/// The typed refusal of a source whose pipeline failed after naga accepted it.
+fn pipeline_failed(message: &str) -> RenderError {
+    invalid(format!("its pipeline failed: {message}"))
+}
+
 struct CustomMaterial {
-    pipeline: Compiled<RenderPipeline>,
+    pipeline: CheckedPipeline,
     extension: ValidatedExtension,
     game: Option<GameGroup>,
 }
@@ -1553,7 +1562,7 @@ impl CustomMaterials {
         Ok(())
     }
 
-    fn pipeline(&self, extension: &ValidatedExtension, game: Option<&BindGroupLayout>) -> Compiled<RenderPipeline> {
+    fn pipeline(&self, extension: &ValidatedExtension, game: Option<&BindGroupLayout>) -> CheckedPipeline {
         let device = &self.device;
         let api = extension.api;
         let module = shader_module(device, "custom material", extension);
@@ -1567,7 +1576,7 @@ impl CustomMaterials {
         let sun = self.sun_shadows.constants();
         let constants: &[(&str, f64)] = if api == ABI_V1 { &[] } else { &sun };
         let options = wgpu::PipelineCompilationOptions { constants, ..Default::default() };
-        crate::compile::render_pipeline(device, &wgpu::RenderPipelineDescriptor {
+        crate::compile::render_pipeline_checked(device, &wgpu::RenderPipelineDescriptor {
             label: Some("custom material"),
             layout: Some(&layout),
             vertex: wgpu::VertexState { module: &module, entry_point: Some(ExtensionKind::Material.vertex_entry(api)), compilation_options: options.clone(), buffers: &buffers },
@@ -1606,6 +1615,10 @@ impl CustomMaterials {
             v2_group(gpu, &extension, uniforms, textures, shared)?
         };
         let pipeline = self.pipeline(&extension, game.as_ref().map(|g| &g.layout));
+        // Admission waits for its own compile: a pipeline the backend refuses is refused here.
+        if let Err(message) = pipeline.get() {
+            return Err(pipeline_failed(message));
+        }
         self.materials.push(CustomMaterial { pipeline, extension, game });
         Ok(CustomMaterialId((self.materials.len() - 1) as u32))
     }
@@ -1618,7 +1631,7 @@ impl CustomMaterials {
             return false;
         }
         self.sun_shadows = sun;
-        let rebuilt: Vec<(usize, Compiled<RenderPipeline>)> = self
+        let rebuilt: Vec<(usize, CheckedPipeline)> = self
             .materials
             .iter()
             .enumerate()
@@ -1646,7 +1659,7 @@ impl CustomMaterials {
         self.facts = facts;
         // The neutral depth input follows the depth convention.
         self.frame_group_v2 = None;
-        let pipelines: Vec<Compiled<RenderPipeline>> = self.materials.iter().map(|m| self.pipeline(&m.extension, m.game.as_ref().map(|g| &g.layout))).collect();
+        let pipelines: Vec<CheckedPipeline> = self.materials.iter().map(|m| self.pipeline(&m.extension, m.game.as_ref().map(|g| &g.layout))).collect();
         for (material, pipeline) in self.materials.iter_mut().zip(pipelines) {
             material.pipeline = pipeline;
         }
@@ -1804,7 +1817,9 @@ impl CustomMaterials {
                 pass.set_bind_group(0, frame_group, &[]);
                 bound_api = Some(api);
             }
-            pass.set_pipeline(&material.pipeline);
+            // A rebuild the backend refused draws nothing (its admission compiled clean).
+            let Ok(pipeline) = material.pipeline.get() else { continue };
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(1, draw_group, &[(i as u64 * DRAW_STRIDE) as u32]);
             if let Some(game) = &material.game {
                 pass.set_bind_group(2, &game.group, &[]);
@@ -1909,7 +1924,7 @@ impl PostFrame<'_> {
 }
 
 struct PostPass {
-    pipeline: Compiled<RenderPipeline>,
+    pipeline: CheckedPipeline,
     extension: ValidatedExtension,
     stage: PostStage,
     format: TextureFormat,
@@ -2014,7 +2029,7 @@ impl PostPasses {
         }
     }
 
-    fn pipeline(&self, extension: &ValidatedExtension, format: TextureFormat, game: Option<&BindGroupLayout>) -> Compiled<RenderPipeline> {
+    fn pipeline(&self, extension: &ValidatedExtension, format: TextureFormat, game: Option<&BindGroupLayout>) -> CheckedPipeline {
         let device = &self.device;
         let api = extension.api;
         let module = shader_module(device, "post pass", extension);
@@ -2025,7 +2040,7 @@ impl PostPasses {
         };
         let layout = pipeline_layout(device, "post pass", &groups);
         let targets = [Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })];
-        crate::compile::render_pipeline(device, &wgpu::RenderPipelineDescriptor {
+        crate::compile::render_pipeline_checked(device, &wgpu::RenderPipelineDescriptor {
             label: Some("post pass"),
             layout: Some(&layout),
             vertex: wgpu::VertexState { module: &module, entry_point: Some(ExtensionKind::PostPass.vertex_entry(api)), compilation_options: Default::default(), buffers: &[] },
@@ -2070,6 +2085,10 @@ impl PostPasses {
         };
         let format = self.format_at(stage);
         let pipeline = self.pipeline(&extension, format, game.as_ref().map(|g| &g.layout));
+        // Admission waits for its own compile: a pipeline the backend refuses is refused here.
+        if let Err(message) = pipeline.get() {
+            return Err(pipeline_failed(message));
+        }
         self.passes.push(PostPass { pipeline, extension, stage, format, game });
         Ok(PostPassId((self.passes.len() - 1) as u32))
     }
@@ -2089,7 +2108,7 @@ impl PostPasses {
             return Ok(false);
         }
         self.facts = facts;
-        let rebuilt: Vec<(TextureFormat, Compiled<RenderPipeline>)> = self
+        let rebuilt: Vec<(TextureFormat, CheckedPipeline)> = self
             .passes
             .iter()
             .map(|pass| {
@@ -2193,9 +2212,11 @@ impl PostPasses {
         let (texture, view) = target;
         let size = texture.size();
         let (copy, source) = self.scratch(texture);
-        self.write_params(gpu, ids, size, frame);
+        self.write_params(gpu, &running, size, frame);
         for (i, index) in running {
             let pass = &self.passes[index];
+            // A rebuild the backend refused draws nothing (its admission compiled clean).
+            let Ok(pipeline) = pass.pipeline.get() else { continue };
             if pass.format != texture.format() {
                 continue;
             }
@@ -2212,7 +2233,7 @@ impl PostPasses {
                 })],
                 ..Default::default()
             });
-            render.set_pipeline(&pass.pipeline);
+            render.set_pipeline(pipeline);
             render.set_bind_group(0, &group, &[]);
             match (&pass.game, pass.extension.api == ABI_V1) {
                 (Some(game), true) => render.set_bind_group(1, &game.group, &[]),
@@ -2226,16 +2247,18 @@ impl PostPasses {
         }
     }
 
-    /// The rows of the passes of `ids` at their index in it: v1's `GxPost`, v2's `GxPostV2`.
-    fn write_params(&self, gpu: &Gpu, ids: &[PostPassId], size: wgpu::Extent3d, frame: &PostFrame<'_>) {
+    /// The rows of the `running` passes (their index in the frame's list, their pass) at that
+    /// index: v1's `GxPost`, v2's `GxPostV2`, sized from this stage's target. Only these rows are
+    /// written: the hdr and ldr stages write theirs into one buffer before the frame's one
+    /// submission, so a stage writing every row would hand the other stage its target's size
+    /// (renderer pass 2, RC-01: below scale 1 an hdr pass sampled a cropped scene).
+    fn write_params(&self, gpu: &Gpu, running: &[(usize, usize)], size: wgpu::Extent3d, frame: &PostFrame<'_>) {
         let (w, h) = (size.width as f32, size.height as f32);
-        let mut v1 = vec![0u8; ids.len() * DRAW_STRIDE as usize];
-        let mut v2 = vec![0u8; if self.params_v2.is_some() { ids.len() * DRAW_STRIDE as usize } else { 0 }];
-        for (i, id) in ids.iter().enumerate() {
-            let at = i * DRAW_STRIDE as usize;
+        for &(i, index) in running {
+            let at = i as u64 * DRAW_STRIDE;
             let row = GpuPost { size: [w, h, 1.0 / w, 1.0 / h], params: [frame.seconds, i as f32, 0.0, 0.0] };
-            v1[at..at + size_of::<GpuPost>()].copy_from_slice(bytemuck::bytes_of(&row));
-            let Some(pass) = self.passes.get(id.0 as usize).filter(|pass| pass.extension.api == ABI_V2) else { continue };
+            gpu.queue.write_buffer(&self.params, at, bytemuck::bytes_of(&row));
+            let Some(pass) = self.passes.get(index).filter(|pass| pass.extension.api == ABI_V2) else { continue };
             // Stage hdr on the legacy LDR scene sees the display-ready frame: 0, as at ldr.
             let stage_hdr = pass.stage == PostStage::Hdr && pass.format != WORLD_FORMAT;
             let row = GxPostV2 {
@@ -2252,11 +2275,9 @@ impl PostPasses {
                 reserved0: 0,
                 reserved1: 0,
             };
-            v2[at..at + size_of::<GxPostV2>()].copy_from_slice(bytemuck::bytes_of(&row));
-        }
-        gpu.queue.write_buffer(&self.params, 0, &v1);
-        if let Some(target) = &self.params_v2 {
-            gpu.queue.write_buffer(target, 0, &v2);
+            if let Some(target) = &self.params_v2 {
+                gpu.queue.write_buffer(target, at, bytemuck::bytes_of(&row));
+            }
         }
     }
 

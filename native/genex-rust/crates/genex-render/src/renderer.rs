@@ -602,6 +602,14 @@ struct GroupsKey {
     anisotropy: u16,
 }
 
+impl GroupsKey {
+    /// Whether `other` binds the same tables, shadow and material arrays and sampler: it differs
+    /// at most in the views a node replaces mid-frame (the effect views, the environment).
+    fn same_resources(&self, other: &GroupsKey) -> bool {
+        self.buffers == other.buffers && self.views == other.views && self.anisotropy == other.anisotropy
+    }
+}
+
 /// What the meshlet draw pipelines were made for: the scene's format, depth convention and surface
 /// constants, and the world pass's samples.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3692,6 +3700,13 @@ impl Renderer {
         self.scene_pipeline_builds.set(self.scene_pipeline_builds.get() + 1);
     }
 
+    /// Frame bind-group sets the renderer holds: the frame's own and the ones made mid-frame after
+    /// a node replaced a view they bind (diagnostics: each pins the tables, shadow maps, material
+    /// arrays and effect views it binds, outside the target ledger).
+    pub fn frame_group_sets(&self) -> usize {
+        usize::from(self.groups.is_some()) + self.refreshed_groups.borrow().len()
+    }
+
     /// Scene pipeline sets made so far, the HDR and legacy scenes' and the prepass's (diagnostics:
     /// a frame that makes one compiles shaders on the frame thread, a hitch DRS cannot absorb).
     pub fn scene_pipeline_builds(&self) -> u32 {
@@ -4369,6 +4384,9 @@ impl Renderer {
     }
 
     /// The frame bind groups, rebuilt only when a table or texture array they bind was replaced.
+    /// A rebuild drops the mid-frame sets bound to what it replaced (renderer pass 2, RC-07: they
+    /// held the old shadow array, material arrays and tables alive outside the ledger until four
+    /// newer sets came); the sets of the same tables and arrays, AO's alternating terms, stay.
     fn ensure_groups(&mut self) -> FrameGroups {
         let key = self.groups_key();
         if let Some((held, groups)) = &self.groups
@@ -4376,6 +4394,7 @@ impl Renderer {
         {
             return groups.clone();
         }
+        self.refreshed_groups.get_mut().retain(|(held, _)| held.same_resources(&key));
         let groups = self.frame_groups();
         self.groups = Some((key, groups.clone()));
         groups

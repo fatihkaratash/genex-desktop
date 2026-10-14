@@ -11,8 +11,12 @@
 //! unchanged, so every picture is the same.
 //!
 //! On the web (no threads; the browser compiles off its own main thread) a pipeline is made where
-//! it is asked for. A game's own WGSL (Level-2 materials, Level-3 passes) is still compiled where
-//! it is admitted, inside its error scopes.
+//! it is asked for. A game's own Level-2 WGSL (materials and post passes) compiles on the same pool
+//! through [`render_pipeline_checked`]: the compile thread pushes its own error scopes (wgpu's are
+//! per thread), so a pipeline the backend refuses after naga accepted the source comes back as an
+//! error the admission turns into a typed refusal (renderer pass 2, RC-04), never the device's
+//! uncaptured-error panic raised again at the first draw. Level-3 passes compile where they are
+//! admitted, inside their own scopes (`custom_pass`).
 //!
 //! Pipeline caches (renderer pass 2, RC-09; LG-14 is the game box's Metal half): Metal and D3D12
 //! drivers keep their own, Vulkan keeps none unless the application hands one in, and drivers on
@@ -323,6 +327,39 @@ pub fn render_pipeline(device: &Device, desc: &wgpu::RenderPipelineDescriptor<'_
     let owned = OwnedRender::of(desc);
     let device = device.clone();
     Compiled::spawn(move || owned.create(&device))
+}
+
+/// [`render_pipeline`] for a game's own source: the compile thread wraps the creation in
+/// validation and internal error scopes, so a pipeline the backend refuses is `Err` with wgpu's
+/// message. A scope the backend has not answered by then (the browser's, which answers
+/// asynchronously) counts as clean: the browser reports its own pipeline errors.
+pub fn render_pipeline_checked(device: &Device, desc: &wgpu::RenderPipelineDescriptor<'_>) -> Compiled<Result<RenderPipeline, String>> {
+    let owned = OwnedRender::of(desc);
+    let device = device.clone();
+    Compiled::spawn(move || scoped(&device, || owned.create(&device)))
+}
+
+/// `create` inside validation and internal error scopes pushed on this thread: its value, or the
+/// first error a scope caught.
+fn scoped<T>(device: &Device, create: impl FnOnce() -> T) -> Result<T, String> {
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let made = create();
+    let invalid = answered(validation.pop());
+    let failed = answered(internal.pop());
+    match invalid.or(failed) {
+        Some(error) => Err(error.to_string()),
+        None => Ok(made),
+    }
+}
+
+/// A scope's error if the backend has answered (native backends answer at once).
+fn answered(future: impl std::future::Future<Output = Option<wgpu::Error>>) -> Option<wgpu::Error> {
+    let mut future = std::pin::pin!(future);
+    match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+        std::task::Poll::Ready(error) => error,
+        std::task::Poll::Pending => None,
+    }
 }
 
 /// [`render_pipeline`] for a compute pipeline.

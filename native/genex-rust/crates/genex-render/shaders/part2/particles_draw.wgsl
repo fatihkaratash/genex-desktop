@@ -16,9 +16,13 @@ fn particle_billboard(vertex: u32, instance: u32) -> ParticleOut {
     );
     let p = particles_drawn[instance];
     let corner = corners[vertex];
-    let forward = normalize(frame.camera_forward.xyz);
-    let right = normalize(cross(forward, vec3<f32>(0.0, 1.0, 0.0)));
-    let up = cross(right, forward);
+    // The camera's own right and up, the first two rows of the (unjittered, symmetric)
+    // view-projection: a billboard faces the camera at every pitch. A basis crossed with the
+    // world's +Y was zero, and so NaN, under a camera looking straight up or down (renderer
+    // pass 2, LG-08/S9).
+    let vp = frame.view_proj;
+    let right = normalize(vec3<f32>(vp[0].x, vp[1].x, vp[2].x));
+    let up = normalize(vec3<f32>(vp[0].y, vp[1].y, vp[2].y));
     let half = p.position_size.w * 0.5;
     let world = p.position_size.xyz + (right * corner.x + up * corner.y) * half;
     var out: ParticleOut;

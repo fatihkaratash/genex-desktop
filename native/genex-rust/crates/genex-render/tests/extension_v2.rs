@@ -1798,3 +1798,76 @@ fn metal_a_v2_post_pass_reads_the_frames_jitter() {
     let expected = |jitter: f32| ((0.5 + jitter * 32.0) * 255.0).round() as i32;
     assert!((i32::from(r) - expected(FRAME_JITTER[0])).abs() <= 1 && (i32::from(g) - expected(FRAME_JITTER[1])).abs() <= 1, "rgb {r} {g} {b}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Renderer pass 2, P2-0.14 (RC-01, RC-16 row 1): the hdr and ldr post stages each write their own
+// rows. Both stages' rows used to be written into one buffer by `queue.write_buffer` before the
+// frame's one submission, so the ldr stage's (the output's size) overwrote the hdr stage's (the
+// render size): below scale 1 an hdr pass sampled a cropped scene.
+
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_an_hdr_post_pass_keeps_its_render_size_rows_when_an_ldr_pass_runs_in_the_frame() {
+    let Some(gpu) = gpu() else { return };
+    let mut images = Vec::new();
+    for with_ldr in [false, true] {
+        let mut frames = ibl_frame_renderer(&gpu, &genex_render::settings::Environment::Color, None);
+        frames.renderer_mut().set_render_scale(0.5);
+        let uv = frames.add_post_pass_api(&gpu, ABI_V2, PostStage::Hdr, UV_V2, &[], &[]).expect("a v2 hdr post writing gx_scene_uv");
+        let identity = frames.add_post_pass_api(&gpu, ABI_V1, PostStage::Ldr, IDENTITY_V1, &[], &[]).expect("a v1 ldr identity post");
+        let mut frame = base_frame();
+        frame.post_pass(uv);
+        if with_ldr {
+            frame.post_pass(identity);
+        }
+        frames.render(&gpu, &frame, CullPath::Gpu, None).expect("frame");
+        assert_eq!(frames.renderer().render_size(), (WIDTH / 2, HEIGHT / 2), "drawn at scale 0.5");
+        images.push(frames.capture(&gpu).expect("capture"));
+    }
+    let (alone, beside_ldr) = (&images[0], &images[1]);
+    let worst = alone.bgra().chunks(4).zip(beside_ldr.bgra().chunks(4)).map(|(a, b)| a[..3].iter().zip(&b[..3]).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)).max().unwrap_or(0);
+    let corner = |capture: &Capture| pixel(capture, WIDTH - 2, HEIGHT - 2);
+    assert!(worst <= 1, "the hdr pass beside an ldr pass reads other rows: worst channel {worst}, far corner {:?} against {:?} alone", corner(beside_ldr), corner(alone));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Renderer pass 2, P2-0.14 (RC-04, RC-16 row 3): a Level-2 pipeline compiles inside error scopes,
+// so a source naga accepts but the pipeline cannot take is a typed refusal, never a panic of the
+// device's uncaptured-error handler on a compile thread raised again at the first draw.
+
+/// v2 material that naga accepts: an unsigned colour, which the float scene target cannot take
+/// (the pipeline fails, not the source).
+const UNSIGNED_MATERIAL_V2: &str = "
+@fragment
+fn fs_material(in: GxMaterialInV2) -> @location(0) vec4<u32> {
+    return vec4<u32>(1u, 2u, 3u, 4u);
+}
+";
+
+/// v2 post pass with the same unsigned output.
+const UNSIGNED_POST_V2: &str = "
+@fragment
+fn fs_post(in: GxPostInV2) -> @location(0) vec4<u32> {
+    return vec4<u32>(1u, 2u, 3u, 4u);
+}
+";
+
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_a_level_2_source_whose_pipeline_fails_after_naga_accepts_it_is_refused_typed() {
+    let Some(gpu) = gpu() else { return };
+    let mut renderer = Renderer::new(&gpu, WIDTH, HEIGHT).expect("renderer");
+    validate_api(ExtensionKind::Material, ABI_V2, UNSIGNED_MATERIAL_V2, &core()).expect("naga accepts the material");
+    validate_api(ExtensionKind::PostPass, ABI_V2, UNSIGNED_POST_V2, &core()).expect("naga accepts the post pass");
+    let mut materials = CustomMaterials::new(&gpu.device, core(), renderer.sample_count());
+    let error = materials.add_api(&gpu, ABI_V2, UNSIGNED_MATERIAL_V2, &[], &[]).expect_err("the material's pipeline fails");
+    assert_eq!(fault(&error), Some(ExtensionFault::Invalid), "a typed refusal: {error}");
+    let mut posts = PostPasses::new(&gpu.device, core()).expect("posts");
+    let error = posts.add_api(&gpu, ABI_V2, PostStage::Ldr, UNSIGNED_POST_V2, &[], &[]).expect_err("the post pass's pipeline fails");
+    assert_eq!(fault(&error), Some(ExtensionFault::Invalid), "a typed refusal: {error}");
+    // Nothing was admitted: the renderer and both registries keep drawing.
+    assert!(materials.is_empty() && posts.is_empty());
+    let shaded = materials.add_api(&gpu, ABI_V2, SHADED_V2, &shaded_uniforms(), &[]).expect("a good material after the refusal");
+    let frame = draw_with(&gpu, &mut renderer, &mut materials, &walled_scene(), &[centre_draw(shaded)]);
+    assert_eq!((frame.width(), frame.height()), (WIDTH, HEIGHT));
+}

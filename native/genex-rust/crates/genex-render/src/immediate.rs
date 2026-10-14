@@ -584,6 +584,7 @@ impl QuadPass {
 /// the custom passes of each stage (M2.19).
 struct Part2Stage<'a> {
     device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
     materials: &'a mut CustomMaterials,
     particles: &'a mut ParticlePass,
     custom: &'a mut dyn CustomStage,
@@ -597,6 +598,16 @@ impl WorldStage for Part2Stage<'_> {
         // an HDR scene is written with the exposure the history adapted to.
         if let Some(exposure) = self.pre_exposure.as_ref().filter(|_| world.hdr) {
             encoder.copy_buffer_to_buffer(exposure, 0, world.frame_uniforms, FRAME_PRE_EXPOSURE_OFFSET, PRE_EXPOSURE_BYTES);
+        }
+        // `before-cull` passes run on their own encoders, each submitted at once, and so does the
+        // v1/v2 frame refresh ahead of them: the frame so far (the timer's begin pass, the exposure
+        // copy above) is submitted first, as nodes 9, 18 and 23 do before their encoder stages.
+        // Otherwise the refresh read the CPU's pre-exposure (1.0 under auto exposure) and the
+        // passes ran before the frame's timer (renderer pass 2, RC-02).
+        if self.custom.runs(PassStage::BeforeCull) {
+            let fresh = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let so_far = std::mem::replace(encoder, fresh);
+            self.queue.submit([so_far.finish()]);
         }
         self.custom.before_cull(encoder, world);
     }
@@ -1199,7 +1210,7 @@ impl FrameRenderer {
         let mut encoder = FrameEncoder::new(&gpu.device, &gpu.queue, "frame");
         let mut nodes = FrameNodesOf {
             world: self.renderer.world_nodes(&prep),
-            stage: Part2Stage { device: &gpu.device, materials: &mut self.materials, particles: &mut self.particles, custom: &mut *custom, pre_exposure },
+            stage: Part2Stage { device: &gpu.device, queue: &gpu.queue, materials: &mut self.materials, particles: &mut self.particles, custom: &mut *custom, pre_exposure },
             gpu,
             frame,
             quads: &mut self.quads,

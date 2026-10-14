@@ -352,3 +352,36 @@ fn metal_the_pool_ledger_holds_what_ao_and_contact_shadows_allocate_and_the_budg
         }
     }
 }
+
+/// Renderer pass 2, P2-0.14 (RC-07, RC-16 row 5): a reshape (here the sun's shadow maps, a resource
+/// knob a demotion steps) leaves no frame bind-group set pinning what it replaced. The mid-frame
+/// sets AO's alternating terms make used to stay cached beside the new ones, each holding the old
+/// shadow array, material arrays and tables alive outside the ledger, until four newer sets came.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_a_shadow_reshape_keeps_no_frame_groups_of_the_maps_it_replaced() {
+    let Some(gpu) = gpu() else { return };
+    let renderer_at = |quality: &Quality| {
+        let mut renderer = Renderer::with_options(&gpu, WIDTH, HEIGHT, RenderOptions::default()).expect("renderer");
+        renderer.set_scene_format(SceneFormat::Rgba16Float);
+        renderer.set_device_class(DeviceClass::new(FormFactor::Desktop, PerformanceTier::Ultra));
+        renderer.set_quality(quality);
+        renderer.set_environment(&Environment::sky());
+        renderer
+    };
+    let mut smaller = high();
+    smaller.shadows.map_size /= 2;
+    let mut fresh = renderer_at(&smaller);
+    fresh.render(&gpu, &scene(), CullPath::Gpu).expect("frame");
+    let one_frame = fresh.frame_group_sets();
+    let mut reshaped = renderer_at(&high());
+    for _ in 0..4 {
+        reshaped.render(&gpu, &scene(), CullPath::Gpu).expect("frame");
+    }
+    let before = reshaped.frame_group_sets();
+    assert!(before > one_frame, "AO's alternating terms keep mid-frame sets ({before} against {one_frame} after one frame)");
+    reshaped.set_quality(&smaller);
+    reshaped.render(&gpu, &scene(), CullPath::Gpu).expect("frame");
+    let after = reshaped.frame_group_sets();
+    assert!(after <= one_frame, "{after} frame group sets held after the reshape, against {one_frame} for a renderer made at the new size: the old maps' sets survive");
+}
