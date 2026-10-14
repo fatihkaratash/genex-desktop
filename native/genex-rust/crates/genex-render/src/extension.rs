@@ -1246,6 +1246,10 @@ impl PostPassId {
 /// One draw of a mesh with a custom material.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CustomDraw {
+    /// The draw id current when it was drawn (`frame.id(key)`, [`crate::motion::DrawId`]), if
+    /// any: under TAA a moving custom draw keeps its motion history by it (renderer pass 2,
+    /// P2-0.8b T-04), else by its mesh and ordinal ([`crate::motion::CustomMotion`]).
+    pub id: Option<crate::motion::DrawId>,
     /// The mesh.
     pub mesh: MeshId,
     /// Model matrix, column-major.
@@ -1364,6 +1368,9 @@ pub struct CustomMaterials {
     /// The renderer's environment v2 materials bind (None: the neutral inputs).
     environment: Option<EnvironmentViews>,
     frame: Vec<CustomDraw>,
+    /// Last frame's custom draws by key (T-04), and this frame's draws' previous transforms.
+    motion: crate::motion::CustomMotion,
+    frame_prev: Vec<crate::motion::CustomPrev>,
     frame_facts: FrameFacts,
     /// Whether this frame's [`FrameV2`] is refreshed although no v2 material draws (v2 post passes
     /// read it).
@@ -1436,6 +1443,8 @@ impl CustomMaterials {
             frame_group_v2: None,
             environment: None,
             frame: Vec::new(),
+            motion: crate::motion::CustomMotion::new(),
+            frame_prev: Vec::new(),
             frame_facts: FrameFacts::new((1, 1), (1, 1)),
             keep_frame_v2: false,
             frame_v2_due: false,
@@ -1484,9 +1493,14 @@ impl CustomMaterials {
     }
 
     /// This frame's custom geometry for the depth/normal prepass (graph node 7): each prepared
-    /// draw's mesh at its model matrix, so the prepass's consumers see the custom materials too.
+    /// draw's mesh at its model matrix, so the prepass's consumers see the custom materials too,
+    /// with last frame's model matrix for its motion (T-04: matched by draw id or mesh ordinal).
     pub fn prepass_draws(&self) -> Vec<crate::prepass::PrepassDraw> {
-        self.frame.iter().map(|draw| crate::prepass::PrepassDraw { mesh: draw.mesh, model: draw.model }).collect()
+        self.frame
+            .iter()
+            .zip(&self.frame_prev)
+            .map(|(draw, prev)| crate::prepass::PrepassDraw { mesh: draw.mesh, model: draw.model, prev_model: prev.model, history: prev.history })
+            .collect()
     }
 
     /// What the next frames' v2 sources read about the camera, sizes and scene.
@@ -1660,6 +1674,10 @@ impl CustomMaterials {
                 return Err(RenderError::refused(RenderCode::MeshInvalid, format!("mesh {} is not in the library", draw.mesh.raw())));
             }
         }
+        // Matched against last frame's draws once the frame is admitted (T-04): their previous
+        // models feed the prepass's motion and `GxDrawV2::prev_model`, last frame's time `prev_time`.
+        let rows: Vec<crate::motion::CustomRow> = draws.iter().map(|draw| custom_row(draw, library)).collect();
+        let (prevs, prev_seconds) = self.motion.apply(&rows, seconds);
         let v2_drawn = draws.iter().any(|draw| self.api_of(draw.material) == ABI_V2);
         self.frame_v2_due = v2_drawn || self.keep_frame_v2;
         if let Some(shared) = self.shared.as_mut().filter(|_| v2_drawn || self.keep_frame_v2) {
@@ -1668,14 +1686,15 @@ impl CustomMaterials {
             shared.frame.write(&gpu.queue, &facts, seconds);
         }
         if draws.is_empty() {
+            self.frame_prev.clear();
             return Ok(0);
         }
         let bytes = draws.len() as u64 * DRAW_STRIDE;
         let mut v1_rows = vec![0u8; bytes as usize];
         let mut v2_rows = vec![0u8; if v2_drawn { bytes as usize } else { 0 }];
-        for (i, draw) in draws.iter().enumerate() {
+        for (i, (draw, prev)) in draws.iter().zip(&prevs).enumerate() {
             let normal = crate::instance::instance_row(&draw.model, [0.0; 3], 0.0, 0).normal;
-            let params = [seconds, i as f32, 0.0, 0.0];
+            let params = [seconds, i as f32, prev_seconds, 0.0];
             let at = i * DRAW_STRIDE as usize;
             if self.api_of(draw.material) == ABI_V1 {
                 let row = GpuCustomDraw { model: draw.model, normal, tint: draw.tint.map(|c| f32::from(c) / 255.0), params };
@@ -1683,7 +1702,7 @@ impl CustomMaterials {
                 continue;
             }
             let tint = [0, 1, 2].map(|c| crate::texture::srgb_to_linear(draw.tint[c]));
-            let row = GxDrawV2 { model: draw.model, normal, prev_model: draw.model, tint: [tint[0], tint[1], tint[2], f32::from(draw.tint[3]) / 255.0], params };
+            let row = GxDrawV2 { model: draw.model, normal, prev_model: prev.model, tint: [tint[0], tint[1], tint[2], f32::from(draw.tint[3]) / 255.0], params };
             v2_rows[at..at + size_of::<GxDrawV2>()].copy_from_slice(bytemuck::bytes_of(&row));
         }
         let device = &self.device;
@@ -1698,6 +1717,7 @@ impl CustomMaterials {
             gpu.queue.write_buffer(target, 0, &v2_rows);
         }
         self.frame = draws.to_vec();
+        self.frame_prev = prevs;
         Ok(bytes)
     }
 
@@ -1798,6 +1818,21 @@ impl WorldStage for CustomMaterials {
     fn opaque(&self, pass: &mut wgpu::RenderPass<'_>, world: &WorldPass<'_>) {
         self.draw(pass, world);
     }
+
+    // Renderer pass 2, P2-0.8b (T-04): drawn as a renderer's stage (`render_staged`), the custom
+    // draws reach the prepass as the frame renderer's do, so its consumers (TAA's motion, AO,
+    // contact shadows) see them; without it they read the background behind them.
+    fn prepass_draws(&self) -> Vec<crate::prepass::PrepassDraw> {
+        CustomMaterials::prepass_draws(self)
+    }
+}
+
+/// `draw` as its motion is matched (T-04): its id, mesh, model and world bounds (the library
+/// mesh's sphere under its model; a mesh the library lacks was refused before this is asked).
+fn custom_row(draw: &CustomDraw, library: &crate::scene::MeshLibrary) -> crate::motion::CustomRow {
+    let (center, radius) = library.entry(draw.mesh).map_or(([0.0; 3], 0.0), |entry| (entry.center, entry.radius));
+    let bounds = crate::instance::instance_row(&draw.model, center, radius, 0).bounds;
+    crate::motion::CustomRow { id: draw.id, mesh: draw.mesh, model: draw.model, bounds }
 }
 
 fn unknown_material(id: CustomMaterialId) -> RenderError {
@@ -2276,6 +2311,21 @@ const _: () = assert!(size_of::<GxPostV2>() as u64 <= DRAW_STRIDE && size_of::<G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renderer pass 2, P2-0.8b (T-04): a custom draw carries the draw id current when it was
+    /// drawn (`frame.id(key)` reaches it through the facade), so its motion follows the id.
+    #[test]
+    fn a_custom_draw_carries_the_draw_id_current_when_drawn() {
+        use crate::motion::DrawId;
+        let mut frame = crate::immediate::ImmediateFrame::new(CameraDesc::look_at([0.0, 0.0, 4.0], [0.0; 3]), [0, 0, 0, 255]);
+        let material = CustomMaterialId::from_raw(0);
+        let at = |x: f32| glam::Mat4::from_translation(glam::Vec3::new(x, 0.0, 0.0)).to_cols_array();
+        frame.custom(MeshId::CUBE, at(0.0), material, [255; 4]);
+        frame.id(Some(DrawId::from("flag"))).custom(MeshId::CUBE, at(1.0), material, [255; 4]);
+        frame.id(None).custom(MeshId::SPHERE, at(2.0), material, [255; 4]);
+        let ids: Vec<Option<DrawId>> = frame.custom_draws().iter().map(|draw| draw.id).collect();
+        assert_eq!(ids, [None, Some(DrawId::from("flag")), None]);
+    }
 
     #[test]
     fn the_frame_v2_remap_validates_against_webgpu_core() {

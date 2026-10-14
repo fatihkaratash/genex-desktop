@@ -540,7 +540,7 @@ fn metal_a_fast_moving_custom_draw_leaves_no_trail_under_taa() {
             ..FrameFacts::new(renderer.size(), renderer.render_size())
         };
         materials.set_frame_facts(facts.with_camera(camera()));
-        let draw = CustomDraw { mesh: MeshId::CUBE, model: cube_at(x), material, tint: [235, 235, 235, 255] };
+        let draw = CustomDraw { id: None, mesh: MeshId::CUBE, model: cube_at(x), material, tint: [235, 235, 235, 255] };
         materials.prepare(&gpu, &[draw], 0.0, renderer.library()).expect("the draw is admitted");
         let mut scene = Scene::new(camera(), CLEAR);
         scene.lighting.sun_dir = glam::Vec3::new(-0.4, 0.6, 0.7).normalize().to_array();

@@ -32,6 +32,12 @@ fn gx_sun_cascade_bias(cascade: u32) -> f32 {
     return frame.cascade_bias[cascade];
 }
 
+// The surface chunk's texture mip bias: the pipeline's constant plus the frame's lane
+// (`GpuFrame::texture_lod`, renderer pass 2 P2-0.8b T-06), so it follows the frame's scale.
+fn gx_texture_lod_bias() -> f32 {
+    return GX_TEXTURE_LOD_BIAS + frame.texture_lod.x;
+}
+
 fn gx_ao_drawn() -> bool {
     return GX_AO;
 }

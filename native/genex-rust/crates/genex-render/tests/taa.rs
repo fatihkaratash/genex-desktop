@@ -994,11 +994,18 @@ fn gx_class_texel(color: bool, reference: u32, uv: vec2<f32>, uv_dx: vec2<f32>, 
     }
     return textureSampleGrad(data_textures, texture_sampler, uv, i32(reference & GX_TEXTURE_LAYER_MASK), uv_dx, uv_dy);
 }
+
+// The forward pass's helper (forward_effects.wgsl): the constant plus the frame's lane, here the
+// probe's uniform.
+fn gx_texture_lod_bias() -> f32 {
+    return GX_TEXTURE_LOD_BIAS + lod_params.view.z;
+}
 ";
 
 const LOD_ENTRY: &str = "
 struct LodParams {
-    // x: the view's side in pixels; y: how many times it repeats the texture.
+    // x: the view's side in pixels; y: how many times it repeats the texture; z: the frame's
+    // texture mip bias (`FrameUniforms::texture_lod.x`).
     view: vec4<f32>,
 }
 @group(0) @binding(4) var<uniform> lod_params: LodParams;
@@ -1049,9 +1056,9 @@ fn mip_coded_array(gpu: &Gpu) -> wgpu::TextureView {
 }
 
 /// The mean LOD the surface samples its base texture at when a `side` view repeats it
-/// `LOD_REPEATS` times, with the pipeline's `GX_TEXTURE_LOD_BIAS` = `bias` and
-/// `GX_TEXTURE_CLASSES` = `classes`.
-fn sampled_lod(gpu: &Gpu, side: u32, bias: f32, classes: bool) -> f32 {
+/// `LOD_REPEATS` times, with the pipeline's `GX_TEXTURE_LOD_BIAS` = `bias`, the frame's lane
+/// (`FrameUniforms::texture_lod.x`) = `frame_bias` and `GX_TEXTURE_CLASSES` = `classes`.
+fn sampled_lod(gpu: &Gpu, side: u32, bias: f32, frame_bias: f32, classes: bool) -> f32 {
     let device = &gpu.device;
     let source = format!("{}{LOD_PRELUDE}{}{LOD_ENTRY}", include_str!("../shaders/common.wgsl"), surface_chunk());
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("lod"), source: wgpu::ShaderSource::Wgsl(source.into()) });
@@ -1089,7 +1096,7 @@ fn sampled_lod(gpu: &Gpu, side: u32, bias: f32, classes: bool) -> f32 {
     let material = genex_render::layout::GpuMaterial { base_color: [1.0; 4], params: [0.0, 1.0, 0.0, 1.0], textures: [0, no_texture, no_texture, no_texture] };
     let init = |label, contents: &[u8], usage| wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage });
     let materials = init("lod material", bytemuck::bytes_of(&material), wgpu::BufferUsages::STORAGE);
-    let params = init("lod params", bytemuck::cast_slice(&[side as f32, LOD_REPEATS, 0.0, 0.0]), wgpu::BufferUsages::UNIFORM);
+    let params = init("lod params", bytemuck::cast_slice(&[side as f32, LOD_REPEATS, frame_bias, 0.0]), wgpu::BufferUsages::UNIFORM);
     let mips = mip_coded_array(gpu);
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("lod"),
@@ -1160,13 +1167,38 @@ fn metal_texture_detail_at_scale_two_thirds_under_taa_matches_scale_one() {
     let taa = TaaQuality::DEFAULT;
     let scale = LOD_SCALED as f32 / LOD_FULL as f32;
     for classes in [false, true] {
-        let full = sampled_lod(&gpu, LOD_FULL, taa.texture_lod_bias(1.0), classes);
-        let scaled = sampled_lod(&gpu, LOD_SCALED, taa.texture_lod_bias(scale), classes);
-        let unbiased = sampled_lod(&gpu, LOD_SCALED, 0.0, classes);
+        let full = sampled_lod(&gpu, LOD_FULL, taa.texture_lod_bias(1.0), 0.0, classes);
+        let scaled = sampled_lod(&gpu, LOD_SCALED, taa.texture_lod_bias(scale), 0.0, classes);
+        let unbiased = sampled_lod(&gpu, LOD_SCALED, 0.0, 0.0, classes);
         let natural = libm::log2f(LOD_TEXTURE as f32 * LOD_REPEATS / LOD_SCALED as f32);
         eprintln!("classes {classes}: LOD at scale 1 {full:.3}, at 2/3 with the TAA bias {scaled:.3}, at 2/3 unbiased {unbiased:.3} (natural {natural:.3})");
         assert!((unbiased - natural).abs() < LOD_TOLERANCE, "the probe reads the hardware's LOD: {unbiased} vs {natural}");
         assert!((scaled - full).abs() < LOD_TOLERANCE, "classes {classes}: scale 2/3 under TAA samples the detail scale 1 does: {scaled} vs {full}");
         assert!(unbiased - full > 0.5, "classes {classes}: without the bias scale 2/3 would sample a blurrier mip: {unbiased} vs {full}");
+    }
+}
+
+/// Renderer pass 2, P2-0.8b (T-06): a frame FSR1's EASU upscales from 2/3 without TAA samples the
+/// texture detail of a frame at scale 1 (no TAA: no extra bias there) through the frame's lane, as
+/// TAA's bias does through the pipeline constant; the lane is a uniform, so the same pipeline
+/// follows a dynamic-resolution step. Without it, the upscaled frame samples about 0.58 of a mip
+/// blurrier.
+#[test]
+#[ignore = "GPU: run with -- --ignored metal"]
+fn metal_an_easu_frame_at_scale_two_thirds_samples_the_texture_detail_of_scale_one() {
+    let Some((_rows, gpu)) = gpu() else { return };
+    let taa = TaaQuality::DEFAULT;
+    let scale = LOD_SCALED as f32 / LOD_FULL as f32;
+    let easu = genex_render::settings::frame_texture_lod_bias(&taa, false, true, scale);
+    for classes in [false, true] {
+        let full = sampled_lod(&gpu, LOD_FULL, 0.0, genex_render::settings::frame_texture_lod_bias(&taa, false, false, 1.0), classes);
+        let scaled = sampled_lod(&gpu, LOD_SCALED, 0.0, easu, classes);
+        let unbiased = sampled_lod(&gpu, LOD_SCALED, 0.0, 0.0, classes);
+        let through_constant = sampled_lod(&gpu, LOD_SCALED, taa.texture_lod_bias(scale), 0.0, classes);
+        let through_lane = sampled_lod(&gpu, LOD_SCALED, 0.0, taa.texture_lod_bias(scale), classes);
+        eprintln!("classes {classes}: LOD at scale 1 {full:.3}, at 2/3 with the EASU bias {easu:.3}: {scaled:.3}, unbiased {unbiased:.3}; TAA's bias as constant {through_constant:.3}, as the frame lane {through_lane:.3}");
+        assert!((scaled - full).abs() < LOD_TOLERANCE, "classes {classes}: an EASU frame at 2/3 samples the detail scale 1 does: {scaled} vs {full}");
+        assert!(unbiased - full > 0.5, "classes {classes}: without the bias it samples a blurrier mip: {unbiased} vs {full}");
+        assert!((through_lane - through_constant).abs() < 1e-3, "classes {classes}: the frame lane biases as the constant does: {through_lane} vs {through_constant}");
     }
 }

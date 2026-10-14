@@ -121,6 +121,11 @@ pub struct GpuFrame {
     /// cascade's depth range (renderer pass 2, P2-0.3); the legacy fit's lanes are the shared
     /// `shadow::DEPTH_BIAS`, as is `shadow_params.x` but on `depth32float` maps (cascade 0's there).
     pub cascade_bias: [f32; 4],
+    /// x: the mip bias material textures sample with this frame
+    /// ([`crate::settings::frame_texture_lod_bias`]: TAA's, FSR1's upscale's, else 0; renderer pass
+    /// 2, P2-0.8b T-06), added to the pipeline's `GX_TEXTURE_LOD_BIAS` by `gx_texture_lod_bias`;
+    /// a uniform, so a dynamic-resolution step moves it without a pipeline. y, z, w: reserved (0).
+    pub texture_lod: [f32; 4],
 }
 
 /// One point light in the light table (`Light`).

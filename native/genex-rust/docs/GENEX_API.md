@@ -337,9 +337,10 @@ switch per feature (Tab, Space). A preset change rebuilds the renderer for its a
 hitch). A switch this build does not draw is reported off and listed `not-landed`.
 
 TAA jitters the camera by a fraction of a pixel and blends with last frame through motion vectors
-that match each draw to its last frame by id. Name everything that moves on its own with
-`frame.id(key)` (a string or integer that stays with the object) until `frame.end_id()` or the
-next id; unnamed draws match by order within their mesh, which suits still scenery. Call
+that match each draw (`frame.custom` ones too) to its last frame by id. Name everything that moves
+on its own with `frame.id(key)` (a string or integer that stays with the object) until
+`frame.end_id()` or the next id; unnamed draws match by order within their mesh, which suits still
+scenery. Call
 `frame.camera_cut()` on the frame a shot changes (respawn, cutscene, teleport), never every frame:
 TAA, auto exposure and AO history start over. A camera that jumps on its own is a cut already.
 Shaders under TAA: see Custom materials and post passes.
@@ -438,7 +439,9 @@ scene alike (`gx_expose` holds even a blinding emissive
 under the scene's limit). `gx_surface_v2` takes no derivatives, so it does not filter a shiny
 highlight against sparkle; wrap it as built-in surfaces are, in uniform control flow:
 `let n = normalize(in.normal); let s = gx_filter_specular_v2(gx_surface_v2(in.world_position, n,
-albedo, 0.0, 0.2), dpdx(n), dpdy(n));` a v2 post pass reads `gx_scene` and `gx_frame` (and `gx_env_sh`, the
+albedo, 0.0, 0.2), dpdx(n), dpdy(n));` `gx_draw.prev_model` is the draw's model last frame
+(matched by its id) and `gx_draw.params.z` last frame's simulated seconds (`params.x` this
+frame's), so a vertex animation can place itself at both times. A v2 post pass reads `gx_scene` and `gx_frame` (and `gx_env_sh`, the
 environment's SH9) on the display-ready frame after the tonemap, and `gx_depth`, `gx_normals` and
 `gx_motion` (the prepass's motion vectors, written whenever a source declares them; the
 formula is under Custom GPU passes) (an effect on the HDR scene before it is a Level-3 `PostHdr` pass; Level-3 passes do not read the sun's shadow maps yet, so grass or water drawn by a pass is not shadowed), and
@@ -497,7 +500,8 @@ real depth (`gx_depth`, in the frame's depth convention) and octahedral normals 
 prepass's motion vectors at the same stages, as `gx_motion` and `ctx.prepass_motion()` (the
 declaration alone makes the prepass write them, with or without TAA): `rg16float` NDC motion,
 current minus previous with the jitter removed, so the pixel at `uv` was at
-`uv - motion * vec2(0.5, -0.5)` last frame. Geometry a pass draws in the world has no motion of its own (its pixels keep the
+`uv - motion * vec2(0.5, -0.5)` last frame (where no geometry drew, the sky included, the motion is
+the camera's own). Geometry a pass draws in the world has no motion of its own (its pixels keep the
 motion of what is behind them), so under TAA a fast-moving in-world pass draw may trail: keep
 such geometry slow, or draw it at `PostHdr`. In the world and at `PostHdr` a v2 pass draws in the scene format
 (`setup.world_format()`): write linear radiance times `pre_exposure` on the HDR scene, and

@@ -80,7 +80,8 @@ use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 const GOLDEN: [(&str, usize); 33] = [
     // RQ5.6 flipped 752 -> 768: the camera's TAA jitter lane (`GpuFrame::jitter`). Pass 2's
     // contracts wave flipped 768 -> 784: each cascade's comparison bias (`GpuFrame::cascade_bias`).
-    ("FrameUniforms", 784),
+    // P2-0.8b (T-06) flipped 784 -> 800: the frame's texture mip bias (`GpuFrame::texture_lod`).
+    ("FrameUniforms", 800),
     ("Light", 32),
     ("Instance", 160),
     ("Material", 48),
@@ -1121,6 +1122,7 @@ fn the_frame_grows_past_the_frozen_v1_prefix_with_every_cascade() {
         ("cascade_texels", offset_of!(GpuFrame, cascade_texels)),
         ("shadow_soft", offset_of!(GpuFrame, shadow_soft)),
         ("shadow_counts", offset_of!(GpuFrame, shadow_counts)),
+        ("texture_lod", offset_of!(GpuFrame, texture_lod)),
     ];
     for (name, offset) in rust {
         assert_eq!(at(name), offset, "FrameUniforms.{name}");

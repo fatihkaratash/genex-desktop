@@ -58,8 +58,9 @@ fn gx_class_texel(color: bool, reference: u32, uv: vec2<f32>, uv_dx: vec2<f32>, 
     return textureSampleGrad(data_textures, texture_sampler, uv, layer(reference), uv_dx, uv_dy);
 }
 
-// One custom draw: its model and normal matrices, last frame's model matrix, its linear tint and
-// x: the simulated time in seconds, y: the draw's index in the frame.
+// One custom draw: its model and normal matrices, last frame's model matrix (matched by draw id,
+// else mesh and ordinal; this frame's without history), its linear tint and x: the simulated time
+// in seconds, y: the draw's index in the frame, z: last frame's simulated time (x on the first).
 struct GxDrawV2 {
     model: mat4x4<f32>,
     normal: mat4x4<f32>,
@@ -204,6 +205,12 @@ fn gx_screen_texel_v2(world_pos: vec3<f32>, size: vec2<u32>) -> vec2<i32> {
 // P2-0.3). A per-cascade lane in `GxFrameV2` is an ABI decision.
 fn gx_sun_cascade_bias(cascade: u32) -> f32 {
     return frame.shadow_params.x;
+}
+
+// The surface chunk's texture mip bias: the pipeline's constant alone (the v2 frame carries no
+// texture lane; renderer pass 2 P2-0.8b T-06 left `GxFrameV2` unchanged).
+fn gx_texture_lod_bias() -> f32 {
+    return GX_TEXTURE_LOD_BIAS;
 }
 
 fn gx_ao_drawn() -> bool {

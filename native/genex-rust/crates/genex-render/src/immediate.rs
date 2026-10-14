@@ -378,9 +378,10 @@ impl ImmediateFrame {
         self.quad(corners, [0.0, 0.0, 1.0, 1.0], color, NO_TEXTURE)
     }
 
-    /// Draw `mesh` with a custom material, tinted `tint`.
+    /// Draw `mesh` with a custom material, tinted `tint`, under the current draw id
+    /// ([`ImmediateFrame::id`]): its motion history follows the id (T-04).
     pub fn custom(&mut self, mesh: MeshId, model: [f32; 16], material: CustomMaterialId, tint: [u8; 4]) -> &mut Self {
-        self.custom.push(CustomDraw { mesh, model, material, tint });
+        self.custom.push(CustomDraw { id: self.scene.id(), mesh, model, material, tint });
         self.counter.count();
         self
     }
@@ -402,6 +403,11 @@ impl ImmediateFrame {
     /// The 3D scene so far.
     pub fn scene(&self) -> &Scene {
         &self.scene
+    }
+
+    /// The custom-material draws so far, in call order.
+    pub fn custom_draws(&self) -> &[CustomDraw] {
+        &self.custom
     }
 
     /// 2D quads so far.

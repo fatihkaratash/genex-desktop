@@ -45,6 +45,9 @@ struct FrameUniforms {
     // cascade's light depth (shadow.rs `Cascades::comparison_bias`), read through
     // gx_sun_cascade_bias (the v2 prelude's reads the shared `shadow_params.x`).
     cascade_bias: vec4<f32>,
+    // x: the frame's texture mip bias (`settings::frame_texture_lod_bias`, T-06), read through
+    // gx_texture_lod_bias; y, z, w: reserved (0).
+    texture_lod: vec4<f32>,
 }
 
 struct Light {

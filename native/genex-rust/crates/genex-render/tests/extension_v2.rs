@@ -122,7 +122,7 @@ fn base_scene() -> Scene {
 
 /// The custom-material row's draw: a 1.5 m cube in the middle, half behind a wall.
 fn centre_draw(material: genex_render::extension::CustomMaterialId) -> CustomDraw {
-    CustomDraw { mesh: MeshId::CUBE, model: scaled([0.0, 0.75, 1.0], [1.5, 1.5, 1.5]), material, tint: [240, 240, 240, 255] }
+    CustomDraw { id: None, mesh: MeshId::CUBE, model: scaled([0.0, 0.75, 1.0], [1.5, 1.5, 1.5]), material, tint: [240, 240, 240, 255] }
 }
 
 /// The base frame with the custom-material row's wall in front of the centre cube's left half.
@@ -807,7 +807,7 @@ fn metal_a_v2_material_through_gx_shade_pbr_is_fogged_as_the_built_in_surface() 
         let mut materials = CustomMaterials::new(&gpu.device, core(), renderer.sample_count());
         let pbr = materials.add_api(&gpu, ABI_V2, PBR_FOGGED_V2, &pbr_uniforms(metallic, roughness), &[]).expect("a v2 fogged material");
         materials.set_environment(Some(views.clone()));
-        let draw = CustomDraw { mesh: MeshId::SPHERE, model: sphere_model(), material: pbr, tint: SPHERE_TINT };
+        let draw = CustomDraw { id: None, mesh: MeshId::SPHERE, model: sphere_model(), material: pbr, tint: SPHERE_TINT };
         hdr_scene_with(&gpu, &mut renderer, &mut materials, &sphere_backdrop(), &[draw])
     };
     let (clear, foggy) = (built_in(Fog::default()), built_in(fog));
@@ -989,7 +989,7 @@ fn metal_a_v2_material_under_an_hdri_shades_like_the_built_in_surface_and_unlike
             let mut materials = CustomMaterials::new(&gpu.device, core(), renderer.sample_count());
             let pbr = materials.add_api(&gpu, ABI_V2, PBR_V2, &pbr_uniforms(metallic, roughness), &[]).expect("a v2 material");
             materials.set_environment(environment_views);
-            let draw = CustomDraw { mesh: MeshId::SPHERE, model: sphere_model(), material: pbr, tint: SPHERE_TINT };
+            let draw = CustomDraw { id: None, mesh: MeshId::SPHERE, model: sphere_model(), material: pbr, tint: SPHERE_TINT };
             hdr_scene_with(&gpu, &mut renderer, &mut materials, &sphere_backdrop(), &[draw])
         };
         let disk = lit_disk(&built_in);
@@ -1339,7 +1339,7 @@ fn metal_a_v2_material_filters_specular_aliasing_as_the_built_in_surface_does_wh
         let mut materials = CustomMaterials::new(&gpu.device, core(), renderer.sample_count());
         let pbr = materials.add_api(&gpu, ABI_V2, source, &pbr_uniforms(metallic, roughness), &[]).expect("a v2 material");
         materials.set_environment(Some(views.clone()));
-        let draw = CustomDraw { mesh: MeshId::SPHERE, model: sphere_model(), material: pbr, tint: SPHERE_TINT };
+        let draw = CustomDraw { id: None, mesh: MeshId::SPHERE, model: sphere_model(), material: pbr, tint: SPHERE_TINT };
         hdr_scene_with(&gpu, &mut renderer, &mut materials, &sphere_backdrop(), &[draw])
     };
     let disk = lit_disk(&built_in);

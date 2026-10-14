@@ -536,7 +536,8 @@ pub struct TemporalFrame {
     pub jitter: [f32; 2],
     /// The previous frame's jitter (this frame's on a history reset).
     pub prev_jitter: [f32; 2],
-    /// The mip bias materials sample with (0 without TAA).
+    /// The mip bias materials sample with ([`crate::settings::frame_texture_lod_bias`]: TAA's,
+    /// FSR1's upscale's without TAA (renderer pass 2, P2-0.8b T-06), else 0), at the frame's scale.
     pub texture_lod_bias: f32,
     /// The render size (the history's).
     pub render_size: (u32, u32),
@@ -569,7 +570,7 @@ impl TemporalFrame {
             fsr,
             jitter: config.jitter,
             prev_jitter,
-            texture_lod_bias: if taa { quality.taa.texture_lod_bias(config.scale) } else { 0.0 },
+            texture_lod_bias: crate::settings::frame_texture_lod_bias(&quality.taa, taa, fsr.easu, config.scale),
             render_size: config.render_size,
             output_size: config.output_size,
             frame_index: config.frame_index,
@@ -674,6 +675,32 @@ mod tests {
             assert_eq!((frame.jitter, frame.prev_jitter, frame.texture_lod_bias), ([0.0; 2], [0.0; 2], 0.0));
         }
         assert_eq!((frame.render_size, frame.output_size, frame.frame_index, frame.history_reset), ((960, 540), (1920, 1080), 5, false));
+    }
+
+    /// Renderer pass 2, P2-0.8b (T-06): a frame FSR1's EASU upscales without TAA (every phone
+    /// preset, medium under DRS) samples material textures with the negative mip bias FSR1 asks
+    /// for, `log2(render / display)` of that frame's scale, so a dynamic-resolution step moves it;
+    /// TAA's frames keep their own bias and a frame at scale 1 none.
+    #[test]
+    fn an_easu_frame_without_taa_samples_textures_with_the_upscales_mip_bias() {
+        let mut quality = Quality::off();
+        quality.hdr = true;
+        quality.set_feature(RenderFeature::Upscaler, true);
+        let settings = crate::settings::RenderSettings::off().with_quality(crate::settings::PresetChoice::Off, quality);
+        for scale in [0.5f32, 0.6, 0.75, 1.0] {
+            let config = settings.frame_config((1920, 1080), scale, 5, false);
+            let frame = TemporalFrame::new(&settings, &config, false);
+            assert!(!frame.taa, "an MSAA or no-AA frame");
+            let expected = if scale < 1.0 { libm::log2f(scale) } else { 0.0 };
+            assert_eq!(frame.fsr.easu, scale < 1.0, "EASU runs below scale 1");
+            assert!((frame.texture_lod_bias - expected).abs() < 1e-6, "scale {scale}: bias {} against log2(scale) {expected}", frame.texture_lod_bias);
+        }
+        let mut taa = quality;
+        taa.set_feature(RenderFeature::Taa, true);
+        let settings = crate::settings::RenderSettings::off().with_quality(crate::settings::PresetChoice::Off, taa);
+        let config = settings.frame_config((1920, 1080), 0.5, 5, false);
+        let frame = TemporalFrame::new(&settings, &config, false);
+        assert_eq!(frame.texture_lod_bias, taa.taa.texture_lod_bias(0.5), "TAA keeps its own bias");
     }
 
     #[test]

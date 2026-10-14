@@ -1382,6 +1382,9 @@ impl Presenter {
         let (mut immediate, mut drawn) = world_frame(frame, camera, &self.assets);
         for draw in frame.custom_draws() {
             immediate.tag(&draw.tag);
+            // Its draw id keys its motion under TAA as a plain draw's does (renderer pass 2,
+            // P2-0.8b T-04); an id-less one matches by its mesh and order.
+            immediate.id(draw.id);
             let triangles = self.push_custom(&mut immediate, &mut drawn, draw);
             note_triangles(&mut drawn, &draw.tag, triangles);
         }

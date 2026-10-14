@@ -466,11 +466,14 @@ pub struct GxDrawV2 {
     pub model: [f32; 16],
     /// Inverse-transpose of the model matrix (normals).
     pub normal: [f32; 16],
-    /// Last frame's model matrix (motion vectors; this frame's on a history reset).
+    /// Last frame's model matrix (motion vectors): the draw's matched by its draw id, else by its
+    /// mesh and ordinal (renderer pass 2, P2-0.8b T-04); this frame's for a draw without history.
     pub prev_model: [f32; 16],
     /// The draw's tint, linear rgb and alpha (v1's was sRGB-encoded).
     pub tint: [f32; 4],
-    /// x: simulated seconds; y: the draw's index in the frame; z, w: reserved.
+    /// x: simulated seconds; y: the draw's index in the frame; z: last frame's simulated seconds
+    /// (`prev_time`, T-04: a vertex animation evaluates itself at both for its motion; x on the
+    /// first frame); w: reserved.
     pub params: [f32; 4],
 }
 

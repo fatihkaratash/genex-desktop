@@ -1,7 +1,8 @@
 // TAA (graph node 17; RQ5.2): the jittered HDR scene at render size resolved against its
 // rgba16float history (ping-pong). Per pixel:
 // - dilation: the motion of the closest depth in the 3x3 neighbourhood (an edge moves with the
-//   object in front of it);
+//   object in front of it); a neighbourhood of background alone moves with the camera at the far
+//   plane through `reproject` (T-03);
 // - history: Catmull-Rom (five bilinear taps) at uv - motion, rescaled by exposure now / exposure
 //   then (pre-exposed space), so an exposure change never resets it;
 // - rectification (renderer pass 2, P2-0.8a: S10 and T-02, after FidelityFX FSR 2.2, MIT): the
@@ -423,8 +424,8 @@ fn gx_taa_instability(prev: vec4<f32>, colour_box: ColourBox, reactive: f32) -> 
 // The depth key the surface at `uv` (depth key `key`) had last frame if it stayed where it is: its
 // NDC position through `reproject` (the camera's own motion). A point at infinity (key 0) or one
 // the reprojection cannot place keeps its key.
-// Also (yz) how far, in render pixels, the camera's own motion moved that point since last frame
-// (a point at infinity included: the sky, whose motion target reads zero).
+// Also (yz) how far, in render pixels (x right, y up), the camera's own motion moved that point
+// since last frame (a point at infinity included: the background's motion, T-03).
 fn gx_taa_prev_key(uv: vec2<f32>, key: f32) -> vec3<f32> {
     let depth = select(1.0 - key, key, gx_taa.counts.z == 1u);
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
@@ -456,9 +457,16 @@ fn fs_taa(in: TaaOut) -> TaaTargets {
     let pixel = clamp(vec2<i32>(in.clip.xy), vec2<i32>(0), size - vec2<i32>(1));
     var n: Neighbourhood;
     let shading = gx_taa_neighbourhood(&n, pixel, size);
-    // Sampled before any branch on the pixel's data (uniform control flow for the sampler).
-    let motion = textureLoad(gx_motion, n.closest, 0).xy;
     let uv = (vec2<f32>(pixel) + 0.5) * gx_taa.size.zw;
+    // Where the centre's surface sat last frame had it stayed put (the camera's own motion), and
+    // how far the camera moved it in render pixels.
+    let camera = gx_taa_prev_key(uv, n.key);
+    // Dilated motion: the closest surface's in the 3x3. Where the whole neighbourhood is the
+    // background (its closest key 0: the sky, the sun disc, the fog horizon) it is the camera's
+    // own motion at the far plane, the centre's (renderer pass 2, P2-0.8b T-03, after Bevy's
+    // background motion vectors), so a turning camera reprojects the sky instead of leaning on
+    // the colour box. A select, not a branch: measured cheaper (0.015 ms against 0.025 ms at 1080p).
+    let motion = select(textureLoad(gx_motion, n.closest, 0).xy, camera.yz * 2.0 * gx_taa.size.zw, n.key_hi <= 0.0);
     let prev_uv = uv - motion * vec2<f32>(0.5, -0.5);
     let history_sample = gx_taa_history_catmull_rom(prev_uv);
     let history_rgb = history_sample.rgb * gx_taa.params.y;
@@ -488,7 +496,6 @@ fn fs_taa(in: TaaOut) -> TaaTargets {
     // jitter hits in some frames only would otherwise read as one every time it shows (renderer
     // pass 2, P2-0.8a: compared both ways, the far tree line flickered on 0.094% of a still frame
     // at high against 0.013%).
-    let camera = gx_taa_prev_key(uv, n.key);
     let ratio = camera.x / max(n.key, 1e-20);
     let prev_hi = n.key_hi * select(ratio, 1.0, n.key <= 0.0);
     let disoccluded = history_key > prev_hi * (1.0 + tolerance) + 1e-6;
@@ -512,8 +519,8 @@ fn fs_taa(in: TaaOut) -> TaaTargets {
     // T-02: the lock and the luma instability, from last frame's (none for a new sample).
     let colour_box = gx_taa_colour_box(&n);
     // A moving pixel's protection is cut as FSR 2.2's temporal reactive factor cuts it: towards
-    // GX_TAA_MOTION_REACTIVE at a render pixel of motion, its own or the camera's (the sky's motion
-    // target reads zero), so a lock or an oscillation does not hold history the motion smeared.
+    // GX_TAA_MOTION_REACTIVE at a render pixel of motion, its own or the camera's, so a lock or an
+    // oscillation does not hold history the motion smeared.
     let moving = max(motion_px, length(camera.yz));
     // How recently the pixel moved (1 this frame at a render pixel of motion, falling to 0 over a
     // jitter cycle): an object passing over a still pixel rises and falls in its luma like a

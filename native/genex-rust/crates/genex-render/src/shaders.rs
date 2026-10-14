@@ -247,6 +247,8 @@ pub const SHADERS: &[(&str, &str)] = &[
     ("taa-reactive-particles", crate::post::taa::REACTIVE_PARTICLES),
     ("easu", crate::post::fsr::EASU),
     ("rcas", crate::post::fsr::RCAS),
+    // Renderer pass 2, P2-0.8b (T-03): the motion prepass's background motion.
+    ("motion-background", crate::motion::BACKGROUND_MOTION),
 ];
 
 /// A shader module from WGSL checked against [`crate::WGSL_MAX_BYTES`].

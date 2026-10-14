@@ -28,7 +28,9 @@
 //! with one sample ([`ScenePath::taa`]; MSAA is off, `landed_samples`), the frame:
 //! - jitters every camera depth writer by Halton(2, 3) keyed to the frame index
 //!   (`GpuFrame::jitter`, the cull, the shadows and `view_proj` stay unjittered) and samples
-//!   material textures with TAA's LOD bias (`GX_TEXTURE_LOD_BIAS` at the nominal scale);
+//!   material textures with TAA's LOD bias at the frame's scale (`GpuFrame::texture_lod`, a
+//!   uniform: a dynamic-resolution step moves it; renderer pass 2, P2-0.8b T-06, which also gives
+//!   FSR1's upscaled frames without TAA their `log2(render / display)`);
 //! - runs the prepass's motion variant (node 7, [`crate::motion`]: NDC motion and the reactive
 //!   no-history flags, rows matched by draw id or mesh ordinal on the frame's history set), the
 //!   reactive coverage of the transparent draws (15a) and the resolve (17, [`crate::post::taa`]);
@@ -360,10 +362,6 @@ struct SurfaceKey {
     /// Whether normal-map mips carry Toksvig's length (`GX_TOKSVIG`: the surface folds it into
     /// roughness).
     toksvig: bool,
-    /// The texture LOD bias's bits (`GX_TEXTURE_LOD_BIAS`, RQ5.2): under TAA on the HDR scene,
-    /// `TaaQuality::texture_lod_bias` of the quality's nominal render scale (a dynamic-resolution
-    /// step keeps the pipelines it has: DRS never compiles), else 0.
-    lod_bias: u32,
     /// Whether the frame's local lights may come binned (`GX_BINNED_LIGHTS`: the quality's
     /// clustered switch). Off, the binned path's code is compiled out of the fragment (RX.R1).
     binned_lights: bool,
@@ -412,19 +410,17 @@ impl SurfaceKey {
         effects: EffectKey::NONE,
         texture_classes: false,
         toksvig: false,
-        lod_bias: 0,
         binned_lights: false,
         sun_soft_edges: false,
         sun_cascades: SHADOW_CASCADES as u8,
     };
 
     /// The key `quality` asks of the HDR scene (`hdr`) or the legacy one, `taa` when TAA resolves
-    /// the frame. The soft filters' pattern turns with the frame, and textures take TAA's LOD
-    /// bias, only when a temporal resolve follows the HDR scene (a TAA quality on a renderer still
-    /// drawing MSAA keeps the static pattern).
+    /// the frame. The soft filters' pattern turns with the frame only when a temporal resolve
+    /// follows the HDR scene (a TAA quality on a renderer still drawing MSAA keeps the static
+    /// pattern). Textures take their LOD bias from the frame (`GpuFrame::texture_lod`, T-06).
     fn of(quality: &Quality, hdr: bool, taa: bool) -> SurfaceKey {
         let temporal = hdr && taa;
-        let lod_bias = if temporal { quality.taa.texture_lod_bias(quality.render_scale) } else { 0.0 };
         SurfaceKey {
             specular_aa: hdr && quality.specular_aa,
             shadow_filter: quality.shadows.filter,
@@ -432,7 +428,6 @@ impl SurfaceKey {
             effects: EffectKey::of(quality),
             texture_classes: false,
             toksvig: false,
-            lod_bias: lod_bias.to_bits(),
             binned_lights: crate::lights::BINNED_SHADING_LANDED && quality.lights.clustered,
             sun_soft_edges: quality.shadows.blend_percent > 0 || quality.shadows.fade_percent > 0,
             sun_cascades: quality.shadows.cascades.clamp(1, MAX_CASCADES as u8),
@@ -661,6 +656,8 @@ struct ReactivePipelines {
 struct MotionPipelines {
     batches: Compiled<RenderPipeline>,
     draws: Compiled<RenderPipeline>,
+    /// The background's motion after the geometry (renderer pass 2, P2-0.8b T-03).
+    background: Compiled<RenderPipeline>,
 }
 
 /// The index of `set` in per-set arrays.
@@ -1165,8 +1162,8 @@ fn forward_equal_pipeline(device: &Device, layouts: &Layouts, format: TextureFor
 /// chunk's `GX_SPECULAR_AA`, which only the forward module declares), and the sun chunk filters
 /// its cascades with `surface`'s filter (`GX_SHADOW_FILTER`, [`ShadowFilter::shader_id`]), turning
 /// the soft filters' taps with the frame only under a temporal resolve (`GX_SHADOW_TEMPORAL`);
-/// each RQ4 screen effect is read only when the quality draws it ([`EffectKey`]); under TAA the
-/// material textures sample with its LOD bias (`GX_TEXTURE_LOD_BIAS`). Two constants compile
+/// each RQ4 screen effect is read only when the quality draws it ([`EffectKey`]); the material
+/// textures' LOD bias is the frame's (`GpuFrame::texture_lod`, T-06), never a constant. Two constants compile
 /// out code a frame of the pipeline can never take (RX.R1: the features-off frame should carry no
 /// more than RQ0's): the environment's light only ever lights the HDR scene
 /// (`GX_ENVIRONMENT_LIGHT`), and binned lights only come with the clustered switch
@@ -1183,7 +1180,6 @@ fn surface_constants(reversed: bool, format: TextureFormat, surface: SurfaceKey)
         ("GX_SUN_CASCADES", f64::from(surface.sun_cascades)),
         ("GX_ENVIRONMENT_LIGHT", f64::from(u8::from(reversed))),
         ("GX_BINNED_LIGHTS", f64::from(u8::from(surface.binned_lights))),
-        ("GX_TEXTURE_LOD_BIAS", f64::from(f32::from_bits(surface.lod_bias))),
         ("GX_TEXTURE_CLASSES", f64::from(u8::from(surface.texture_classes))),
         ("GX_TOKSVIG", f64::from(u8::from(surface.toksvig))),
         ("GX_AO", f64::from(u8::from(effects.ao))),
@@ -1244,6 +1240,7 @@ fn motion_pipelines(device: &Device, layouts: &Layouts, node: &MotionNode, rever
     Ok(MotionPipelines {
         batches: node.pipeline(device, &module, crate::motion::VERTEX_ENTRY, &meshes, [&layouts.frame, &layouts.pass], reversed),
         draws: node.pipeline(device, &module, crate::motion::DRAW_VERTEX_ENTRY, &meshes[..1], [&layouts.frame, &layouts.prepass_draw], reversed),
+        background: node.background_pipeline(device, reversed)?,
     })
 }
 
@@ -3168,6 +3165,10 @@ impl Renderer {
         // zw: last frame's (this frame's after a reset), the v2 frame's `prev_jitter`.
         let prev = self.prev_jitter_ndc(temporal);
         plan.frame.jitter = [temporal.jitter_ndc[0], temporal.jitter_ndc[1], prev[0], prev[1]];
+        // T-06: the material textures' mip bias at this frame's scale (TAA's, or FSR1's upscale's
+        // without TAA), a uniform: a dynamic-resolution step moves it without a pipeline.
+        let easu = scene_path.hdr && scene_path.fsr.easu;
+        plan.frame.texture_lod[0] = crate::settings::frame_texture_lod_bias(&self.quality.taa, scene_path.hdr && temporal.taa, easu, self.render_scale);
         let previous_skinned = self.plan_motion(&mut plan, temporal);
         let uploads = Uploads::new(&mut plan, path)?;
         self.tables.ensure(&self.device, &plan, &uploads)?;
@@ -3525,6 +3526,11 @@ impl Renderer {
                 pass.draw_indexed(mesh.first_index..mesh.first_index + mesh.index_count, mesh.base_vertex, 0..1);
                 custom_draws += 1;
             }
+        }
+        if let Some((group, motion_pipelines, _, _)) = motion {
+            // T-03: the camera's motion wherever no geometry drew (the sky, its sun disc, the fog
+            // horizon), after every draw of the pass: `Equal` against the cleared far plane.
+            MotionNode::draw_background(&mut pass, &motion_pipelines.background, group);
         }
         Some(PrepassInfo { consumers: plan.consumers, equal_depth: plan.equal, custom_draws, size: self.targets.render_size })
     }

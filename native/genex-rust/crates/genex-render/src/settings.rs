@@ -1125,8 +1125,30 @@ pub const TAA_ALPHA_MIN_FLOOR: f32 = 0.02;
 /// The extra mip bias materials sample with under TAA, beside `log2(render_scale)`: the jitter
 /// recovers the detail a sharper mip would alias (plan RQ5.2).
 pub const DEFAULT_TAA_LOD_BIAS: f32 = -0.5;
-/// The most negative total texture LOD bias TAA may ask for (beyond it, textures shimmer).
+/// The most negative total texture LOD bias TAA (or FSR1's upscale, [`frame_texture_lod_bias`])
+/// may ask for (beyond it, textures shimmer).
 pub const TAA_LOD_BIAS_MIN: f32 = -2.0;
+
+/// The mip bias material textures sample with on one frame at its `render_scale` (renderer pass
+/// 2, P2-0.8b T-06): TAA's ([`TaaQuality::texture_lod_bias`]) when TAA resolves the frame
+/// (`temporal`), else `log2(scale)` when FSR1's EASU upscales it (`easu`; FSR1 asks for the
+/// negative mip bias `log2(render / display)`, without the temporal upscalers' extra -1, so a
+/// texture is sampled at the mip the display would take), never below [`TAA_LOD_BIAS_MIN`], else
+/// 0. Taken from the frame's own scale, so a dynamic-resolution step moves it.
+pub fn frame_texture_lod_bias(taa: &TaaQuality, temporal: bool, easu: bool, render_scale: f32) -> f32 {
+    if temporal {
+        return taa.texture_lod_bias(render_scale);
+    }
+    if !easu {
+        return 0.0;
+    }
+    libm::log2f(held_render_scale(render_scale)).max(TAA_LOD_BIAS_MIN)
+}
+
+/// `render_scale` held to `RENDER_SCALE_MIN..=1` (NaN: 1), as the mip biases read it.
+fn held_render_scale(render_scale: f32) -> f32 {
+    if render_scale.is_nan() { 1.0 } else { render_scale.clamp(RENDER_SCALE_MIN, 1.0) }
+}
 
 /// TAA's resource knobs (RQ5): equal pipelines whatever their values, so DRS and demotion may
 /// move them. Whether TAA runs at all, and whether RCAS sharpens after it, is
@@ -1170,8 +1192,7 @@ impl TaaQuality {
     /// The mip bias materials sample with under TAA at `render_scale`: `log2(scale) + lod_bias`,
     /// never below [`TAA_LOD_BIAS_MIN`] (libm's `log2f`, the same bits on every target).
     pub fn texture_lod_bias(&self, render_scale: f32) -> f32 {
-        let scale = if render_scale.is_nan() { 1.0 } else { render_scale.clamp(RENDER_SCALE_MIN, 1.0) };
-        (libm::log2f(scale) + self.lod_bias).max(TAA_LOD_BIAS_MIN)
+        (libm::log2f(held_render_scale(render_scale)) + self.lod_bias).max(TAA_LOD_BIAS_MIN)
     }
 }
 
@@ -2482,6 +2503,18 @@ mod tests {
         assert_eq!(taa.texture_lod_bias(0.1), -1.5, "the scale is held to the class floor");
         assert_eq!(taa.texture_lod_bias(f32::NAN), -0.5);
         assert_eq!(TaaQuality::DEFAULT.with_lod_bias(-2.0).texture_lod_bias(0.5), TAA_LOD_BIAS_MIN);
+    }
+
+    #[test]
+    fn a_frames_texture_lod_bias_is_taas_under_taa_and_the_upscales_under_easu_alone() {
+        let taa = TaaQuality::DEFAULT;
+        assert_eq!(frame_texture_lod_bias(&taa, true, true, 0.5), -1.5, "TAA's, whatever the upscale");
+        assert_eq!(frame_texture_lod_bias(&taa, false, true, 0.5), -1.0, "EASU alone: log2(render / display)");
+        assert_eq!(frame_texture_lod_bias(&taa, false, true, 0.75), libm::log2f(0.75));
+        assert_eq!(frame_texture_lod_bias(&taa, false, false, 0.5), 0.0, "no upscale, no bias");
+        assert_eq!(frame_texture_lod_bias(&taa, false, true, 0.1), libm::log2f(RENDER_SCALE_MIN), "held to the class floor");
+        assert_eq!(frame_texture_lod_bias(&taa, false, true, f32::NAN), 0.0);
+        assert!(frame_texture_lod_bias(&taa, false, true, 0.1) >= TAA_LOD_BIAS_MIN);
     }
 
     #[test]

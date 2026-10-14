@@ -26,10 +26,13 @@ override GX_LOD_FADE: bool = false;
 @group(1) @binding(0) var<uniform> pass_view: PassView;
 
 // One custom-geometry draw (prepass.rs `GpuPrepassDraw`, 256 bytes apart): a custom material's
-// model matrix and its inverse-transpose.
+// model matrix, its inverse-transpose, last frame's model matrix (this frame's without history,
+// renderer pass 2 P2-0.8b T-04) and its flags (x: GX_MOTION_NO_HISTORY when it has none).
 struct PrepassDraw {
     model: mat4x4<f32>,
     normal: mat4x4<f32>,
+    prev_model: mat4x4<f32>,
+    flags: vec4<u32>,
 }
 
 @group(1) @binding(1) var<uniform> prepass_draw: PrepassDraw;
@@ -96,6 +99,8 @@ struct MotionFrame {
     prev_view_proj: mat4x4<f32>,
     // xy: this frame's jitter in NDC (y up), what `gx_clip_position` adds; zw: reserved (0).
     jitter: vec4<f32>,
+    // Last frame's unjittered view_proj x this frame's inverse (motion_background.wgsl reads it).
+    reproject: mat4x4<f32>,
 }
 
 // `motion::MOTION_FLAG_NO_HISTORY`.
@@ -160,17 +165,19 @@ fn vs_prepass_motion(in: PrepassIn, @builtin(instance_index) instance: u32, @bui
     return out;
 }
 
-// A world stage's custom geometry: no previous transform is known, so its motion is the camera's
-// alone (zero object motion) and it keeps its history.
+// A world stage's custom geometry (renderer pass 2, P2-0.8b T-04): last frame's model matrix,
+// matched by draw id or mesh ordinal (`motion::CustomMotion`), gives its object motion; a draw
+// without history moves with the camera alone and takes the current sample.
 @vertex
 fn vs_prepass_draw_motion(in: PrepassDrawIn) -> MotionOut {
     let world = prepass_draw.model * vec4<f32>(in.position, 1.0);
+    let prev_world = prepass_draw.prev_model * vec4<f32>(in.position, 1.0);
     var out: MotionOut;
     out.clip = gx_clip_position(frame.view_proj, world, motion_frame.jitter.xy);
     out.normal = (prepass_draw.normal * vec4<f32>(in.normal, 0.0)).xyz;
     out.current = frame.view_proj * world;
-    out.previous = motion_frame.prev_view_proj * world;
-    out.reactive = 0u;
+    out.previous = motion_frame.prev_view_proj * prev_world;
+    out.reactive = prepass_draw.flags.x & GX_MOTION_NO_HISTORY;
     return out;
 }
 
