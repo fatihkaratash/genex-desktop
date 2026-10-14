@@ -9,18 +9,31 @@
 //!   reprojects with the object in front of it;
 //! - **history:** Catmull-Rom (five bilinear taps) at `uv - motion`, rescaled by exposure now /
 //!   exposure then ([`GpuTaaParams::params`] y), so an exposure change never resets it;
-//! - **variance clipping:** the history is clipped towards the neighbourhood's YCoCg mean, inside
-//!   mean ± [`VARIANCE_GAMMA`] σ intersected with the neighbourhood's min/max ([`TaaFlags::CLIP`]);
+//! - **rectification** (renderer pass 2, P2-0.8a: S10 and T-02, after FidelityFX FSR 2.2, MIT): the
+//!   neighbourhood's colour box is built in reversibly tonemapped space `c / (1 + max3(c))`, YCoCg:
+//!   mean ± [`VARIANCE_GAMMA`] σ inside the neighbourhood's min/max ([`TaaFlags::CLIP`]), so one
+//!   bright pixel no longer stretches it over everything beside a highlight. History outside the
+//!   box is clipped towards it softly: the clip is undone by how much the pixel is **locked**
+//!   (FSR 2.2's thin-feature confidence: a lightness ridge no 2x2 block of similar neighbours
+//!   explains; or an oscillation; held for a jitter cycle in the [`LOCK_FORMAT`] side history) or
+//!   **luma-unstable** (its quantised luma over the last four frames, the [`LUMA_HISTORY_FORMAT`]
+//!   side history, rose and fell), scaled by `1 - sqrt(reactive)` (motion counts as reactive up to
+//!   [`MOTION_REACTIVE`]). A sub-pixel feature the jitter
+//!   shows in some frames only keeps its history instead of being clipped away on the frames that
+//!   miss it;
 //! - **rejection:** off-screen history, depth disocclusion and the reactive mask take the current
 //!   frame filtered around the unjittered pixel centre (a 3x3 Gaussian over the jittered taps,
 //!   [`FILTER_FALLOFF`]), so a rejected region neither aliases nor wobbles by the jitter; motion
-//!   raises the current weight by [`MOTION_REJECTION_PER_PX`] per pixel. Disocclusion compares the
-//!   history's depth key with the key the surface had last frame if it stayed put: the camera's
-//!   own motion ([`GpuTaaParams::reproject`], last frame's view_proj × this frame's inverse) scales
-//!   the neighbourhood's key range, outside which by [`DISOCCLUSION_TOLERANCE`] the pixel is
-//!   disoccluded. A camera dollying or turning keeps the history of every static surface (RQ5
-//!   review: compared with the current keys, a 6 m/s dolly threw away the ground's history
-//!   within about 2 m);
+//!   raises the current weight by [`MOTION_REJECTION_PER_PX`] per pixel. Disocclusion: the history's
+//!   depth key (last frame's farthest surface in the 3x3) lies nearer, by more than
+//!   [`DISOCCLUSION_TOLERANCE`], than the closest key the neighbourhood had last frame if it stayed
+//!   put (the camera's own motion, [`GpuTaaParams::reproject`], last frame's view_proj × this
+//!   frame's inverse, scales it): what stood in front went away. A camera dollying or turning keeps
+//!   the history of every static surface (RQ5 review: compared with the current keys, a 6 m/s
+//!   dolly threw away the ground's history within about 2 m), and a sub-pixel feature the jitter
+//!   shows in some frames only is never a disocclusion (P2-0.8a: the history carried the centre's
+//!   key, and the range was tested both ways, so such features vanished and the far tree line
+//!   flickered). A surface that came in front is left to the colour box;
 //! - **accumulation:** `max(1 / (n + 1), alpha_min)` after the history's reset (n frames since;
 //!   the floor is [`STILL_ALPHA_SHARE`] of `alpha_min` on a pixel moving under
 //!   [`STILL_MOTION_PX`]), blended with weights `1 / (1 + max(luma - 1, 0))` in pre-exposed space,
@@ -29,10 +42,11 @@
 //!   moving ones their alpha capped at [`TRANSPARENT_COVERAGE`] ([`transparent_coverage`]), so
 //!   still ones accumulate too.
 //!
-//! The resolved colour is the history written this frame (rgb), and its alpha carries the pixel's
-//! depth key (`d` under reverse-Z, `1 - d` under standard Z: both proportional to 1 / view depth),
-//! which the next frame's disocclusion test reads. Readers downstream of TAA (L3 `post-hdr`,
-//! bloom, exposure, the tonemap) read `.rgb`.
+//! The resolved colour is the history written this frame (rgb), and its alpha carries the 3x3
+//! neighbourhood's farthest depth key (`d` under reverse-Z, `1 - d` under standard Z: both
+//! proportional to 1 / view depth), which the next frame's disocclusion test reads. Readers
+//! downstream of TAA (L3 `post-hdr`, bloom, exposure, the tonemap) read `.rgb`. The luma and lock
+//! side histories ping-pong with it, made and read at the same size.
 //!
 //! TAA is a pipeline knob ([`crate::settings::AntiAliasing`]: MSAA is off while it runs); its
 //! jitter cycle, accumulation floor and LOD bias are resource knobs
@@ -70,6 +84,20 @@ pub const HISTORY_USAGE: TextureUsages = TextureUsages::RENDER_ATTACHMENT.union(
 pub const HISTORY_LABELS: [&str; 2] = ["taa history a", "taa history b"];
 /// Bytes of one history texel.
 pub const HISTORY_TEXEL_BYTES: u64 = 8;
+/// The luma side history (T-02): the last four frames' quantised box-centre luma, x the newest
+/// (FSR 2.2's luma history, for its luma instability).
+pub const LUMA_HISTORY_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+/// The lock side history (T-02): x the lock's remaining lifetime / 2 (0..2 jitter cycles' worth),
+/// y the shading luma it was locked at (FSR 2.2's lock status), z how recently the pixel moved (1
+/// at a render pixel of motion, falling to 0 over a jitter cycle: a pixel an object just passed
+/// over is not protected).
+pub const LOCK_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+/// The luma side history's labels, a pair like the colour history's.
+pub const LUMA_HISTORY_LABELS: [&str; 2] = ["taa luma history a", "taa luma history b"];
+/// The lock side history's labels.
+pub const LOCK_LABELS: [&str; 2] = ["taa lock a", "taa lock b"];
+/// Bytes of one texel of both side histories.
+pub const SIDE_TEXEL_BYTES: u64 = 4 + 4;
 /// The reactive mask's format (1: the current sample wins), fragment-written.
 pub const REACTIVE_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 /// The reactive mask's usages.
@@ -83,9 +111,34 @@ pub const REACTIVE_LABEL: &str = "taa reactive";
 pub const DISOCCLUSION_TOLERANCE: f32 = 0.05;
 /// The current sample's extra weight per render pixel of motion (fully current at 100 px).
 pub const MOTION_REJECTION_PER_PX: f32 = 0.01;
-/// The variance clip's box: the neighbourhood's mean ± this many standard deviations (YCoCg),
-/// intersected with its min/max (`GX_TAA_VARIANCE_GAMMA` in taa.wgsl).
+/// The colour box: the neighbourhood's mean ± this many standard deviations (tonemapped YCoCg),
+/// intersected with its min/max (`GX_TAA_VARIANCE_GAMMA` in taa.wgsl). FSR 2.2 weighs its samples
+/// `exp(-(2..3) d²)` by their distance from the unjittered centre at one deviation; measured here
+/// (P2-0.8a), that box clipped static edges within the first jitter cycle (edge error against the
+/// cycle's even mean 0.075 at 1.0 weighted, 0.018 at 1.0 unweighted, 0.004 at 1.25 unweighted), so
+/// a settled capture would alias, and the box stays unweighted at 1.25.
 pub const VARIANCE_GAMMA: f32 = 1.25;
+/// Two neighbours' lock lumas are similar within this ratio of their perceived lightness: FSR 2.2's
+/// 1.05 on lightness^(1/6) (`ffx_fsr2_lock.h`), to the sixth (`GX_TAA_LOCK_SIMILAR_RATIO`).
+pub const LOCK_SIMILAR_RATIO: f32 = 1.340_095_6;
+/// A lock whose shading luma changed by more than this share (1 - min/max) dies, and the change
+/// raises the reactive factor (FSR 2.2's UpdateLockStatus; `GX_TAA_LOCK_SHADING_CHANGE`).
+pub const LOCK_SHADING_CHANGE: f32 = 0.1;
+/// The luma deviation at which the colour box (or the swing of the last five frames' box-centre
+/// luma) counts as wide enough for luma instability (FSR 2.2: `pow(saturate(sigma / 0.1), 6)`;
+/// `GX_TAA_INSTABILITY_BOX_SIGMA`).
+pub const INSTABILITY_BOX_SIGMA: f32 = 0.1;
+/// The reactive factor a pixel moving a render pixel or more a frame (its own motion or the
+/// camera's, the sky included) counts as for its lock and luma instability, reached linearly from
+/// still (FSR 2.2's ComputeTemporalReactiveFactor; `GX_TAA_MOTION_REACTIVE`). Without it a lock
+/// or an oscillation held smeared history through a pan: bench-outdoor at 4 px a frame streaked
+/// the trees across the sky (P2-0.8a).
+pub const MOTION_REACTIVE: f32 = 0.4;
+/// Where [`GpuTaaParams::counts`] w keeps the jitter cycle's frames (bits 8..15; the flags hold
+/// bits 0..7): a lock lives one cycle of frames.
+pub const JITTER_CYCLE_SHIFT: u32 = 8;
+/// The flag bits of [`GpuTaaParams::counts`] w.
+const FLAG_BITS: u32 = (1 << JITTER_CYCLE_SHIFT) - 1;
 /// The rejected-pixel filter's falloff `k` (`GX_TAA_FILTER_FALLOFF`): each tap of the 3x3
 /// neighbourhood weighs `exp(-k d²)` at `d` render pixels from the unjittered pixel centre.
 pub const FILTER_FALLOFF: f32 = 2.29;
@@ -105,9 +158,10 @@ pub const IDENTITY: [f32; 16] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.
 pub struct TaaFlags(u32);
 
 impl TaaFlags {
-    /// No clipping: history is only rejected (tests and debugging).
+    /// No rectification: history is only rejected (tests and debugging).
     pub const NONE: TaaFlags = TaaFlags(0);
-    /// YCoCg variance clipping of the history (always on in the renderer).
+    /// The history's rectification against the colour box, with the locks and the luma
+    /// instability (always on in the renderer).
     pub const CLIP: TaaFlags = TaaFlags(1);
 
     /// The bits the shader reads.
@@ -214,6 +268,8 @@ const MOTION_BINDING: u32 = 3;
 const REACTIVE_BINDING: u32 = 4;
 const SAMPLER_BINDING: u32 = 5;
 const PARAMS_BINDING: u32 = 6;
+const LUMA_HISTORY_BINDING: u32 = 7;
+const LOCK_BINDING: u32 = 8;
 
 /// The resolve's uniform (`TaaParams`).
 #[repr(C)]
@@ -229,7 +285,8 @@ pub struct GpuTaaParams {
     pub params: [f32; 4],
     /// x: frames since the history's reset (n, saturating; the node writes its own count, so a
     /// frame index restarted by a dynamic-resolution step does not restart the accumulation); y: 1
-    /// when this frame resets it; z: 1 under reverse-Z; w: [`TaaFlags`] bits.
+    /// when this frame resets it; z: 1 under reverse-Z; w: [`TaaFlags`] bits in bits 0..7 and the
+    /// jitter cycle's frames from [`JITTER_CYCLE_SHIFT`].
     pub counts: [u32; 4],
     /// Last frame's unjittered view_proj × this frame's unjittered inverse, column-major: where a
     /// pixel's NDC point (x, y, device depth) sat in last frame's clip space ([`IDENTITY`] for a
@@ -248,7 +305,7 @@ impl GpuTaaParams {
             size: [w, h, 1.0 / w, 1.0 / h],
             jitter: [config.jitter[0], config.jitter[1], prev_jitter[0], prev_jitter[1]],
             params: [taa.alpha_min, ratio, DISOCCLUSION_TOLERANCE, MOTION_REJECTION_PER_PX],
-            counts: [frames, u32::from(config.history_reset), u32::from(config.depth_reversed), TaaFlags::CLIP.bits()],
+            counts: [frames, u32::from(config.history_reset), u32::from(config.depth_reversed), TaaFlags::CLIP.bits() | taa.jitter_cycle.frames() << JITTER_CYCLE_SHIFT],
             reproject: IDENTITY,
         }
     }
@@ -263,10 +320,15 @@ impl GpuTaaParams {
         self
     }
 
-    /// The row with `flags` instead.
+    /// The row with `flags` instead (the jitter cycle kept).
     pub const fn with_flags(mut self, flags: TaaFlags) -> GpuTaaParams {
-        self.counts[3] = flags.bits();
+        self.counts[3] = (self.counts[3] & !FLAG_BITS) | flags.bits();
         self
+    }
+
+    /// The jitter cycle's frames the row carries (a lock lives that many frames).
+    pub const fn jitter_cycle_frames(&self) -> u32 {
+        self.counts[3] >> JITTER_CYCLE_SHIFT
     }
 
     /// The row starting history over: frame 0, the reset bit set, the previous jitter this one's.
@@ -365,11 +427,20 @@ pub fn reactive_target(render: (u32, u32)) -> TargetDesc {
     TargetDesc { label: REACTIVE_LABEL, format: REACTIVE_FORMAT, usage: REACTIVE_USAGE, samples: 1, size: render_size(render), mips: 1, srgb_view: false }
 }
 
-/// What TAA holds at `render` size, for the budget ledger: the history pair and the mask.
+/// The side histories' pairs at `render` size (the luma history's, then the lock's): the resolve
+/// makes them beside its colour history, so only the layout check reads these.
+pub fn side_history_targets(render: (u32, u32)) -> [TargetDesc; 4] {
+    let size = render_size(render);
+    let desc = |label, format| TargetDesc { label, format, usage: HISTORY_USAGE, samples: 1, size, mips: 1, srgb_view: false };
+    [desc(LUMA_HISTORY_LABELS[0], LUMA_HISTORY_FORMAT), desc(LUMA_HISTORY_LABELS[1], LUMA_HISTORY_FORMAT), desc(LOCK_LABELS[0], LOCK_FORMAT), desc(LOCK_LABELS[1], LOCK_FORMAT)]
+}
+
+/// What TAA holds at `render` size, for the budget ledger: the colour history pair, its side
+/// histories and the mask.
 pub fn bytes(render: (u32, u32)) -> u64 {
     let (w, h) = render_size(render);
     let texels = u64::from(w) * u64::from(h);
-    2 * texels * HISTORY_TEXEL_BYTES + texels
+    2 * texels * (HISTORY_TEXEL_BYTES + SIDE_TEXEL_BYTES) + texels
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -403,11 +474,14 @@ pub struct TaaOutput {
     pub slot: usize,
 }
 
-/// One history slot: a texture at the render size it was written at.
+/// One history slot: the colour history and its luma and lock side histories, at the render size
+/// they were written at.
 struct Slot {
     size: (u32, u32),
     texture: Texture,
     view: TextureView,
+    luma: TextureView,
+    lock: TextureView,
 }
 
 struct History {
@@ -432,8 +506,11 @@ pub struct TaaNode {
     params: Buffer,
     neutral_motion: TextureView,
     neutral_reactive: TextureView,
-    /// The history a fresh resolve binds (it reads it with weight 0): one black texel.
+    /// The history a fresh resolve binds (it reads it with weight 0): one black texel; and the
+    /// side histories' (no luma, no lock).
     neutral_history: TextureView,
+    neutral_luma: TextureView,
+    neutral_lock: TextureView,
     history: Option<History>,
     extra_usage: TextureUsages,
 }
@@ -467,21 +544,28 @@ fn neutral_texture(gpu_device: &Device, queue: &Queue, label: &str, format: Text
     texture.create_view(&Default::default())
 }
 
-/// History slot `index` of the pair at `size`, carrying `extra_usage` beside the history's own.
-fn history_slot(device: &Device, index: usize, size: (u32, u32), extra_usage: TextureUsages) -> Slot {
-    let desc = &history_targets(size)[index];
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+fn slot_texture(device: &Device, desc: &TargetDesc, extra_usage: TextureUsages) -> Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
         label: Some(desc.label),
-        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d { width: desc.size.0, height: desc.size.1, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: desc.format,
         usage: desc.usage | extra_usage,
         view_formats: &[],
-    });
+    })
+}
+
+/// History slot `index` of the pair at `size`, its colour carrying `extra_usage` beside the
+/// history's own.
+fn history_slot(device: &Device, index: usize, size: (u32, u32), extra_usage: TextureUsages) -> Slot {
+    let texture = slot_texture(device, &history_targets(size)[index], extra_usage);
     let view = texture.create_view(&Default::default());
-    Slot { size, texture, view }
+    let side = side_history_targets(size);
+    let luma = slot_texture(device, &side[index], TextureUsages::empty()).create_view(&Default::default());
+    let lock = slot_texture(device, &side[2 + index], TextureUsages::empty()).create_view(&Default::default());
+    Slot { size, texture, view, luma, lock }
 }
 
 impl TaaNode {
@@ -506,6 +590,8 @@ impl TaaNode {
                 float_texture(REACTIVE_BINDING),
                 fragment_entry(SAMPLER_BINDING, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
                 fragment_entry(PARAMS_BINDING, wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: params_size }),
+                float_texture(LUMA_HISTORY_BINDING),
+                float_texture(LOCK_BINDING),
             ],
         });
         let pipeline_layout = pipeline_layout(device, "taa", &[&layout]);
@@ -520,7 +606,11 @@ impl TaaNode {
                 module: &module,
                 entry_point: Some("fs_taa"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format: HISTORY_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[
+                    Some(wgpu::ColorTargetState { format: HISTORY_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format: LUMA_HISTORY_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format: LOCK_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                ],
             }),
             multiview_mask: None,
             cache: None,
@@ -542,6 +632,8 @@ impl TaaNode {
             neutral_motion: neutral_texture(device, queue, "taa no motion", crate::motion::MOTION_FORMAT, &zero_motion),
             neutral_reactive: neutral_texture(device, queue, "taa no reactive", REACTIVE_FORMAT, &[0u8; 4][..1]),
             neutral_history: neutral_texture(device, queue, "taa no history", HISTORY_FORMAT, &[0u8; 8]),
+            neutral_luma: neutral_texture(device, queue, "taa no luma history", LUMA_HISTORY_FORMAT, &[0u8; 4]),
+            neutral_lock: neutral_texture(device, queue, "taa no lock", LOCK_FORMAT, &[0u8; 4]),
             history: None,
             extra_usage,
         })
@@ -554,10 +646,11 @@ impl TaaNode {
         }
     }
 
-    /// The bytes the history pair holds now (the ledger counts it with [`bytes`]).
+    /// The bytes the history pair and its side histories hold now (the ledger counts them with
+    /// [`bytes`]).
     pub fn history_bytes(&self) -> u64 {
         let slots = self.history.as_ref().map_or(&[None, None], |history| &history.slots);
-        slots.iter().flatten().map(|slot| u64::from(slot.size.0) * u64::from(slot.size.1) * HISTORY_TEXEL_BYTES).sum()
+        slots.iter().flatten().map(|slot| u64::from(slot.size.0) * u64::from(slot.size.1) * (HISTORY_TEXEL_BYTES + SIDE_TEXEL_BYTES)).sum()
     }
 
     /// The history with slot `write` at `render` size (remade when its size differs: a
@@ -588,12 +681,13 @@ impl TaaNode {
     ) -> TaaOutput {
         let read = self.history.as_ref().and_then(|history| history.written).unwrap_or(1);
         let write = 1 - read;
-        let neutral = self.neutral_history.clone();
+        let neutral = [self.neutral_history.clone(), self.neutral_luma.clone(), self.neutral_lock.clone()];
         let history = self.history(device, input.render, write);
         let fresh = history.written.is_none() || history.slots[read].is_none();
         history.written = Some(write);
-        let read_view = history.slots[read].as_ref().map_or(neutral, |slot| slot.view.clone());
-        let write_view = history.slots[write].as_ref().expect("made above").view.clone();
+        let [read_view, read_luma, read_lock] = history.slots[read].as_ref().map_or(neutral, |slot| [slot.view.clone(), slot.luma.clone(), slot.lock.clone()]);
+        let written = history.slots[write].as_ref().expect("made above");
+        let (write_view, write_luma, write_lock) = (written.view.clone(), written.luma.clone(), written.lock.clone());
         let reset = fresh || input.row.resets();
         history.frames = if reset { 0 } else { history.frames.saturating_add(1) };
         let mut row = if reset { input.row.reset() } else { input.row };
@@ -612,18 +706,22 @@ impl TaaNode {
                 wgpu::BindGroupEntry { binding: REACTIVE_BINDING, resource: wgpu::BindingResource::TextureView(reactive) },
                 wgpu::BindGroupEntry { binding: SAMPLER_BINDING, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: PARAMS_BINDING, resource: self.params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: LUMA_HISTORY_BINDING, resource: wgpu::BindingResource::TextureView(&read_luma) },
+                wgpu::BindGroupEntry { binding: LOCK_BINDING, resource: wgpu::BindingResource::TextureView(&read_lock) },
             ],
         });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("taa resolve"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &write_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    // Every texel is written: nothing to load (free on tile GPUs).
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                })],
+                // Every texel of each is written: nothing to load (free on tile GPUs).
+                color_attachments: &[&write_view, &write_luma, &write_lock].map(|view| {
+                    Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    })
+                }),
                 timestamp_writes,
                 ..Default::default()
             });
@@ -1027,10 +1125,17 @@ mod tests {
         assert_eq!(row.size, [200.0, 100.0, 0.005, 0.01]);
         assert_eq!(row.jitter, [0.0, 0.0, 0.25, -0.25], "no jitter until TAA lands");
         assert_eq!(row.params, [TaaQuality::DEFAULT.alpha_min, 1.0, DISOCCLUSION_TOLERANCE, MOTION_REJECTION_PER_PX]);
-        // RQ5.2 flipped counts.w from reserved (0) to the clip flag, on by default.
-        assert_eq!(row.counts, [3, 0, 0, TaaFlags::CLIP.bits()]);
+        // RQ5.2 flipped counts.w from reserved (0) to the clip flag, on by default. Renderer pass 2
+        // (P2-0.8a) flipped it again (named in the log): the jitter cycle's frames ride above the
+        // flags, so a lock lives one cycle.
+        let cycle = TaaQuality::DEFAULT.jitter_cycle.frames();
+        assert_eq!(row.counts, [3, 0, 0, TaaFlags::CLIP.bits() | cycle << JITTER_CYCLE_SHIFT]);
+        assert_eq!(row.jitter_cycle_frames(), cycle);
         assert_eq!(GpuTaaParams::new(&TaaQuality::DEFAULT, &config, [0.0; 2], 2.0).params[1], 2.0);
-        assert_eq!(row.with_flags(TaaFlags::NONE).counts[3], 0);
+        let none = row.with_flags(TaaFlags::NONE);
+        assert_eq!((none.counts[3] & FLAG_BITS, none.jitter_cycle_frames()), (0, cycle), "flags change, the cycle stays");
+        let sixteen = TaaQuality::DEFAULT.with_jitter_cycle(crate::settings::JitterCycle::Sixteen);
+        assert_eq!(GpuTaaParams::new(&sixteen, &config, [0.0; 2], 1.0).jitter_cycle_frames(), 16);
     }
 
     #[test]
@@ -1098,11 +1203,18 @@ mod tests {
         assert_eq!(GpuReactiveJitter::new([0.5, 0.25], (100, 50)).with_coverage(0.0).ndc, [0.01, -0.01, 0.0, 0.0]);
     }
 
+    /// Renderer pass 2 (P2-0.8a) flipped the ledger (named in the log): each history slot also
+    /// holds its rgba8 luma and lock side histories, 8 bytes a texel.
     #[test]
-    fn the_history_is_a_pair_and_the_ledger_counts_it_with_the_mask() {
+    fn the_history_is_a_pair_and_the_ledger_counts_it_with_its_side_histories_and_the_mask() {
         let [a, b] = history_targets((4, 2));
         assert_ne!(a.label, b.label);
         assert_eq!(reactive_target((0, 0)).size, (1, 1));
-        assert_eq!(bytes((4, 2)), 2 * 8 * 8 + 8);
+        assert_eq!(bytes((4, 2)), 2 * 8 * (8 + 4 + 4) + 8);
+        let side = side_history_targets((4, 2));
+        assert_eq!(side.map(|desc| desc.format), [LUMA_HISTORY_FORMAT, LUMA_HISTORY_FORMAT, LOCK_FORMAT, LOCK_FORMAT]);
+        let labels: std::collections::BTreeSet<_> = side.iter().chain(&[a, b]).map(|desc| desc.label).collect();
+        assert_eq!(labels.len(), 6, "every slot is its own target");
+        assert!(side.iter().all(|desc| desc.size == (4, 2) && desc.usage == HISTORY_USAGE));
     }
 }

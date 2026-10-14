@@ -728,6 +728,11 @@ fn every_pooled_target_is_one_webgpu_core_guarantees() {
     for wanted in ["env specular", "env radiance", "brdf lut", "sky transmittance", "sky multiscatter", "sky view"] {
         assert!(labels.contains(&wanted), "the catalog lists {wanted}: {labels:?}");
     }
+    // TAA's luma and lock side histories (renderer pass 2, P2-0.8a) are checked with the rest.
+    use genex_render::post::taa::{LOCK_LABELS, LUMA_HISTORY_LABELS};
+    for wanted in LUMA_HISTORY_LABELS.into_iter().chain(LOCK_LABELS) {
+        assert!(labels.contains(&wanted), "the catalog lists {wanted}: {labels:?}");
+    }
 }
 
 #[test]

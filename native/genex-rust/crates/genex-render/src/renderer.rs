@@ -1417,6 +1417,9 @@ pub fn target_catalog(policy: TargetPolicy, samples: u32, hdr: TextureFormat, qu
             descs.push(TargetDesc { usage: desc.usage | crate::prepass::READBACK_USAGE, ..desc });
         }
         descs.extend(crate::post::taa::history_targets(size).map(|desc| TargetDesc { usage: desc.usage | TextureUsages::COPY_SRC, ..desc }));
+        // The resolve's luma and lock side histories (renderer pass 2, P2-0.8a; `TaaNode` makes
+        // them itself, listed here for the layout check).
+        descs.extend(crate::post::taa::side_history_targets(size));
     }
     if quality.upscaler == Upscaler::Fsr1 || quality.anti_aliasing == AntiAliasing::TaaSharpen {
         descs.extend([crate::post::fsr::intermediate_target(size), crate::post::fsr::easu_target(size)]);

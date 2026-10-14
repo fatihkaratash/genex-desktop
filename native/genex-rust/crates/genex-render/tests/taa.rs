@@ -35,8 +35,9 @@ const BG: [f32; 3] = [0.08, 0.12, 0.2];
 /// Device depth (reverse-Z) of the foreground and the background.
 const FG_DEPTH: f32 = 0.5;
 const BG_DEPTH: f32 = 0.2;
-/// The TAA budget at 1080p (plan §2.5), GPU ms.
-const TAA_BUDGET_MS: f32 = 0.3;
+/// The TAA budget at 1080p, GPU ms: plan §2.5's 0.3 ms, raised to 0.45 ms for the thin-feature
+/// locks and the luma instability (renderer pass 2, owner decision D7: "TAA with locks 0.45 ms").
+const TAA_BUDGET_MS: f32 = 0.45;
 /// Frames the cost row times.
 const COST_FRAMES: u32 = 60;
 
@@ -183,6 +184,25 @@ fn the_reactive_shaders_validate_against_webgpu_core_and_emit_everywhere() {
     }
 }
 
+/// T-02's side histories are targets WebGPU core guarantees, and the resolve's three attachments
+/// fit core's colour attachment bytes per sample (32), so the resolve builds on the web too.
+#[test]
+fn the_resolve_side_histories_fit_webgpu_core() {
+    use genex_render::post::taa::{HISTORY_FORMAT, LOCK_FORMAT, LUMA_HISTORY_FORMAT, side_history_targets};
+    for render in [(1920, 1080), (1, 1)] {
+        for desc in side_history_targets(render) {
+            assert_eq!(genex_render::target_pool::validate(&desc), Ok(()), "{} {:?}", desc.label, desc.format);
+        }
+    }
+    // WebGPU's colour attachment byte count: each attachment aligned to its component alignment.
+    let bytes = [HISTORY_FORMAT, LUMA_HISTORY_FORMAT, LOCK_FORMAT].iter().fold(0u32, |total, format| {
+        let cost = format.target_pixel_byte_cost().expect("a colour target");
+        let align = format.target_component_alignment().expect("a colour target");
+        total.next_multiple_of(align) + cost
+    });
+    assert!(bytes <= wgpu::Limits::default().max_color_attachment_bytes_per_sample, "{bytes} bytes per sample");
+}
+
 // ---------------------------------------------------------------------------------------------
 // GPU rows
 
@@ -226,6 +246,181 @@ fn metal_a_static_scene_settles_to_the_supersampled_reference_in_one_jitter_cycl
     eprintln!("edge MAE: settled vs cycle mean {to_mean:.5}, settled vs 16x {to_reference:.5}, aliased vs 16x {aliased_error:.5}");
     assert!(to_mean < 2.0 / 255.0, "one cycle accumulates every jittered frame evenly with clipping on: {to_mean}");
     assert!(to_reference * 3.0 < aliased_error, "the settled edges are far closer to 16x supersampling than one frame: {to_reference} vs {aliased_error}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Thin features, still flicker and highlights (renderer pass 2, P2-0.8a: T-02 and S10). A
+// sub-pixel feature shows in only some of the jitter cycle's samples, so its 3x3 colour box changes
+// every frame; a hard clip snapped the history to it, so the feature vanished or flickered
+// (research-temporal.md T-02: TAA presets flickered on 0.086% and 0.104% of a still frame, MSAA on
+// none). A box built from linear radiance let one bright pixel inflate it until it rejected nothing
+// beside a highlight (review-shaders.md S10).
+
+/// Frames each still row resolves: ten jitter cycles, so the last [`STILL_COMPARED`] sit at a still
+/// pixel's accumulation floor (`1 / (n + 1) <= alpha_min / 2` from n = 49), as Live frames do.
+const STILL_FRAMES: u64 = 80;
+const STILL_COMPARED: usize = 16;
+/// The luma change (sRGB levels, 0..255) above which a pixel flickers between two frames: the
+/// scene rows' (`examples/showcase/tests/visual.rs`).
+const FLICKER_LEVELS: f32 = 3.0;
+/// The most of a still frame that may flicker from frame to frame (P2-0.8: a TAA preset flickers
+/// no more than the scene rows' 0.10% at high and ultra; MSAA, unjittered, flickers on none).
+const STILL_FLICKER_SHARE_MAX: f32 = 0.001;
+/// The least share of a sub-pixel feature's supersampled contrast a still camera's settled frames
+/// keep (the hard clip kept almost none: the feature vanished).
+const THIN_CONTRAST_KEPT_MIN: f32 = 0.5;
+
+/// Sub-pixel lines 0.4 px wide, every 8 px at phases 0.15 px apart: vertical in the top half,
+/// horizontal in the bottom half (far grass blades and tree tips).
+fn thin_lines(x: f32, y: f32) -> bool {
+    let line = |t: f32| {
+        let k = (t / 8.0).floor();
+        let centre = 8.0 * k + 3.2 + 0.15 * k.rem_euclid(5.0);
+        (t - centre).abs() < 0.2
+    };
+    if y < 24.0 { line(x) } else { line(y) }
+}
+
+/// A field of grass blades: 0.15 to 0.65 px wide, 2 to 6 px tall, scattered by a fixed sequence.
+fn grass(x: f32, y: f32) -> bool {
+    let mut seed = 0x2545_f491_u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    (0..90).any(|_| {
+        let (bx, by, width, height) = (2.0 + 60.0 * next(), 2.0 + 40.0 * next(), 0.15 + 0.5 * next(), 2.0 + 4.0 * next());
+        (x - bx).abs() < width * 0.5 && y >= by && y < by + height
+    })
+}
+
+/// `count` frames of a still camera on `inside`, walking the jitter cycle from a reset.
+fn still_frames(inside: &dyn Fn(f32, f32) -> bool, count: u64) -> Vec<TaaFrameImage> {
+    (0..count)
+        .map(|i| {
+            let jitter = offset_px(i, CYCLE);
+            let prev = if i == 0 { jitter } else { offset_px(i - 1, CYCLE) };
+            let (scene, depth) = sample(inside, jitter);
+            TaaFrameImage { scene, depth, motion: Vec::new(), reactive: Vec::new(), row: row(i, i == 0, jitter, prev) }
+        })
+        .collect()
+}
+
+/// A texel's luma in 8-bit sRGB levels, as a capture's (each channel encoded and rounded first).
+fn luma_levels(texel: &[f32; 4]) -> f32 {
+    let encode = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * libm::powf(v, 1.0 / 2.4) - 0.055 };
+        (s * 255.0).round()
+    };
+    0.2126 * encode(texel[0]) + 0.7152 * encode(texel[1]) + 0.0722 * encode(texel[2])
+}
+
+/// The mean share of pixels whose luma changes by more than [`FLICKER_LEVELS`] between consecutive
+/// frames of `images`, and the largest change.
+fn flicker(images: &[TaaImage]) -> (f32, f32) {
+    let pairs = images.len() - 1;
+    let mut flickering = 0usize;
+    let mut worst = 0.0f32;
+    for pair in images.windows(2) {
+        for (a, b) in pair[0].texels.iter().zip(&pair[1].texels) {
+            let change = (luma_levels(a) - luma_levels(b)).abs();
+            worst = worst.max(change);
+            flickering += usize::from(change > FLICKER_LEVELS);
+        }
+    }
+    (flickering as f32 / (pairs * images[0].texels.len()) as f32, worst)
+}
+
+/// The share of the supersampled contrast against the background that `images` keep, mean over
+/// the pixels the reference shows partly covered and over the frames.
+fn contrast_kept(images: &[TaaImage], reference: &[[f32; 4]]) -> f32 {
+    let luma = |t: &[f32; 4]| 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
+    let bg = luma(&shade(false));
+    let covered: Vec<usize> = (0..reference.len()).filter(|&p| (luma(&reference[p]) - bg).abs() > 0.05).collect();
+    assert!(covered.len() > 40, "the scene has sub-pixel features: {}", covered.len());
+    let kept = |image: &TaaImage| covered.iter().map(|&p| (luma(&image.texels[p]) - bg) / (luma(&reference[p]) - bg)).sum::<f32>() / covered.len() as f32;
+    images.iter().map(kept).sum::<f32>() / images.len() as f32
+}
+
+/// Resolves a still camera on `inside` and judges its settled frames: they keep at least
+/// [`THIN_CONTRAST_KEPT_MIN`] of the supersampled contrast and flicker on at most
+/// [`STILL_FLICKER_SHARE_MAX`] of the frame.
+fn still_thin_features(gpu: &Gpu, name: &str, inside: &dyn Fn(f32, f32) -> bool) -> Vec<String> {
+    let images = taa_resolve_images(gpu, SIZE, &still_frames(inside, STILL_FRAMES)).expect("resolved");
+    let settled = &images[images.len() - STILL_COMPARED..];
+    let reference = supersampled(inside, 16);
+    evidence(&format!("{name}-settled"), settled.last().expect("frames"));
+    evidence_texels(&format!("{name}-reference-16x"), &reference);
+    let kept = contrast_kept(settled, &reference);
+    let (share, worst) = flicker(settled);
+    eprintln!("{name}: contrast kept {kept:.3}, flicker share {:.3}%, worst change {worst:.1} levels", share * 100.0);
+    let mut problems = Vec::new();
+    if kept < THIN_CONTRAST_KEPT_MIN {
+        problems.push(format!("{name}: the settled frames keep {kept:.3} of the sub-pixel features' contrast"));
+    }
+    if share > STILL_FLICKER_SHARE_MAX {
+        problems.push(format!("{name}: {:.3}% of a still frame flickers (worst {worst:.1} levels)", share * 100.0));
+    }
+    problems
+}
+
+/// T-02: sub-pixel lines and grass blades under a still camera keep their contrast and hold
+/// steady once the accumulation settles (FSR 2.2's thin-feature locks and luma instability).
+#[test]
+#[ignore = "GPU: run with -- --ignored metal"]
+fn metal_still_sub_pixel_lines_and_grass_keep_their_contrast_and_hold_steady() {
+    let Some((_rows, gpu)) = gpu() else { return };
+    let mut problems = still_thin_features(&gpu, "thin-lines", &thin_lines);
+    problems.extend(still_thin_features(&gpu, "grass", &grass));
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// Glints (radiance 40, a sun's specular) every 8 px on a surface relit at frame 30 from 5.0 (in
+/// the sun) to 0.2 (in shadow; no motion, no depth change).
+const GLINT: f32 = 40.0;
+const LIT: f32 = 5.0;
+const RELIT: f32 = 0.2;
+/// The frame the surface is relit at, and the frames after it the row looks at.
+const RELIT_AT: u64 = 30;
+const RELIT_FRAMES: u64 = 4;
+/// The most of the old light the glints' diagonal neighbours may keep after [`RELIT_FRAMES`].
+const GHOST_SHARE_MAX: f32 = 0.3;
+
+fn glint_at(x: u32, y: u32) -> bool {
+    x % 8 == 4 && y % 8 == 4
+}
+
+/// S10: the colour box is built in reversibly tonemapped space, so a glint beside a pixel no
+/// longer stretches its box over the surface's old light: the glints' diagonal neighbours drop the
+/// old light within a few frames of the surface being relit (a box of linear radiance kept them at
+/// the old light, accumulating towards the new one at the floor's pace).
+#[test]
+#[ignore = "GPU: run with -- --ignored metal"]
+fn metal_a_glint_beside_a_relit_surface_leaves_no_ghost_of_the_old_light() {
+    let Some((_rows, gpu)) = gpu() else { return };
+    let texels = (SIZE.0 * SIZE.1) as usize;
+    let frames: Vec<TaaFrameImage> = (0..RELIT_AT + RELIT_FRAMES)
+        .map(|i| {
+            let jitter = offset_px(i, CYCLE);
+            let prev = if i == 0 { jitter } else { offset_px(i - 1, CYCLE) };
+            let surface = if i < RELIT_AT { LIT } else { RELIT };
+            let scene = (0..SIZE.1).flat_map(|y| (0..SIZE.0).map(move |x| (x, y))).map(|(x, y)| if glint_at(x, y) { [GLINT; 4] } else { [surface, surface, surface, 1.0] }).collect();
+            TaaFrameImage { scene, depth: vec![FG_DEPTH; texels], motion: Vec::new(), reactive: Vec::new(), row: row(i, i == 0, jitter, prev) }
+        })
+        .collect();
+    let images = taa_resolve_images(&gpu, SIZE, &frames).expect("resolved");
+    let out = images.last().expect("frames");
+    evidence("glint-relit", out);
+    let diagonal: Vec<usize> = (0..SIZE.1)
+        .flat_map(|y| (0..SIZE.0).map(move |x| (x, y)))
+        .filter(|&(x, y)| matches!(x % 8, 3 | 5) && matches!(y % 8, 3 | 5))
+        .map(|(x, y)| idx(x, y))
+        .collect();
+    assert_eq!(diagonal.len(), 4 * 8 * 6, "four diagonal neighbours of each glint");
+    let ghost = diagonal.iter().map(|&p| (out.texels[p][1] - RELIT) / (LIT - RELIT)).fold(0.0f32, f32::max);
+    eprintln!("glint diagonal neighbours keep {ghost:.3} of the old light after {RELIT_FRAMES} frames");
+    assert!(ghost <= GHOST_SHARE_MAX, "a glint's diagonal neighbour keeps {ghost:.3} of the old light {RELIT_FRAMES} frames after the surface was relit");
 }
 
 #[test]
@@ -523,14 +718,19 @@ fn rejected_share(gpu: &Gpu, from: glam::Mat4, to: glam::Mat4, reprojected: bool
 #[ignore = "GPU: run with -- --ignored metal"]
 fn metal_a_dollying_camera_keeps_the_history_of_the_ground_it_moves_over() {
     let Some((_rows, gpu)) = gpu() else { return };
-    // 6 m/s (a sprint) and 20 m/s (a vehicle) at 60 fps.
-    for step in [0.1f32, 0.333] {
+    // 6 m/s (a sprint) and 20 m/s (a vehicle) at 60 fps, forwards (positive) and backwards.
+    for step in [0.1f32, 0.333, -0.1, -0.333] {
         let from = ground_camera(glam::Vec3::new(0.0, GROUND_EYE_HEIGHT, 0.0), 0.0, GROUND_FOV_DEGREES);
         let to = ground_camera(glam::Vec3::new(0.0, GROUND_EYE_HEIGHT, -step), 0.0, GROUND_FOV_DEGREES);
         let unprojected = rejected_share(&gpu, from, to, false);
         let reprojected = rejected_share(&gpu, from, to, true);
         eprintln!("dolly {step} m/frame: rejected {unprojected:.3} by current keys, {reprojected:.3} with the reprojection");
-        assert!(unprojected > 0.1, "the scene exercises the bug: {unprojected}");
+        // Renderer pass 2 (P2-0.8a) flipped the forward control (named in the log): only a surface
+        // nearer than everything now is disoccluded, so the ground a camera dollies towards was
+        // never rejected by its current keys; backwards, it still is without the reprojection.
+        if step < 0.0 {
+            assert!(unprojected > 0.1, "the scene exercises the bug: {unprojected}");
+        }
         assert!(reprojected < MOVING_REJECTED_MAX, "{step} m/frame: {reprojected} of the ground rejected");
     }
 }
