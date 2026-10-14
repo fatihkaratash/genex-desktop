@@ -398,7 +398,7 @@ describe("the chat's launch tool", () => {
     assert.doesNotMatch(String(launch.description), /critic|facet/i);
     const rows: Array<[string, Array<{ id: string; path: string }>, string]> = [
       ["a Godot project", GODOT, OPEN_LAUNCH_WORDS.building],
-      ["a web game", [{ id: "web-game", path: "." }], "Building until the critics are satisfied"],
+      ["a web game", [{ id: "web-game", path: "." }], "Building until what was asked is verified"],
     ];
     const outcomes: Array<[string, boolean]> = [];
     for (const [label, facts, says] of rows) {

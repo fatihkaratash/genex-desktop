@@ -15,7 +15,8 @@ Unavailable picks block sends; without models, Connect AI model replaces the mod
 does not prove access.
 
 Each chat keeps its model, effort and Loop; fresh games inherit the last picks. One effort, on the
-main agent's levels, serves every role at its closest. Workers and Reviewers run only in Loop and
+main agent's levels, serves every role (Workers and Reviewers at most high).
+Workers and Reviewers run only in Loop and
 survive a main-agent change. Each Ollama job takes its own model; Reviewers must see images and
 check a Loop's finish.
 

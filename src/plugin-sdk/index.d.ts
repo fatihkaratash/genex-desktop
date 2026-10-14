@@ -222,7 +222,7 @@ export interface PluginToolbarItem {
   label: string;
   /** 1–60 characters, unique across the manifest. */
   ariaLabel: string;
-  /** A glyph of at most 4 characters, or a host icon: globe, export, play, image, box, boxes. */
+  /** A glyph of at most 4 characters, or a host icon: globe, export, play, image, box, boxes, unreal. */
   icon?: string;
   /** Default true: the button waits for a loaded game. */
   requiresProject?: boolean;
@@ -238,6 +238,8 @@ export interface PluginToolbarStatus {
   tone?: "ok" | "warn" | "err" | "info";
   /** The button's action is due now: Studio draws it in the accent fill, otherwise in the quiet one. */
   attention?: boolean;
+  /** Draw the badge as a dot in its tone (ok green, warn amber, err red, info grey); its word moves to the tooltip. */
+  dot?: boolean;
 }
 
 /**
@@ -409,6 +411,7 @@ export interface PluginEvent {
   title?: string;
   tone?: PluginToolbarStatus["tone"];
   attention?: boolean;
+  dot?: boolean;
   [key: string]: unknown;
 }
 

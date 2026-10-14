@@ -6808,9 +6808,9 @@ describe("the final judge when the user is in a hurry", () => {
     typeof answer === "string" ? answer : String((answer as { text?: string } | null)?.text ?? "");
 
   /**
-   * One lead turn in a hurry: the user asks to finish at once, and the lead has its one builder
-   * paint the sky, integrates it and finishes with land=yes — never calling `judge` itself. A run
-   * `fromScratch` starts on the empty scaffold (nothing drawn) until the builder paints.
+   * One lead turn in a hurry: the lead has its one builder paint the sky, the user asks to finish
+   * while it paints, and the lead integrates it and finishes with land=yes — never calling `judge`
+   * itself. A run `fromScratch` starts on the empty scaffold (nothing drawn) until the builder paints.
    */
   async function hurriedLoopRun(
     name: string,
@@ -6859,12 +6859,14 @@ describe("the final judge when the user is in a hurry", () => {
       delegate: async (request: DelegateRequest) => {
         if (request.director) {
           const call = (tool: string, args: Record<string, unknown>) => request.onLiveTool!(tool, args);
+          await call("plan", plan);
+          results.started = leadText(await call("worker_start", start));
+          // Flipped: the user asked to finish before the builder started; once they ask, no worker
+          // starts, so they ask while it works.
           await rig.core.append(
             [{ type: "custom", event_type: "run_control", payload: { runId, action: "finish" } }],
             thread,
           );
-          await call("plan", plan);
-          results.started = leadText(await call("worker_start", start));
           for (let i = 0; i < 30; i++) {
             const waited = JSON.parse(leadText(await call("wait", { seconds: "5", worker: "sky" })));
             if (waited.status.workers[0]?.state !== "running") break;
@@ -11905,8 +11907,12 @@ describe("facet rounds: the build block, kept fixes and the lead's merged fixes"
   it("FR-2. the head a builder merged may be newer than the wave head its loop merges from: the review walks from the lead's latest head", async () => {
     const { loopIntegration } = await import("../../src/harness-seed/loop/director/workers.ts");
     const fixture = await leadFixRepo();
-    const hook = loopIntegration({ state: { waveHead: fixture.carIn, integrationHead: fixture.head } } as never);
-    assert.equal(await hook.head(), fixture.carIn, "running workers still merge once per wave");
+    // A head a health pass saw fail to load: the worker merges the last healthy wave's.
+    const healthByHead = new Map([[fixture.head, false]]);
+    const hook = loopIntegration({
+      state: { waveHead: fixture.carIn, integrationHead: fixture.head, healthByHead },
+    } as never);
+    assert.equal(await hook.head(), fixture.carIn, "the wave head stands in for a head that does not load");
     const review = await reviewRound(fixture, hook);
     assert.deepEqual(
       review.violations.map((v) => v.file),
@@ -14072,8 +14078,626 @@ describe("workers the run's pause stopped, and their kept work", () => {
     const words = priorCommitWords({ lastCommit: from, from, ref, kept });
     assert.doesNotMatch(words, /left no commit/);
     assert.match(words, new RegExp(`worker_start from=${stoppedCommit}`));
-    assert.match(words, new RegExp(`git merge ${stoppedCommit}`));
+    // Flipped: it told a director with its own hands to merge the unjudged round by hand.
+    assert.doesNotMatch(words, new RegExp(`git merge ${stoppedCommit}`));
+    assert.match(words, /judge that worker against=integration before you integrate it/);
   });
 });
 
 const racingRunForSteer = { runId: "run_racing", project: "racing", goal: "a night street race", model: "sonnet" };
+
+describe("the user's ask to finish a running build (director/wrap-up.ts)", () => {
+  const FINISH_ASK = "time to move toward completion: wait for the last workers and put everything together";
+
+  /** The run's finish asks its host recorded, oldest first. */
+  const finishAsks = (host: { calls: Array<{ method: string; params: Record<string, any> }> }) =>
+    host.calls
+      .filter((call) => call.method === HostMethod.EventsAppend)
+      .flatMap((call) => call.params.batch as Array<Record<string, any>>)
+      .filter((event) => event.event_type === RunEvent.RunControl)
+      .map((event) => event.payload as Record<string, unknown>);
+
+  /** A director's run whose inbox reads the user's words and the finish asks recorded on its host. */
+  async function askedRun(said: string[], over: Record<string, unknown> = {}) {
+    const { fakeHost, fakeLoopRun } = await import("../helpers/director-run.ts");
+    const host = fakeHost();
+    const inbox = {
+      // The lead has heard what they said: nothing is new to it.
+      steering: async (_facet?: string, _consume?: boolean, read: { onlyNew?: boolean } = {}) =>
+        read.onlyNew ? [] : said,
+      finishing: async () => finishAsks(host).some((ask) => ask.action === "finish"),
+      addressed: async () => [],
+      backlog: async () => [],
+    };
+    return { host, loopRun: fakeLoopRun(host, { inbox, ...over }) };
+  }
+
+  it("FA1. an ask to finish is the lead's wrap_up: it records the run's finish quoting the user, once, and no worker starts after it", async () => {
+    const { host, loopRun } = await askedRun([FINISH_ASK]);
+    loopRun.state.plan = { summary: "A night race.", workers: [{ id: "lights", title: "Street lights" }] };
+
+    const invented = String(await loopRun.handler("wrap_up", { user_asked: "please finish the build now" }));
+    assert.match(invented, /quot/i, invented);
+    assert.deepEqual(finishAsks(host), [], "words the user never wrote record nothing");
+
+    const answer = String(await loopRun.handler("wrap_up", { user_asked: "wait for the last workers" }));
+    assert.deepEqual(
+      finishAsks(host).map((ask) => [ask.runId, ask.action]),
+      [["run_j", "finish"]],
+      answer,
+    );
+    await loopRun.handler("wrap_up", { user_asked: "wait for the last workers" });
+    assert.equal(finishAsks(host).length, 1, "a second call records nothing more");
+
+    const start = String(await loopRun.handler("worker_start", { id: "lights", task: "Add street lights" }));
+    assert.match(start, /asked to finish/, start);
+    assert.equal(loopRun.state.workers.size, 0, "no worker started");
+  });
+
+  it("FA2. a running worker ends the round it is in once the user asks to finish; only the lead's stop or the run's close ends it mid-round", async () => {
+    const { workerStopAsk } = await import("../../src/harness-seed/loop/director/workers.ts");
+    const { stopSignal, stopsThisRound } = await import("../../src/harness-seed/loop/facet/rules.ts");
+    const { host, loopRun } = await askedRun([FINISH_ASK]);
+    const worker = { id: "track", title: "Track", stopRequested: false, stopWhy: null };
+    assert.equal(await workerStopAsk(loopRun, worker), false, "nobody asked");
+
+    await loopRun.handler("wrap_up", { user_asked: "wait for the last workers" });
+    assert.equal(finishAsks(host).length, 1);
+    const asked = await workerStopAsk(loopRun, worker);
+    assert.equal(stopsThisRound(asked), null, "the round it is in goes on to its verdict");
+    assert.equal(stopSignal(asked)?.by, "user", "and the next one is not started, at the user's request");
+
+    worker.stopRequested = true;
+    assert.equal(stopsThisRound(await workerStopAsk(loopRun, worker))?.by, "director", "the lead's stop ends it now");
+  });
+
+  it("FA3. after the lead's wrap_up the run rests until its running workers end, then wraps up for the user's ask — never asked what next, never told the ask it made", async () => {
+    const { NoteKind } = await import("../../src/harness-seed/loop/director/wake-schedule.ts");
+    const { fakeClock, lead, T0 } = await import("../helpers/director-run.ts");
+    const { MINUTE_MS } = await import("../../src/harness-seed/loop/time.ts");
+    const { loopRun } = await askedRun([FINISH_ASK]);
+    const track = {
+      id: "track",
+      title: "Track",
+      mode: "loop",
+      state: "running",
+      stopRequested: false,
+      deadline: T0 + 50 * MINUTE_MS,
+      startedAt: T0,
+      iterations: [],
+      roundMs: [],
+      steering: [],
+      owns: [],
+    };
+    loopRun.state.workers.set("track", track);
+    const roundEnds = T0 + 20 * MINUTE_MS;
+    const clock = fakeClock(T0 + MINUTE_MS, (now) => {
+      if (track.state !== "running" || now < roundEnds) return;
+      track.state = "done";
+      // On the loop's clock: `note` stamps the wall clock's.
+      loopRun.logSeq += 1;
+      loopRun.state.log.push({ at: now, seq: loopRun.logSeq, text: "worker track ended", kind: NoteKind.WorkerEnded });
+    });
+    const { talk, turns } = lead(async (turn) => {
+      if (turn === 1) await loopRun.handler("wrap_up", { user_asked: "wait for the last workers" });
+      if (turn === 3) loopRun.state.finished = true;
+      return { ok: true, sessionId: "lead-1" };
+    });
+    await runWakeLoop(loopRun, talk, () => "You are the DIRECTOR of run run_j", clock);
+
+    const prompts = turns.map((turn) => turn.prompt);
+    assert.equal(prompts.length, 3, prompts.map((prompt) => prompt.slice(0, 200)).join("\n---\n"));
+    assert.match(prompts[1]!, /a worker ended/, "woken by the worker's end");
+    assert.doesNotMatch(prompts[1]!, /^WOKEN AT [^\n]*the user asked to finish/, "its own ask is not news to it");
+    assert.match(prompts[2]!, /The user asked to finish, so the studio starts the wrap-up now/);
+    assert.doesNotMatch(prompts[2]!, /victory=yes/, "the finish after the user's ask claims nothing");
+    assert.ok(loopRun.softDeadline >= roundEnds, "the working time ended when the last round did, not at the ask");
+  });
+
+  it("FA4. the wrap-up after the user's ask never invites a claim: their finish closes the run with no reviewer, so no win is claimed", async () => {
+    const { wrapUpPrompt } = await import("../../src/harness-seed/loop/director/briefs.ts");
+    const now = Date.now();
+    const brief = {
+      run: { runId: "run_f", project: "racer", goal: "a racer" },
+      finalDeadline: now + 30 * 60_000,
+      integrationHead: "a".repeat(40),
+      integrationHealthy: true,
+      workers: [],
+    };
+    const asked = wrapUpPrompt({ ...brief, userAsked: true } as never);
+    assert.doesNotMatch(asked, /victory=yes/, asked);
+    assert.match(asked, /claims nothing/);
+    assert.match(wrapUpPrompt(brief as never), /victory=yes/, "the clock's wrap-up still may claim the goal");
+
+    // The open Loop: a finish after the person's ask closes at once, with no reviewer.
+    const { openClosing } = await import("../../src/harness-seed/loop/director/open/prompts.ts");
+    const open = (wrapCause: string) =>
+      openClosing({ wrapping: true, wrapCause, idleAsk: false, minutesLeft: 20 } as never);
+    assert.doesNotMatch(open("finish"), /reviewer needs/, open("finish"));
+    assert.match(open("finish"), /no reviewer/);
+    assert.match(open("deadline"), /a reviewer needs that long to check your claim/);
+  });
+
+  it("FA5. a single session holds no wrap-up: it has no round to end, so the wrap-up starts once no loop worker runs, and finish stops it", async () => {
+    const { fakeClock, lead, T0 } = await import("../helpers/director-run.ts");
+    const { MINUTE_MS } = await import("../../src/harness-seed/loop/time.ts");
+    const { loopRun } = await askedRun([FINISH_ASK]);
+    loopRun.state.workers.set("survey", {
+      id: "survey",
+      title: "Survey",
+      mode: "single",
+      state: "running",
+      stopRequested: false,
+      deadline: T0 + 50 * MINUTE_MS,
+      startedAt: T0,
+      iterations: [],
+      roundMs: [],
+      steering: [],
+      owns: [],
+    });
+    const { talk, turns } = lead(async (turn) => {
+      if (turn === 1) {
+        const answer = String(await loopRun.handler("wrap_up", { user_asked: "wait for the last workers" }));
+        assert.match(answer, /survey \(one session: finish stops it\)/, answer);
+        assert.match(answer, /when this turn ends the studio starts the wrap-up/, "no round to wait for");
+      }
+      if (turn === 2) loopRun.state.finished = true;
+      return { ok: true, sessionId: "lead-1" };
+    });
+    await runWakeLoop(loopRun, talk, () => "You are the DIRECTOR of run run_j", fakeClock(T0 + MINUTE_MS));
+    const prompts = turns.map((turn) => turn.prompt);
+    assert.equal(prompts.length, 2, prompts.map((prompt) => prompt.slice(0, 200)).join("\n---\n"));
+    assert.match(prompts[1]!, /The user asked to finish, so the studio starts the wrap-up now/);
+    assert.match(prompts[1]!, /Workers still running: survey/);
+  });
+
+  it("FA6. an open Loop starts no worker once anybody asked it to finish — the app's own Finish too, not only the lead's wrap_up", async () => {
+    const { openHandler } = await import("../../src/harness-seed/loop/director/open/tools.ts");
+    const { WRAP_UP_WORDS } = await import("../../src/harness-seed/loop/director/wrap-up-prompts.ts");
+    const loopRun = {
+      ctx: { cancelled: false },
+      toolCalls: 0,
+      open: { halted: false },
+      state: { finished: false, finish: null, finishAsk: null },
+      inbox: { finishing: async () => true },
+    };
+    const answer = await openHandler(loopRun as never)("worker_start", { title: "Lights", task: "Add street lights" });
+    assert.equal(answer, WRAP_UP_WORDS.openNoWorkers);
+  });
+});
+
+describe("a run whose every role was set to think at max effort", () => {
+  it("EF1. its workers and reviewers think at most hard, its lead as set; a lower setting is every role's, fixed efforts too", async () => {
+    const { roleEffort } = await import("../../src/harness-seed/loop/model-roles.ts");
+    const { boundedEffort } = await import("../../src/harness-seed/loop/effort-cap.ts");
+    const set = (effort: string) => ({ roles: { efforts: { planner: effort, builder: effort, judge: effort } } });
+    const each = (run: object) => ["planner", "builder", "judge"].map((role) => roleEffort(run, role));
+    assert.deepEqual(each(set("max")), ["max", "high", "high"], "a worker's and a reviewer's thinking is held to high");
+    assert.deepEqual(each(set("medium")), ["medium", "medium", "medium"]);
+    assert.deepEqual(each({ effort: "max" }), ["max", undefined, undefined], "the composer's dial is the lead's");
+    assert.equal(boundedEffort("high", roleEffort(set("low"), "judge")), "low", "a critic's own effort gives way");
+    assert.equal(boundedEffort("high", roleEffort(set("max"), "judge")), "high");
+    assert.equal(boundedEffort("high", undefined), "high");
+  });
+
+  it("EF2. the Unreal lead thinks as the user set the main agent when it runs the main agent's model; on another model, at the workers' level", async () => {
+    const { leadEngine } = await import("../../src/harness-seed/loop/unreal/lead-turn.ts");
+    // What the composer sends for a slider at max: the lead's as set, the workers' held to high.
+    const efforts = { planner: "max", builder: "high", judge: "high" };
+    const one = { engine: "claude-code", model: "claude-opus-5-5", roles: { planner: "claude-opus-5-5", efforts } };
+    assert.equal(leadEngine({ run: one } as never).effort, "max", "the lead's own effort, never a worker's ceiling");
+    const split = { ...one, builderEngine: "codex", model: "gpt-6.1-sol" };
+    assert.equal(leadEngine({ run: split } as never).effort, "high", "a level one model takes may not be another's");
+    const lower = { ...one, roles: { ...one.roles, efforts: { planner: "low", builder: "low", judge: "low" } } };
+    assert.equal(leadEngine({ run: lower } as never).effort, "low");
+    assert.equal(leadEngine({ run: { engine: "claude-code" } } as never).effort, "high", "none chosen: high");
+    const buildersOnly = { engine: "claude-code", roles: { efforts: { builder: "medium" } } };
+    assert.equal(leadEngine({ run: buildersOnly } as never).effort, "medium", "no main agent's choice: the builders'");
+  });
+});
+
+describe("the art director's defects: only a blocker is work", () => {
+  /** A loop worker building its part, with a board and steering of its own. */
+  const building = (id: string) => ({
+    id,
+    title: id,
+    mode: "loop",
+    state: "running",
+    spec: { checks: [] as Array<Record<string, unknown>> },
+    steering: [] as string[],
+  });
+  const REVIEW = {
+    ship: false,
+    defects: [
+      { what: "the car falls through the road at the bridge", camera: "chase", part: "track", severity: "blocker" },
+      { what: "the road texture swims as the car moves", camera: "chase", part: "track", severity: "visible" },
+      { what: "the lap counter sits a hair too high", camera: "default", part: "hud", severity: "nit" },
+      { what: "the skyline is a flat colour", camera: "top", part: "city", severity: "visible" },
+    ],
+    doNotRegress: [],
+  };
+
+  it("BL1. a blocker reaches its owner's board; a visible flaw or a nit starts no round and steers nobody — it is the report's", async () => {
+    const { routeShipDefects } = await import("../../src/harness-seed/loop/director/art-direction.ts");
+    const track = building("track");
+    const hud = building("hud");
+    const notes: string[] = [];
+    const loopRun = {
+      note: (text: string) => void notes.push(text),
+      journal: { director: {} },
+      state: {
+        workers: new Map<string, unknown>([
+          ["track", track],
+          ["hud", hud],
+        ]),
+        ledger: [],
+        plan: null,
+      },
+    };
+    const routes = routeShipDefects(loopRun as never, REVIEW as never);
+    assert.deepEqual(
+      routes.map((route) => [route.part, route.defect.severity]),
+      [["track", "blocker"]],
+    );
+    assert.deepEqual(
+      track.spec.checks.map((check) => check.defect),
+      ["the car falls through the road at the bridge"],
+    );
+    assert.equal(track.steering.length, 1, "its owner is told about the blocker");
+    assert.deepEqual([hud.spec.checks, hud.steering], [[], []], "a nit is nobody's round");
+    assert.deepEqual(loopRun.state.ledger, [], "a visible flaw no worker builds is not shelved as work");
+  });
+
+  it("BL2. the lead hears that the visible flaws and nits are for its report, and to finish once nothing blocks", async () => {
+    const { shipNext, FINISH_MARK_RULE } = await import(
+      "../../src/harness-seed/loop/director/art-direction-prompts.ts"
+    );
+    const noBlocker = { ship: true, defects: REVIEW.defects.filter((d) => d.severity !== "blocker") } as never;
+    const next = shipNext(noBlocker);
+    assert.notEqual(next, FINISH_MARK_RULE, "no finish round for a flaw that blocks nothing");
+    assert.match(next, /report/);
+    assert.doesNotMatch(next, /stage=finish/);
+    assert.equal(shipNext(REVIEW as never), FINISH_MARK_RULE, "a blocker is still finished by its owner");
+    const stillNo = shipNext({ ...(noBlocker as object), ship: false } as never);
+    assert.notEqual(stillNo, FINISH_MARK_RULE, "a no with no blocker named starts nothing either");
+  });
+});
+
+describe("a worker whose model provider went away", () => {
+  const PT0 = Date.UTC(2026, 9, 1, 12, 0, 0);
+  const MIN = 60_000;
+
+  /** A facet loop waiting on its provider: its clock on Node's mock timers, its records kept. */
+  function waitingLoop(t: { mock: { timers: { tick: (ms: number) => void } } }, over: Record<string, unknown> = {}) {
+    const records: Array<[string, Record<string, unknown>]> = [];
+    const moved: number[] = [];
+    return {
+      records,
+      moved,
+      loop: {
+        ctx: { cancelled: false, setStatus: () => {} },
+        facet: { id: "world", title: "World" },
+        run: { runId: "run_p", budgets: {} },
+        facetThreadId: "t-world",
+        worktree: null,
+        result: {} as Record<string, unknown>,
+        currentMove: null,
+        biggestGap: "",
+        appendRun: async (type: string, payload: Record<string, unknown>) => void records.push([type, payload]),
+        publishIteration: async () => {},
+        onProviderLost: null,
+        stoppedHere: async () => false,
+        finishRequested: async () => false,
+        iterationsThisRound: 1,
+        deadline: PT0 + 5 * MIN,
+        deadlineCeiling: () => PT0 + 2 * 60 * MIN,
+        onDeadline: (deadline: number) => void moved.push(deadline),
+        sleepFor: async (ms: number) => t.mock.timers.tick(ms),
+        ...over,
+      },
+    };
+  }
+
+  it("PC1. its clock stands still while it waits: a limit that lifts after its own deadline no longer ends the round, and the clock never passes the run's working deadline", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: PT0 });
+    const { waitForProvider } = await import("../../src/harness-seed/loop/facet/provider.ts");
+    const lost = { kind: "rate_limit", engine: "claude-code", message: "session limit", until: PT0 + 27 * MIN };
+    const waiting = waitingLoop(t);
+    const flow = await waitForProvider(waiting.loop as never, { iteration: 3 } as never, lost, "build" as never);
+    assert.equal(flow, null, "the provider is back and the round goes on");
+    assert.equal(waiting.loop.deadline, PT0 + 32 * MIN, "the 27 minutes it waited are given back");
+    assert.equal(waiting.moved.at(-1), PT0 + 32 * MIN, "and the run's record of the worker follows");
+
+    t.mock.timers.setTime(PT0);
+    const capped = waitingLoop(t, { deadlineCeiling: () => PT0 + 10 * MIN });
+    const forever = { ...lost, until: null };
+    const ended = await waitForProvider(capped.loop as never, { iteration: 3 } as never, forever, "build" as never);
+    assert.equal(ended, "stop");
+    assert.equal(capped.loop.deadline, PT0 + 10 * MIN, "no further than the run's working deadline");
+    assert.equal(capped.loop.result.lostToProvider, "rate_limit", "the provider ended it, on the record");
+  });
+
+  it("PC2. a worker the provider ended before any round was judged gives its goal attempt back; a judged one does not", async () => {
+    const { refundProviderAttempt } = await import("../../src/harness-seed/loop/director/attempt-refund.ts");
+    const goals = { entries: [{ id: "world", required: true, attempts: 2, status: "unverified" }] };
+    let saves = 0;
+    const loopRun = { state: { goals }, saveJournal: async () => void (saves += 1) };
+    const unjudged = { id: "world-2", goal: "world", iterations: [{ stopped: true }] };
+    await refundProviderAttempt(loopRun as never, unjudged as never, { lostToProvider: "rate_limit" });
+    assert.equal(goals.entries[0]!.attempts, 1, "its attempt is given back");
+    assert.equal(saves, 1);
+    await refundProviderAttempt(loopRun as never, { ...unjudged, iterations: [{ stopped: false }] } as never, {
+      limit: { kind: "usage_limit" },
+    });
+    assert.equal(goals.entries[0]!.attempts, 1, "a judged round was an attempt");
+    await refundProviderAttempt(loopRun as never, unjudged as never, {});
+    assert.equal(goals.entries[0]!.attempts, 1, "a worker the provider did not end keeps its count");
+  });
+});
+
+describe("a worker's budget, in rounds of this game", () => {
+  it("WR1. a budget is fitted to the nearest whole number of rounds the loop will start, within the run's time; unmeasured, it stands as asked", async () => {
+    const { wholeRoundsBudget } = await import("../../src/harness-seed/loop/director/whole-rounds.ts");
+    const { tooLateToStart } = await import("../../src/harness-seed/loop/facet/rules.ts");
+    const MIN = 60_000;
+    const round = 40 * MIN;
+    // A hundred and ten minutes for forty-minute rounds: two rounds and thirty minutes nobody used.
+    const fitted = wholeRoundsBudget(110 * MIN, round, 600 * MIN);
+    assert.deepEqual(fitted, { budgetMs: 130 * MIN, rounds: 3 });
+    // Every round it counts on is one the loop starts: each begins with what the gate asks.
+    for (let k = 0; k < fitted.rounds!; k++)
+      assert.equal(tooLateToStart({ leftMs: fitted.budgetMs - k * round, runMs: round }), null, `round ${k + 1}`);
+    assert.deepEqual(
+      wholeRoundsBudget(45 * MIN, round, 600 * MIN),
+      { budgetMs: 50 * MIN, rounds: 1 },
+      "never under one",
+    );
+    assert.deepEqual(
+      wholeRoundsBudget(110 * MIN, round, 95 * MIN),
+      { budgetMs: 90 * MIN, rounds: 2 },
+      "within the run",
+    );
+    assert.deepEqual(wholeRoundsBudget(30 * MIN, round, 30 * MIN), { budgetMs: 30 * MIN, rounds: null }, "none fits");
+    assert.deepEqual(wholeRoundsBudget(110 * MIN, null, 600 * MIN), { budgetMs: 110 * MIN, rounds: null });
+  });
+});
+
+describe("a worker's stopped round, kept without a verdict", () => {
+  const ACCEPTED = "a".repeat(40);
+  const KEPT = "b".repeat(40);
+  const FROM = "c".repeat(40);
+  const ended = (over: Record<string, unknown> = {}) => ({
+    id: "world",
+    state: "done",
+    from: FROM,
+    lastCommit: ACCEPTED,
+    keptCommit: KEPT,
+    keptInBuild: false,
+    ...over,
+  });
+
+  it("KJ1. integrate takes a stopped round only once a judge preferred it to the integration branch; until then its accepted round, and it says what is left out", async () => {
+    const { keptToMerge, keptLeftOut, noteKeptJudged } = await import(
+      "../../src/harness-seed/loop/director/kept-judge.ts"
+    );
+    const worker = ended();
+    assert.equal(keptToMerge(worker as never), null, "unjudged: integrate takes the accepted round");
+    assert.match(String(keptLeftOut(worker as never)), /judge target=world against=integration/);
+
+    noteKeptJudged(worker as never, KEPT, false);
+    assert.equal(keptToMerge(worker as never), null, "a judge that kept the build, or judged another, keeps it out");
+    noteKeptJudged(worker as never, "d".repeat(40), true);
+    assert.equal(keptToMerge(worker as never), null, "a verdict on another head says nothing of it");
+    noteKeptJudged(worker as never, KEPT, true);
+    assert.equal(keptToMerge(worker as never), KEPT, "preferred to the integration branch: it may go in");
+    assert.equal(keptLeftOut(worker as never), null);
+    assert.equal(keptToMerge(ended({ state: "running" }) as never), null, "a running worker's round is its own");
+  });
+
+  it("KJ2. the lead is never told to merge a stopped round by hand: it is judged first, through a worker started from it", async () => {
+    const { priorCommitWords } = await import("../../src/harness-seed/loop/director/journal-prompts.ts");
+    const ref = "refs/studio/runs/run_k/workers/world";
+    for (const lead of [false, true]) {
+      const words = priorCommitWords({ lastCommit: ACCEPTED, from: FROM, ref, kept: KEPT, lead });
+      assert.doesNotMatch(words, new RegExp(`git merge ${KEPT}`), "no hand merge of unjudged work");
+      assert.match(words, new RegExp(`worker_start from=${KEPT}`));
+      assert.match(words, /against=integration/, "judged against the build before it goes in");
+    }
+    const accepted = priorCommitWords({ lastCommit: ACCEPTED, from: FROM, ref });
+    assert.match(accepted, new RegExp(`git merge ${ACCEPTED}`), "a judged round still merges as before");
+  });
+
+  it("KJ3. a stopped round that reaches the build inside a judged worker's merge is not called unjudged; one merged by hand is, and a look with no verdict changes nothing", async () => {
+    const { noteKeptWork } = await import("../../src/harness-seed/loop/director/kept-work.ts");
+    const { noteKeptJudged, keptToMerge } = await import("../../src/harness-seed/loop/director/kept-judge.ts");
+    const HEAD = "e".repeat(40);
+    const keptRun = () => {
+      const notes: string[] = [];
+      const events: string[] = [];
+      const loopRun = {
+        ctx: { call: async () => ({ code: 0, stdout: "yes\n" }) },
+        run: { runId: "run_k" },
+        integrationWorktree: "/runs/run_k/integration",
+        note: (text: string) => void notes.push(text),
+        appendRun: async (type: string) => void events.push(type),
+        saveJournal: async () => {},
+        state: { workers: new Map() },
+        journal: { director: { workers: {} } },
+        priorWorkers: [{ id: "world", kept: KEPT, keptInBuild: false }],
+      };
+      return { loopRun, notes, events };
+    };
+    // worker_start from=<kept>, judged, then integrated: the merge brings the stopped round in.
+    const merged = keptRun();
+    await noteKeptWork(merged.loopRun as never, HEAD, true);
+    assert.deepEqual(merged.events, ["integration_merge"], "its part is on the record as added");
+    assert.deepEqual(merged.notes, [], "never said to be in the build without a judge");
+    const byHand = keptRun();
+    await noteKeptWork(byHand.loopRun as never, HEAD);
+    assert.match(byHand.notes.join("\n"), /in the build without a judge/);
+
+    const worker = ended();
+    noteKeptJudged(worker as never, KEPT, true);
+    noteKeptJudged(worker as never, KEPT, null);
+    assert.equal(keptToMerge(worker as never), KEPT, "a judge that could not look keeps the verdict standing");
+    noteKeptJudged(worker as never, KEPT, false);
+    assert.equal(keptToMerge(worker as never), null, "a judge that kept the build takes it back");
+  });
+});
+
+describe("the base a running worker builds on", () => {
+  it("FB1. each round takes the newest integration head — the lead's own commits too — unless a health pass saw that head fail to load", async () => {
+    const { loopIntegration } = await import("../../src/harness-seed/loop/director/workers.ts");
+    const WAVE = "1".repeat(40);
+    const LEAD_FIX = "2".repeat(40);
+    const state = { waveHead: WAVE, integrationHead: LEAD_FIX, healthByHead: new Map<string, boolean>() };
+    const hook = loopIntegration({ state } as never);
+    assert.equal(await hook.head(), LEAD_FIX, "a merge never lands behind the lead's own commits");
+    state.healthByHead.set(LEAD_FIX, false);
+    assert.equal(await hook.head(), WAVE, "a head that does not load waits for the next healthy one");
+    state.healthByHead.set(LEAD_FIX, true);
+    assert.equal(await hook.head(), LEAD_FIX);
+    assert.equal(await hook.latest(), LEAD_FIX);
+  });
+});
+
+describe("defects a part could not have made", () => {
+  it("FD1. a HUD drawn in the page shows on user:view alone, a moment later: the judge never reads that difference as a duplicate overlay", async () => {
+    const { blindCompare } = await import("../../src/harness-seed/loop/judge.ts");
+    const recorder = ctxRecorder({
+      handlers: { "engine.complete": () => ({ message: { content: '{"pick":"A"}' } }) },
+    });
+    const run = { runId: "overlay", project: "racer", goal: "a racer", reference: { name: "r", shots: [] } };
+    const shots = [
+      { camera: "default", base64: "AAAA" },
+      { camera: "user:view", base64: "BBBB", surface: "page" },
+    ];
+    await blindCompare(recorder.ctx as never, {
+      run: run as never,
+      challenger: { shots } as never,
+      incumbentEvidence: { shots } as never,
+    });
+    const call = recorder.paramsOf("engine.complete")[0] as Record<string, any>;
+    const asked = JSON.stringify(call.messages);
+    assert.doesNotMatch(asked, /Anything on user:view that default lacks[^"]*a defect/);
+    assert.match(asked, /a HUD drawn in the page shows on user:view only/);
+    assert.doesNotMatch(String(call.systemPrompt), /UI the canvas frame lacks/);
+  });
+
+  it("FD2. only the part that draws the HUD is held to its coverage and overlap; every part still keeps to one HUD", async () => {
+    const { withHarnessChecks } = await import("../../src/harness-seed/loop/spec.ts");
+    const game = { kind: "racing", hud: true };
+    const ids = (drawsHud: boolean) =>
+      withHarnessChecks({ id: "world", checks: [] as Check[] }, { game, drawsHud }).checks.map((check) => check.id);
+    assert.deepEqual(
+      ids(false).filter((id) => id.startsWith("hud") || id === "single-hud" || id === "no-dom-ui"),
+      ["no-dom-ui", "single-hud"],
+      "a part that draws no HUD is never failed for the HUD's size",
+    );
+    assert.ok(ids(true).includes("hud-coverage") && ids(true).includes("hud-overlap"));
+  });
+
+  it("FD4. a restart of the part that draws the HUD draws it too, started with critic=screen or not; the entry's owner does only while no part of the run owns the screen", async () => {
+    const { drawsTheHud } = await import("../../src/harness-seed/loop/director/hud-owner.ts");
+    const hud = { id: "hud", ownsScreen: true };
+    const world = { id: "world" };
+    const part = (over: Record<string, unknown>) => ({ critic: null, ownsMain: false, replaces: null, ...over });
+    assert.equal(drawsTheHud(part({ replaces: "hud" }) as never, [hud, world]), true, "the owner's restart");
+    assert.equal(drawsTheHud(part({ critic: "screen" }) as never, [hud, world]), true);
+    assert.equal(
+      drawsTheHud(part({ ownsMain: true }) as never, [hud, world]),
+      false,
+      "the screen is hud's, finished or not",
+    );
+    assert.equal(drawsTheHud(part({ ownsMain: true }) as never, [world]), true, "no part owns the screen");
+    assert.equal(drawsTheHud(part({ replaces: "world" }) as never, [hud, world]), false);
+  });
+
+  it("FD5. the lead's judge reads a part that does not own the entry as its own rounds do, on either side of a comparison; the integration answers for its cameras", async () => {
+    const { fakeHost, fakeLoopRun } = await import("../helpers/director-run.ts");
+    const loopRun = fakeLoopRun(fakeHost());
+    const parts = new Map([
+      ["sound", { id: "sound", title: "Sound", ownsMain: false, state: "done", worktree: "/w/sound" }],
+      ["world", { id: "world", title: "World", ownsMain: false, state: "done", worktree: "/w/world" }],
+      ["shell", { id: "shell", title: "Shell", ownsMain: true, state: "done", worktree: "/w/shell" }],
+    ]);
+    loopRun.resolveRoot = (key: string) =>
+      key === "integration"
+        ? { root: loopRun.integrationWorktree, label: "integration" }
+        : { root: `/w/${key}`, label: key, worker: parts.get(key) };
+    loopRun.withLease = async (_lease: string, fn: (handle: string | null) => unknown) => fn(null);
+    const asked = new Map<string, unknown>();
+    loopRun.evidenceOf = async (root: string, options: Record<string, unknown>) => {
+      asked.set(root, options.camerasOwned);
+      return { ok: true, problems: [], warnings: [], consoleErrors: [], shots: [], motion: [] };
+    };
+    await loopRun.judge({ target: "sound", against: "world" });
+    await loopRun.judge({ target: "shell", against: "integration" });
+    assert.deepEqual(Object.fromEntries(asked), {
+      "/w/sound": false,
+      "/w/world": false,
+      "/w/shell": true,
+      [loopRun.integrationWorktree]: true,
+    });
+  });
+
+  it("FD3. a part that does not own the entry is not failed for the camera wiring: only the entry's owner and the integration own it", async () => {
+    const { ownsCameraWiring } = await import("../../src/harness-seed/loop/facet/camera-wiring.ts");
+    assert.equal(ownsCameraWiring({ ownsMain: false, role: "facet" }), false, "a sound part cannot rewire the cameras");
+    assert.equal(ownsCameraWiring({ ownsMain: true, role: "facet" }), true);
+    assert.equal(ownsCameraWiring({ ownsMain: false, role: "integration" }), true);
+  });
+});
+
+describe("the lead's words in the user's chat", () => {
+  it("QC1. a wake that brings the user nothing is answered with no text, and the user's ask to finish is wrap_up, said in the card every wake", async () => {
+    const { buildCard } = await import("../../src/harness-seed/loop/director/wake-prompts.ts");
+    const now = Date.UTC(2026, 9, 1, 12, 0, 0);
+    const card = buildCard({
+      now,
+      softDeadline: now + 3_600_000,
+      finalDeadline: now + 4_000_000,
+      card: { runId: "run_q", project: "racer", goal: "a racer", direction: false, plan: null },
+    } as never);
+    assert.match(card, /ends with no text at all — never "waiting" or "nothing new"/);
+    assert.match(card, /An ask to finish, wrap up or stop adding — asked again as a question too — is wrap_up first/);
+  });
+});
+
+describe("a worker waiting on its provider when the user asks to finish", () => {
+  it("PC3. the wait ends at the user's ask: its round is kept as stopped, never left holding the wrap-up", async (t) => {
+    const PT0 = Date.UTC(2026, 9, 1, 12, 0, 0);
+    t.mock.timers.enable({ apis: ["Date"], now: PT0 });
+    const { waitForProvider } = await import("../../src/harness-seed/loop/facet/provider.ts");
+    const records: Array<[string, Record<string, unknown>]> = [];
+    let asked = false;
+    const loop = {
+      ctx: { cancelled: false, setStatus: () => {} },
+      facet: { id: "world", title: "World" },
+      run: { runId: "run_p", budgets: {} },
+      facetThreadId: "t-world",
+      worktree: null,
+      result: {} as Record<string, unknown>,
+      currentMove: null,
+      biggestGap: "",
+      iterationsThisRound: 1,
+      appendRun: async (type: string, payload: Record<string, unknown>) => void records.push([type, payload]),
+      publishIteration: async () => {},
+      onProviderLost: null,
+      stoppedHere: async () => false,
+      finishRequested: async () => asked,
+      deadline: PT0 + 60 * 60_000,
+      deadlineCeiling: () => PT0 + 24 * 60 * 60_000,
+      onDeadline: () => {},
+      sleepFor: async (ms: number) => {
+        t.mock.timers.tick(ms);
+        asked = true;
+      },
+    };
+    const lost = { kind: "rate_limit", engine: "claude-code", message: "session limit", until: null };
+    const flow = await waitForProvider(loop as never, { iteration: 2 } as never, lost, "build" as never);
+    assert.equal(flow, "stop", "the round stops at the ask, not at the run's end");
+    const stopped = records.find(([type]) => type === RunEvent.FacetStopped)?.[1];
+    assert.equal(stopped?.by, "user");
+  });
+});

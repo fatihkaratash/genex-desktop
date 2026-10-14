@@ -4632,9 +4632,32 @@ a:focus-visible {
   position: relative;
   z-index: 1;
 }
+/* Open in Builds, at the foot of the Building card's parts: a quiet link above the card's own toggle. */
+.build-checklist-open {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-3);
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--duration-quick);
+}
+.build-checklist-open:is(:hover, :focus-visible) {
+  color: var(--ink);
+}
+.build-checklist-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 @media (prefers-reduced-motion: reduce) {
   .build-card,
-  .build-card-open svg {
+  .build-card-open svg,
+  .build-checklist-open {
     transition: none;
   }
 }

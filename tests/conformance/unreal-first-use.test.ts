@@ -318,10 +318,10 @@ describe("stage-status, the Live card's own status", () => {
 
 describe("the toolbar with no Unreal installed", () => {
   for (const game of ["lantern-run", null])
-    it(`says Get, not Set up or Add (${game ? "in a game" : "no game open"})`, async () => {
+    it(`says Not installed, not Set up or Add (${game ? "in a game" : "no game open"})`, async () => {
       const c = await computer({ engines: [], game });
-      const status = (await c.act("toolbar-status")) as { badge: string; title: string };
-      assert.equal(status.badge, "Get");
+      const status = (await c.act("toolbar-status")) as { badge: string; title: string; dot: boolean };
+      assert.deepEqual([status.badge, status.dot], ["Not installed", true]);
       assert.match(status.title, /5\.8/);
     });
 });

@@ -40,6 +40,7 @@ import { LEAD_CALL_MS } from "../../src/harness-seed/loop/finish-contract.ts";
 import { JOB_POLL_MS } from "../../src/harness-seed/loop/jobs/watch.ts";
 import { loopSkill, loopSkills } from "../../src/harness-seed/loop/loop-skills.ts";
 import { forgetProviderLosses } from "../../src/harness-seed/loop/provider-loss.ts";
+import { minutes } from "../../src/harness-seed/loop/time.ts";
 import { runExecutions } from "../../src/shared/run-state.ts";
 import { WorkerIsolation, type WorkerType } from "../../src/shared/workers.ts";
 import unrealManifest from "../../src/plugins/unreal/plugin.json" with { type: "json" };
@@ -99,6 +100,7 @@ const OPEN_TOOLS = [
   "worker_steer",
   "worker_stop",
   "worker_wait",
+  "wrap_up",
 ];
 
 /** A picture a plugin's step answers with. */
@@ -1478,27 +1480,51 @@ describe("the one Loop's claim whose turn ended", () => {
   );
 });
 
+/** The run's own clock as its journal keeps it: when it started, and when its working time ends. */
+function runClockOf(host: LoopHost): { started: number; softDeadline: number } {
+  const journal = host.artifacts.get(`autopilot_${host.run.runId}`) as {
+    director: { clock: { started: string; softDeadline: string } };
+  };
+  const { started, softDeadline } = journal.director.clock;
+  return { started: Date.parse(started), softDeadline: Date.parse(softDeadline) };
+}
+
+/** Asserts `value` lies in `[low, high]`. */
+function assertWithin(value: number, [low, high]: [number, number], what: string): void {
+  assert.ok(low <= value && value <= high, `${what} ${value}, not in ${low}..${high}`);
+}
+
 describe("the one Loop's status, notes and fresh look", () => {
   it("run_status answers its time, save points, workers, jobs, facts and crashes", TEST_TIMEOUT, async () => {
     let status: Record<string, any> = {};
-    let left = 0;
+    // The Loop's clock just before and just after run_status asks it. The turn's watch moves that
+    // clock on each look while the turn's real work runs, so only these two bound what it reads.
+    let asked = 0;
+    let answered = 0;
     const host = await hostOn(Project.GodotGame, {
       facts: GODOT,
       turns: [
-        async ({ host, params, tool }) => {
-          left = minutesLeftIn(params.prompt);
+        async ({ host, tool }) => {
           await tool("save_point", { label: "One", summary: "the first room" });
           await tool("worker_start", { title: "Survey", task: "Read the scenes", isolation: "read" });
           host.jobs.push({ id: "j1", title: "Export", role: "lead", command: "godot --export", state: "running" });
           host.pass(30 * MINUTE);
+          asked = host.now();
           status = JSON.parse(String(await tool("run_status")));
+          answered = host.now();
           await tool("finish", { summary: "The level is built.", proof: "project.godot" });
           return undefined;
         },
       ],
     });
     await host.start();
-    assert.ok(Math.abs(status.time.minutesLeft - (left - 30)) <= 1, `${status.time.minutesLeft} of ${left - 30}`);
+    const { started, softDeadline } = runClockOf(host);
+    assertWithin(status.time.elapsedMin, [minutes(asked - started), minutes(answered - started)], "elapsedMin");
+    assertWithin(
+      status.time.minutesLeft,
+      [minutes(softDeadline - answered), minutes(softDeadline - asked)],
+      "minutesLeft",
+    );
     assert.deepEqual(
       status.savePoints.map((point: { label: string }) => point.label),
       ["One"],

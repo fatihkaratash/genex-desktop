@@ -1,6 +1,6 @@
 /**
- * The open lead's tools as its engine sees them: the director's `note` (read from its list by name,
- * so its words stay one), a `run_status` of its own under the director's name (what `openStatus`
+ * The open lead's tools as its engine sees them: the director's `note` and `wrap_up` (read from its
+ * list by name, so their words stay one), a `run_status` of its own under the director's name (what `openStatus`
  * answers, none of the web method's branch or boards), Genex's six worker tools with the kinds of worker the
  * project's plugins declare, its save points (`save_point`, `rewind`, and `restart` where a plugin
  * restarts the project's app), and a `finish` of its own: a claim a reviewer checks, with no landing.
@@ -75,7 +75,7 @@ const OPEN_STATUS: LiveToolSpec = {
 };
 
 /** The director's tools the open lead shares, by name. */
-const SHARED: readonly string[] = [DirectorTool.Note];
+const SHARED: readonly string[] = [DirectorTool.Note, DirectorTool.WrapUp];
 
 /** The open lead's tools, with `worker_start` naming the kinds of worker on offer, and `restart` only when `restart`. */
 export function openTools(types: readonly WorkerType[] = [], { restart = false } = {}): LiveToolSpec[] {

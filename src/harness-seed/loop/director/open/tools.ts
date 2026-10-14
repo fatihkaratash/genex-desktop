@@ -19,6 +19,8 @@ import { OpenTool, restartsApp } from "./contract.ts";
 import { openFinish } from "./finish.ts";
 import { OPEN_WORDS } from "./prompts.ts";
 import { restartTool, rewindTool, savePointTool } from "./save-point.ts";
+import { finishAsked, wrapUp } from "../wrap-up.ts";
+import { WRAP_UP_WORDS } from "../wrap-up-prompts.ts";
 
 /** The longest note Genex keeps, and its plain sentence. */
 const NOTE_CHARS = 2_000;
@@ -39,14 +41,19 @@ const LOOP_ACTS: ReadonlySet<string> = new Set<string>([
   WorkerTool.Mark,
 ]);
 
-/** Why the lead's act is refused now (the Loop paused or closing; a worker from the cap on), or null. */
-function refusedAct(loopRun: LoopRun, name: string): string | null {
+/**
+ * Why the lead's act is refused now (the Loop paused or closing; a worker once anybody asked to
+ * finish, or from the cap on), or null.
+ */
+async function refusedAct(loopRun: LoopRun, name: string): Promise<string | null> {
   if (!LOOP_ACTS.has(name)) return null;
   if (loopRun.open?.halted) return OPEN_WORDS.paused;
   const { state } = loopRun;
   const closing = state.finished || Boolean(state.finish) || closeUnderWay(state);
   if (closing) return OPEN_WORDS.ending;
-  return name === WorkerTool.Start ? capRefusesWorker(loopRun, (loopRun.open?.clock ?? Date).now()) : null;
+  if (name !== WorkerTool.Start) return null;
+  if (await finishAsked(loopRun)) return WRAP_UP_WORDS.openNoWorkers;
+  return capRefusesWorker(loopRun, (loopRun.open?.clock ?? Date).now());
 }
 
 /** A decision card on the run's feed, kept in the journal too. */
@@ -111,12 +118,13 @@ function saveAnswer(loopRun: LoopRun, name: string, args: AnyRecord): Promise<st
 
 /** One tool call's answer: the pool's for a worker tool, else the Loop's own. */
 async function answer(loopRun: LoopRun, name: string, args: AnyRecord): Promise<unknown> {
-  const refused = refusedAct(loopRun, name);
+  const refused = await refusedAct(loopRun, name);
   if (refused) return refused;
   if (WORKER_TOOLS.includes(name)) return workerAnswer(loopRun, name, args);
   const saved = saveAnswer(loopRun, name, args);
   if (saved) return saved;
   if (name === DirectorTool.Note) return noteTool(loopRun, args);
+  if (name === DirectorTool.WrapUp) return wrapUp(loopRun, args);
   if (name === DirectorTool.RunStatus) return JSON.stringify(await openStatus(loopRun));
   if (name === DirectorTool.Finish) return openFinish(loopRun, args);
   // The studio asking where the lead's build lives: the game folder itself.

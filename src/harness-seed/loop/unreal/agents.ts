@@ -21,7 +21,8 @@ import { GIT, gitExec } from "../git.ts";
 import { checkoutPaths, commitFolder, treeEntries } from "../git-delivery.ts";
 import { HostMethod } from "../host-methods.ts";
 import { isPlainRecord } from "../json.ts";
-import { modelOn, RoleKey, roleEngine } from "../model-roles.ts";
+import { modelOn, RoleKey, roleEffort, roleEngine } from "../model-roles.ts";
+import { boundedEffort } from "../effort-cap.ts";
 import { isCommit, shellQuote } from "../shell.ts";
 import { CLIP_DETAIL, clip, hasText } from "../text.ts";
 import { MINUTE_MS, SECOND_MS } from "../time.ts";
@@ -71,7 +72,7 @@ import { type Lead, milestoneNow, oneGitWrite, SNAPSHOT_SCOPE, saveLead, why } f
 const MAX_AGENT_TURNS = 3;
 /** A turn a sub-agent is woken for needs at least this much of its time. */
 const MIN_AGENT_TURN_MS = 2 * MINUTE_MS;
-/** A sub-agent's turn runs at this effort: a bounded job beside the lead's own work. */
+/** A sub-agent's turn runs at this effort (a lower one the person chose holds): a bounded job beside the lead's own work. */
 const AGENT_EFFORT = "medium";
 /** One delivery lands at most this many files, each at most this large. */
 export const MAX_LAND_FILES = 64;
@@ -353,7 +354,7 @@ function agentDelegation(
     runId: run.runId,
     ...(seat.model ? { model: seat.model } : {}),
     ...(turn.resume ? { resume: turn.resume } : {}),
-    effort: AGENT_EFFORT,
+    effort: boundedEffort(AGENT_EFFORT, roleEffort(run, RoleKey.Builder)),
     cwd: seat.cwd,
     timeoutMs: Math.max(MIN_AGENT_TURN_MS, seat.deadline - lead.clock.now()),
     // Spread as the delegation's own fields, so a build-turn.ts kept from before passes them on too.

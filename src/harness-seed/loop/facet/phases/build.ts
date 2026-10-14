@@ -19,6 +19,7 @@ import { facetPromptFor } from "./brief.ts";
 import { blockClock, minutesToBlockEnd, nextBlockStretch, withinBlock } from "../build-block.ts";
 import { blockBench, blockContinueAsk } from "../build-block-prompts.ts";
 import { announceLoss, lostProviderOf, stopOutOfUsage, waitForProvider } from "../provider.ts";
+import { clockRoom, sleepOnPausedClock } from "../paused-clock.ts";
 
 /**
  * How a delegated build turn failed, beside the engine's own failure kinds: the clock cut it
@@ -326,17 +327,17 @@ function noteFailedDelegation(loop: FacetLoop, round: FacetRound, delegation: An
 
 /**
  * A provider hiccup (529 Overloaded, 500, a dropped socket) is weather: the half-written
- * attempt is rolled back, the loop waits, and the SAME iteration is tried again. It is never a
- * "broken build with the same cause" — that policy trips every circuit breaker in one outage.
- * Null when the failure was no outage, or no wait is left.
+ * attempt is rolled back, the loop waits — its clock paused (paused-clock.ts) — and the SAME
+ * iteration is tried again. It is never a "broken build with the same cause" — that policy trips
+ * every circuit breaker in one outage. Null when the failure was no outage, or no wait is left.
  */
 async function waitOutProviderOutage(loop: FacetLoop, round: FacetRound): Promise<RoundFlow> {
-  const { appendRun, ctx, deadline, facet, gitOptions, gitWhere, run, sleepFor, worktree } = loop;
+  const { appendRun, ctx, facet, gitOptions, gitWhere, run, worktree } = loop;
   if (!round.buildFailed || ctx.cancelled) return null;
   const kind = round.buildEngineError?.kind;
   if (!isTransientProviderError(kind ? { kind, message: round.buildFailed } : round.buildFailed)) return null;
   const wait = outageDelays(run)[loop.outageRetries];
-  if (wait === undefined || Date.now() + wait >= deadline) return null;
+  if (wait === undefined || Date.now() + wait >= clockRoom(loop)) return null;
   loop.outageRetries += 1;
   await appendRun(RunEvent.FacetProviderOutage, {
     ...roundFields(loop, round.iteration),
@@ -353,7 +354,7 @@ async function waitOutProviderOutage(loop: FacetLoop, round: FacetRound): Promis
       ...gitOptions,
       bestEffort: true,
     });
-  await sleepFor(wait);
+  await sleepOnPausedClock(loop, wait);
   if (ctx.cancelled) return stoppedByUser(loop);
   return buildAgain(loop, round, false);
 }

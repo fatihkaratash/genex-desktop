@@ -338,8 +338,9 @@ Up to four per plugin, rendered beside Live/Builds:
 ```
 
 `status` names a declared action **without** confirmation that returns
-`{badge?, disabled?, title?, tone?: ok|warn|err|info, attention?}`; `attention: true` draws the
-button in the accent (its action is due), otherwise it wears the quiet pill. Studio calls it on
+`{badge?, disabled?, title?, tone?: ok|warn|err|info, attention?, dot?}`; `attention: true` draws the
+button in the accent (its action is due), otherwise it wears the quiet pill. `dot: true` draws the
+badge as a dot in its tone and moves its word into the tooltip, above the title. Studio calls it on
 mount, on every plugin change and every 30 s while a game is open; a backend can also push one with
 `events.emit({kind:'toolbar', item:'demo', badge:'Draft'})`.
 

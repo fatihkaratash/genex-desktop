@@ -351,10 +351,12 @@ full screen a studio-drawn dark glass pill sits 14px from the top-right corner, 
 full screen” beside the exit glyph; after 2.6s the words fold into the icon, which rests at 45%
 until the pointer is on it. Plugin buttons wear the prompt bar's model-pill fill (`pill-quiet`);
 one whose status says its action is due (`attention`: Publish with something to publish) takes
-the accent. Publish shows no badge: two looks, nothing else. A status badge (Unreal's Get, Add, Set
-up, Not open, Starting, Ready) is micro text after the label in its tone's colour, the quiet info
-word in ink-2 (4.5:1 on the pill in every theme), and a screen reader hears it after the button's
-name ("Unreal Editor, Ready"). An Unreal game's Live is one centred card (at most 560px) on the
+the accent. Publish shows no badge: two looks, nothing else. A status badge is micro text after the
+label in its tone's colour, the quiet info word in ink-2 (4.5:1 on the pill in every theme), or,
+when the status asks for a dot, a 6px dot in green, amber, red or ink-3 grey. Unreal's button leads
+with the Unreal glyph and wears a dot: green Ready, amber Starting, grey Not open, Not set up or Not
+installed. A button's title opens in the strip's tooltip beside it, a dot's word on its first line;
+a screen reader hears the badge after the button's name ("Unreal Editor, Ready"). An Unreal game's Live is one centred card (at most 560px) on the
 stage's hatch: the latest play shot when there is one, the project's name, one line of where it
 stands (a timer while it opens; "Ready in Unreal" once it answers) and at most one button, the same
 step the Unreal panel offers (Get Unreal Engine, Open the Unreal panel, Set up and open, Open in

@@ -188,12 +188,13 @@ export const REASON_WORDS = {
 } as const satisfies Record<WakeReason, string>;
 
 /** The one line a finish request adds to the user's part of a digest. */
-const FINISH_ASKED = "THE USER ASKED TO FINISH: integrate what is ready and call finish.";
+const FINISH_ASKED =
+  "THE USER ASKED TO FINISH: no new workers or rounds. Each running loop worker ends the round it is in: integrate what it keeps as it lands. Once no loop worker runs the wrap-up starts (its finish stops a single session): look at the integrated build and call finish.";
 
 /** The rules every build card carries, the same on every wake: the rule of its seat goes between them. */
 const CARD_RULES = [
-  "- The user outranks the plan: answer them in the chat, directly and briefly, and act on what they ask; a question alone stops no worker.",
-  "- What you write is the user's chat: otherwise speak only when a part lands, the build can be looked at, something broke, the plan changed, or the build is done.",
+  "- The user outranks the plan: answer them in the chat, directly and briefly, and act on what they ask. An ask to finish, wrap up or stop adding — asked again as a question too — is wrap_up first; a question alone stops no worker.",
+  '- What you write is the user\'s chat: otherwise speak only when a part lands, the build can be looked at, something broke, the plan changed, or the build is done. A wake with nothing of that kind ends with no text at all — never "waiting" or "nothing new".',
   "- Evidence, not reports: judge, playtest or look at a single session's work before you integrate (a loop's kept rounds were judged), and look at the integrated build before you finish.",
   "- Plan before worker_start; parallel workers only on independent files.",
 ] as const;
@@ -255,6 +256,8 @@ function timeLine(facts: DigestFacts): string {
   const { now, softDeadline, finalDeadline, wrapping } = facts;
   if (wrapping)
     return `- time: wrapping up — ${minutes(finalDeadline - now)} minutes left, until ${utc(finalDeadline)}`;
+  if (facts.finishRequested)
+    return `- time: finishing at the user's request — the wrap-up starts once no loop worker runs; ${minutes(finalDeadline - now)} minutes in all`;
   return `- time: ${minutes(softDeadline - now)} working minutes, ${finishMarkWords(facts)}wrap-up at ${utc(softDeadline)}, ${minutes(finalDeadline - now)} minutes in all`;
 }
 
@@ -308,8 +311,9 @@ function workerLine(w: DigestWorker, pastMark = false): string {
  * The room for more workers: without it a lead runs fewer workers than the owner allowed, and
  * nothing it reads says a window stands idle.
  */
-function roomLine(room: WorkerRoom | null | undefined, pastMark = false): string {
+function roomLine(room: WorkerRoom | null | undefined, pastMark = false, finishing = false): string {
   if (!room) return "";
+  if (finishing) return `- workers: ${room.running} running — no new ones: the user asked to finish`;
   const free = Math.max(0, room.allowed - room.running);
   const use = pastMark
     ? "only finish workers (stage=finish) on parts that exist, no new parts or systems"
@@ -363,8 +367,9 @@ function standsSection(facts: DigestFacts): string {
     `- integration: ${integrationHead ? shortSha(integrationHead) : "no commit yet"}, last health pass ${healthWords(facts.integrationHealthy)}`,
     outcomesLine(facts.outcomes),
     defects.length ? `- defects nobody owns: ${defects.join(" | ")}` : "",
-    roomLine(facts.room, facts.finishMarkPassed === true),
-    ...workerLines(facts.workers, facts.finishMarkPassed === true),
+    roomLine(facts.room, facts.finishMarkPassed === true, facts.finishRequested),
+    // Asked to finish, a worker's next big step is nobody's work: it is not shown.
+    ...workerLines(facts.workers, facts.finishMarkPassed === true || facts.finishRequested),
     facts.priorLine ?? "",
     planWindowUntil === null
       ? ""

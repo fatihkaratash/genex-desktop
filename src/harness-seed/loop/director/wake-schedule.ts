@@ -336,6 +336,11 @@ export interface TurnFacts {
   /** Working time is left and nobody asked to finish. */
   workingTimeLeft: boolean;
   finishRequested: boolean;
+  /**
+   * The user asked to finish while workers still run the rounds they are in, with working time
+   * left: the wrap-up waits for them (absent: no). Only the director's: an open Loop wraps up at once.
+   */
+  lastRoundsRunning?: boolean;
   /** A goal build with no ship review on its head, not yet sent to art direction (absent: never). */
   artDirectionOwed?: boolean;
   /** The turn ended because it reached its own cap (an open Loop's), not because the lead ended it (absent: no). */
@@ -368,11 +373,14 @@ const busy = (turn: TurnFacts): boolean => turn.running > 0 || turn.planWindowOp
  * (`untilFinish`) an idle lead rests until something happens, since only a reviewer's yes or its
  * hours end that Loop.
  * Out of working time — or asked by the user to finish — it wraps up; a failed turn does too,
- * unless a lost provider failed it: then the run closes paused, and no wrap-up lands a build. A
- * turn its own cap cut short (an open Loop's) is no failure: the lead goes on at once.
+ * unless a lost provider failed it: then the run closes paused, and no wrap-up lands a build. Asked
+ * to finish while workers end the rounds they are in, it rests until the last one lands, as a
+ * failed turn does then too: a wrap-up now would stop them mid-round. A turn its own cap cut short
+ * (an open Loop's) is no failure: the lead goes on at once.
  */
 export function afterTurn(turn: TurnFacts): TurnVerdict {
   if (turn.closed || turn.providerLost === true) return { next: TurnEnd.Close, idleAsked: turn.idleAsked };
+  if (turn.lastRoundsRunning === true) return { next: TurnEnd.Sleep, idleAsked: false };
   if (!turn.workingTimeLeft) {
     const wrapCause = turn.finishRequested ? WrapCause.Finish : WrapCause.Deadline;
     return { next: TurnEnd.WrapUp, idleAsked: turn.idleAsked, wrapCause };

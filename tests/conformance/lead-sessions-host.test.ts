@@ -1347,7 +1347,7 @@ describe("the picker switches a lead's running session", () => {
   });
 
   // An answer on the chat's own card moved the chat's mode (a plan approved, "always" with a mode)
-  // and the lead's session stayed in the mode it ran in.
+  // and the lead's session stayed in the mode it ran in. An "always" moves only a Manual chat.
   it("follows a mode the chat takes from its own session's card: a plan approved, 'always' with a mode", async () => {
     const { core, game, project, threadId, delegate, leadBrief, whileRunning, rows } = await leadChat();
     await core.setPermissionMode(threadId, "plan");
@@ -1377,8 +1377,14 @@ describe("the picker switches a lead's running session", () => {
     );
     assert.deepEqual(await switched(1), ["auto"], "the plan approved into Auto");
     const edit = { tool: "Edit", input: { file_path: path.join(project.dir, "src", "main.js") } };
-    await answered({ ...edit, always: [{ kind: "mode", mode: "acceptEdits" }] }, { decision: "always" });
-    assert.deepEqual(await switched(2), ["auto", "acceptEdits"], "'always' allowing all edits");
+    const allEdits = { ...edit, always: [{ kind: "mode" as const, mode: "acceptEdits" as const }] };
+    await answered(allEdits, { decision: "always" });
+    const { metadata } = await core.store.getRecord(threadId);
+    assert.equal(metadata?.permissionMode, "auto", "'always' in Auto leaves the chat in Auto");
+    await core.setPermissionMode(threadId, "default");
+    assert.deepEqual(lead.modes, ["auto", "default"], "nothing moved the lead between the plan and the pick");
+    await answered(allEdits, { decision: "always" });
+    assert.deepEqual(await switched(3), ["auto", "default", "acceptEdits"], "'always' allowing all edits, from Manual");
     lead.end();
     await turn;
   });

@@ -2567,7 +2567,11 @@ export function compactSdkMessage(message: Record<string, unknown>, cwd?: string
   if (type === SdkMessage.Assistant || type === SdkMessage.User) {
     const inner = (message.message ?? {}) as { content?: unknown };
     const content = Array.isArray(inner.content) ? inner.content : [];
-    return { role: type, parts: content.map((part: Record<string, unknown>) => compactPart(part, cwd)) };
+    const parts = content.map((part: Record<string, unknown>) => compactPart(part, cwd));
+    // The CLI's own API error (a limit, a lost sign-in) arrives as an assistant message: marked, so
+    // no reader takes its text for the model's words (the run says what happened in its own).
+    const apiError = apiErrorOf(message);
+    return { role: type, parts, ...(apiError ? { apiError } : {}) };
   }
   if (type === SdkMessage.Result) {
     const result = message as SdkResult;

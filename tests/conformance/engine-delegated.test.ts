@@ -752,6 +752,17 @@ describe("claude code delegated engine", () => {
     assert.equal(init.session_id, "ses_1");
   });
 
+  it("marks the CLI's own API error on the mirrored message, so no reader takes it for the model's words", () => {
+    const errored = compactSdkMessage({
+      type: "assistant",
+      error: "rate_limit",
+      message: { content: [{ type: "text", text: "You've hit your session limit · resets 3pm" }] },
+    }) as { apiError?: string; parts: unknown[] };
+    assert.equal(errored.apiError, "rate_limit");
+    const spoken = compactSdkMessage({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    assert.equal((spoken as { apiError?: string }).apiError, undefined);
+  });
+
   it("preserves completed reply text so the durable message matches its stream", () => {
     const compacted = compactSdkMessage({
       type: "assistant",

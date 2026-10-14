@@ -180,7 +180,11 @@ conformance test finds no other), `evidence.ts` is the evidence pass (named phas
 the `finally` that hands the game back running) with its one failure classifier and the window
 leases, `build-turn.ts` is one
 build turn on either kind of engine, `config.ts` holds the shared waits and the light effort a
-bounded ask runs at (always "low", whatever role effort the user set), `outcomes.ts` gives every stop a
+bounded ask runs at (always "low", whatever role effort the user set), `model-roles.ts`
+`roleEffort` caps a worker's and a reviewer's effort at high (`WORKER_EFFORT_CEILING`, the app's
+copy in `shared/model-roles.ts`) while the lead keeps the user's (the Unreal lead too, on the main
+agent's model: `unreal/lead-turn.ts` `leadEngine`), and `boundedEffort` holds a fixed
+effort (the Unreal critic's, its agents') to a lower one the user chose, `outcomes.ts` gives every stop a
 code beside its sentence (`stopCode`; the classic pipeline decides which facets died early on the
 code) and the director's worker states, `run-events.ts` writes a run's events and journal and
 logs a failed write to the harness's stderr, at most once a minute per kind, instead of dropping
@@ -760,9 +764,15 @@ files, which the game never loads. A steer that interrupts a worker's review fix
 revert is handed over in the same session and the turn goes on (`loop/facet/follow-up.ts`); only a
 stop with no steer waiting ends the round. A round the run's own close stops (a pause, the end)
 keeps its work on its `…-stopped` ref with `stopCode: run_ended` on its records; the resumed lead
-hears that commit (`journal-prompts.ts`), and once the build holds it, however the lead brought it
-in, the studio records an `integration_merge` for its part (`director/kept-work.ts`): Builds shows
-it Paused until then, Added after, Left out only if the run ends without it.
+hears that commit (`journal-prompts.ts`). Nobody judged it, so it goes in only once a judge prefers
+it to the integration branch (`judge target=<id> against=integration`, then `integrate`:
+`director/kept-judge.ts`), or inside a judged worker started from it; never by a merge by hand. Once
+the build holds it the studio records an `integration_merge` for its part (`director/kept-work.ts`),
+and tells the lead if it went in with no judge: Builds shows it Paused until then, Added after, Left
+out only if the run ends without it. A judge's look at a part that does not own the entry, like its
+own rounds' looks, reads cameras that all show one frame as a warning (`facet/camera-wiring.ts`), and
+only the part that draws the HUD (critic=screen, a restart of it, or the entry's owner while no
+part of the run owns the screen: `director/hud-owner.ts`) is held to the HUD's coverage and overlap.
 
 A plan whose parts loop two or more (a part marked `"mode":"single"` does not count) needs a
 module contract before its loop workers start: `plan contract=` names each module's file, owner
@@ -777,8 +787,13 @@ contract's commit stands where its parent stood: on the run's starting point it 
 too (a blank base stage passes the fork gate), and the close lands nothing beyond it. A build
 resumed from a journal written before this gate (no `contractGate` mark) starts its loop workers as
 it always did until its lead commits a contract. `integrate
-worker=a,b` merges a wave in order with one health pass; a healthy integrate, or `wave=close`, moves
-the head running workers merge, so they take integration once per wave. A merge's health pass runs
+worker=a,b` merges a wave in order with one health pass. Running loop workers take the newest
+integration head at each round, the lead's own commits too (`director/workers.ts` `freshBase`), so a
+merge never lands behind the lead's commits; while a worker's merge waits for its health pass they
+keep the head before it (`director/merge-hold.ts`; after a wave a conflict stopped, until a look sees
+the head load or the lead calls `wave=close`),
+and a head a health pass saw fail gives way to the one the last healthy wave closed on (a healthy
+integrate, or `wave=close`). A merge's health pass runs
 the demos workers' checks name (and at most one more); the close runs every demo. A round, or a
 merge, that loses a camera, demo or probe another facet's checks use is a regression
 (`loop/registry.ts`). Only cameras the page registers count, never the harness's own `default`
@@ -962,7 +977,10 @@ prompt's `brief` is still read), `isolation` and `research`: `copy`, the default
 its own worktree; `read` starts a reader from the run's shared pool (`loop/workers/run-pool.ts`,
 `director-pool.ts`) in the game folder, which never integrates, and may research the web; `lock` is
 refused, because the web method never writes in the game folder itself. A web run takes no plugin
-worker types. `worker_mark used` integrates the builder as
+worker types. A loop worker's `minutes` are fitted to whole rounds of the game once a round has been
+measured (`whole-rounds.ts` `wholeRoundsBudget`: the nearest number of rounds `tooLateToStart` will start,
+at least one, within the run's time; the answer's `rounds` says how many), so no part-round at the end
+goes unused. `worker_mark used` integrates the builder as
 `integrate` does; `rejected` stops its news in every digest and `worker_wait`, and is refused for a
 builder already integrated. A conflict worker's records name the work it fits in, in plain words
 (`FIT_IN_WORDS`), with no summary of Genex's own. Every builder's
@@ -1193,12 +1211,26 @@ checks for C++ games. Failed native checks keep the build aside and report a che
 `finish` tells the lead. A workspace that kept an agent-edited older `integrate.ts` keeps its older
 close; one that kept an older `tools.ts` lands as before and notes that it did not judge.
 
+The user asks to finish in the chat, and only the lead can tell such an ask from a question: its
+card says an ask to finish, wrap up or stop adding (asked again as a question too) is `wrap_up`
+first. `wrap_up` (`director/wrap-up.ts`) records the ask quoting the user's words (checked like
+`user_asked`) as the same `run_control` finish the app's own door writes, once. From then
+`worker_start` is refused (a conflict worker excepted), each running loop worker ends the round it
+is in and stops at its next round's gate (`workers.ts` `workerStopAsk`: the user's ask, never the
+director's stop), no regular art-director look comes, the digest says the run is finishing, and the
+lead rests while those rounds land, woken as each ends (`afterTurn` `lastRoundsRunning`); once no
+loop worker runs the wrap-up starts (`WrapCause.Finish`), and its finish stops a single session. Its
+own ask is no news to it. A finish the user asked for claims nothing (no reviewer checks it, so the
+wrap-up invites no claim). `finish user_asked=` still stops everything at once. An open Loop offers
+`wrap_up` too, and starts no worker once anybody asked to finish; its wrap-up starts when the turn
+that recorded the ask ends.
+
 The art director is the one absolute judge (`loop/ship-review.ts`, rubric `judge/ship-review.md`):
 one build, every frame the evidence pass took of a registered camera, the player's eyes and each
 demo's end, then the first, middle and last motion frames and the reference (at most 14), captured
 at 1600×900 on that lease only (`SHIP_VIEW`), asked "would you ship this as the user's demo
-today?" with the user's scope beside the goal, at no more than high effort (deeper ones outlast
-its few minutes). Each defect names a plan part (kept only when it is
+today?" with the user's scope beside the goal, at no more than high effort, as every reviewer
+(deeper ones outlast its few minutes). Each defect names a plan part (kept only when it is
 one of the plan's ids), a camera (kept only when the review was shown it, else the default) and a
 severity (`blocker`, `visible`, `nit`); an unreadable answer is no verdict, never a "no". The lead
 asks for it with `judge ship=yes`, alone (no blind comparison; an `against` other than `none` is
@@ -1208,8 +1240,10 @@ finish mark (`director/art-direction.ts`): a timed build's last 30% of working t
 (`budgets.ts` `finishMarkMs`, 30 to 120 minutes, none under 90), said once (`WakeCause.FinishMark`,
 journaled; a mark that finds nothing integrated leaves the lead to `judge ship=yes` itself; a mark
 still unsaid once the wrap-up is due, after a sleep or a Resume, gives way to the wrap-up); a goal
-build once, when its lead idles a second time or calls `finish` with no review on its head (a "no"
-turns that finish back once, never twice, and never the user's own finish). That finish gate runs
+build once, when its lead idles a second time or calls `finish` with no review on its head (a
+blocker turns that finish back once, never twice, and never the user's own finish). A claim
+(`victory=yes`) is refused while the review on its head names a blocker (`shipClaimRefusal`): a goal,
+∞ included, ends once its required outcomes are verified and the art director names no blocker. That finish gate runs
 inside the `finish` call: its one look also answers the close's own question, so the close does not
 judge again, and when the close still owes a blind judge against the start there is no time for
 both and the finish closes without the art director. The
@@ -1219,19 +1253,22 @@ time line says the build is past the mark, the room for workers offers only fini
 idle question asks to finish what exists instead of a next feature, no worker line shows its
 reviewers' next big step (a finishing worker's never does, and its line says `stage finish`), and a
 timed build's card says its finish stage. A goal commission's card and brief say the art director's
-blocker and visible defects are required finishing, not the optional polish it skips. Each defect on the integration
+blockers are required finishing; its visible flaws and nits go in the report and never start a round.
+The rubric calls a defect a blocker only when the game does not do what the goal asks or reads as
+broken at once, and `ship` is true when none is. Each blocker on the integration
 branch becomes a director-origin vision check on its running owner's board (the part's worker, or
 the running worker that replaced it; its fix is a strong flip), and its owner is told in words that
-follow the verdict and severity (a nit is optional polish; a blocker or visible defect must be gone
-before the part is done, beside a building worker's move; from the finish look on every owner is
-told as a finisher), or a ledger line under its finished
-part or the lead. A loop worker started on that part later (its id, `replaces` chain or goal) takes
-the part's ledger lines onto its board the same way, so a finish worker ends only once each
-blocker or visible defect is gone. A review with a verdict replaces the earlier reviews' questions
+follow the verdict (it must be gone before the part is done, beside a building worker's move; from
+the finish look on every owner is told as a finisher), or a ledger line under its finished
+part or the lead; a visible flaw or a nit stays on the review alone. A loop worker started on that
+part later (its id, `replaces` chain or goal) takes the part's ledger lines onto its board the same
+way (a non-blocker shelved by an older run leaves the ledger), so a finish worker ends only once each
+blocker is gone. A review with a verdict replaces the earlier reviews' questions
 on running boards (one it repeats word for word keeps its id), so re-reviews never pile up. One
 look is one judge verdict record, asking the ship question. `state.lastShip` is journaled and
 restored on a Resume; `report.shipReview` and the `finish` answer say whether the art director
-would ship the head the close stood on and how many defects are left. It never vetoes a landing.
+would ship the head the close stood on, how many blockers it names and how many flaws and nits are
+for the report. It never vetoes a landing.
 When the lead names no cameras, a blind judge shows every view both builds have, cut alike.
 
 The art director also looks on the studio's own schedule while loop workers build, in every run
@@ -1312,7 +1349,11 @@ and a sign-in any engine of the run lost pauses the run at the lead's next turn 
 round the provider failed (`facet/provider.ts`) is recorded as `facet_provider_outage` with
 `lost`, never judged, struck or rolled back: its build or
 verification waits for the provider and runs again, a run's stop keeps it on its `…-stopped` ref,
-and a usage cap still stops the worker with its limit for the lead.
+and a usage cap still stops the worker with its limit for the lead. While it waits a director's
+worker's clock stands still (`facet/paused-clock.ts`): its deadline moves on by what the wait took,
+up to the run's working deadline, as the outage ladder's waits do. A worker the provider ended before
+any round of it was judged gives its goal attempt back (`attempt-refund.ts` `refundProviderAttempt`), so a
+restart is never refused for progress it never had the chance to make.
 
 ### Automatic resume
 

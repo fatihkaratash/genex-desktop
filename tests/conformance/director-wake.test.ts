@@ -238,6 +238,32 @@ describe("when the lead is woken (wake-schedule.ts)", () => {
     });
   });
 
+  it("W7c. asked to finish, the lead rests while its workers end the rounds they are in, and the wrap-up starts once no loop worker runs", () => {
+    const asked = {
+      ok: true,
+      closed: false,
+      running: 2,
+      planWindowOpen: false,
+      workersLimitPending: false,
+      idleAsked: false,
+      workingTimeLeft: false,
+      finishRequested: true,
+      lastRoundsRunning: true,
+    };
+    assert.deepEqual(afterTurn(asked), { next: TurnEnd.Sleep, idleAsked: false });
+    assert.deepEqual(
+      afterTurn({ ...asked, ok: false }),
+      { next: TurnEnd.Sleep, idleAsked: false },
+      "a failed turn waits too",
+    );
+    assert.deepEqual(afterTurn({ ...asked, running: 0, lastRoundsRunning: false }), {
+      next: TurnEnd.WrapUp,
+      idleAsked: false,
+      wrapCause: WrapCause.Finish,
+    });
+    assert.deepEqual(afterTurn({ ...asked, closed: true }), { next: TurnEnd.Close, idleAsked: false });
+  });
+
   it("W7b (provider lost). a turn a lost provider failed closes the run paused — never the wrap-up that lands a build", () => {
     // A wrap-up after a lost provider would land a build nobody could check.
     const lost = {
@@ -487,7 +513,10 @@ describe("what the message that wakes the lead says (wake-prompts.ts)", () => {
     assert.doesNotMatch(digest, /autopilot\/run_w|\/integration\b/, "no worktree path");
     assert.doesNotMatch(digest, /THE USER ASKED TO FINISH/);
     const finishing = wakeDigest(facts({ userSays: [], finishNew: true, finishRequested: true }));
-    assert.match(finishing, /THE USER ASKED TO FINISH: integrate what is ready and call finish\./);
+    assert.match(
+      finishing,
+      /THE USER ASKED TO FINISH: no new workers or rounds\. Each running loop worker ends the round it is in/,
+    );
     assert.doesNotMatch(finishing, /THE USER SAYS/, "no section for nobody's words");
     const nothing = wakeDigest(facts({ userSays: [], happened: [], card: { ...facts().card, plan: null } }));
     assert.match(nothing, /WHAT HAPPENED:\n- nothing new since your last turn/);
@@ -496,6 +525,12 @@ describe("what the message that wakes the lead says (wake-prompts.ts)", () => {
     assert.match(many, /line 49/, "the newest are kept");
     assert.doesNotMatch(many, /line 0\n/);
     assert.match(many, /10 earlier lines not shown/);
+  });
+
+  it("P1b. a wake with nothing for the user ends with no words in the chat: no 'waiting', no 'nothing new'", () => {
+    const digest = wakeDigest(facts());
+    assert.match(digest, /A wake with nothing of that kind ends with no text at all/);
+    assert.match(digest, /never "waiting" or "nothing new"/);
   });
 
   it("P2. an idle ask on a direction build says the timed build still has its minutes; a wrap-up says why it started", () => {
@@ -508,7 +543,7 @@ describe("what the message that wakes the lead says (wake-prompts.ts)", () => {
       idleAsk({ direction: false, minutesLeft: 42 }),
       /^Nothing is running and 42 working minutes remain\. What next\?/,
     );
-    const wrap = "Run run_w: your session reached its deadline; 9 minutes remain.";
+    const wrap = "Run run_w: the working time is over; 9 minutes remain.";
     assert.equal(wrapLead(WrapCause.Deadline, wrap), wrap, "the deadline needs no reason");
     assert.match(
       wrapLead(WrapCause.Idle, wrap),
@@ -625,12 +660,13 @@ describe("what the message that wakes the lead says (wake-prompts.ts)", () => {
       assert.ok(card.split("\n").length <= CARD_MAX_LINES, `the card is ${card.split("\n").length} lines`);
   });
 
-  it("P7b. a goal build's card and brief say the art director's blocker and visible defects are required finishing, never optional polish, and its nits stay optional", () => {
+  it("P7b. a goal build's card and brief say the art director's blockers are required finishing, and its visible flaws and nits go in the report, never a round", () => {
     const goal = wakeDigest(facts({ card: { ...facts().card, direction: false, goalCommission: true } }));
     const card = goal.slice(goal.indexOf("BUILD CARD")).split("\n\n")[0]!;
     assert.match(card, /do not continue optional polish/, "optional polish is still not the goal build's work");
-    assert.match(card, /art director's blocker and visible defects[^\n]*not optional polish/);
-    assert.match(card, /nits stay optional/);
+    // Flipped: visible defects were required finishing too.
+    assert.match(card, /art director's blockers are required finishing/);
+    assert.match(card, /visible flaws and nits go in your report and never start a round/);
     assert.ok(card.split("\n").length <= CARD_MAX_LINES, `the card is ${card.split("\n").length} lines`);
     // A legacy run that is neither a goal nor a duration commission has no finish the art director
     // turns back: its card, like its brief, says nothing of the art director's defects.
@@ -660,7 +696,7 @@ describe("what the message that wakes the lead says (wake-prompts.ts)", () => {
     } as never);
     const time = brief.split("\n").find((line) => line.startsWith("TIME:"))!;
     assert.match(time, /Report blockers instead of optional polish/);
-    assert.match(time, /art director's blocker and visible defects[^\n]*not optional polish/);
+    assert.match(time, /art director's blockers are required finishing; its visible flaws and nits go in your report/);
   });
 
   it("P8. a worker from before a pause is brought in by a worker for a lead, and by a merge in its worktree for a director with its own hands", () => {

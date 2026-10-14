@@ -305,12 +305,13 @@ describe("the Unreal lead's run on the Builds graph", () => {
     );
   });
 
-  it("a used worker's line says it was added to the game once the save point merges it, as its row does", async () => {
+  it("a used worker draws no line: its row says it was added to the game once the save point merges it", async () => {
     const { graph, log } = await leadRun();
     const lines = toEntries(log).flatMap((entry) =>
       entry.kind === EntryKind.Action && entry.action === EntryAction.Worker ? [entry.text] : [],
     );
-    assert.equal(lines[0], "Blender: Katana. Added to your game.");
+    // Flipped: the run's worker had a line ("Blender: Katana. Added to your game.").
+    assert.deepEqual(lines, [], "a run's workers are its card's rows, never lines");
     assert.ok(graph);
     const katana = partRows(graph).find((row) => row.facet.facetId === "agent-blender_model-1")?.steps[0];
     assert.ok(katana);

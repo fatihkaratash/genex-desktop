@@ -1,7 +1,7 @@
 {
   "apiVersion": 3,
   "id": "unreal",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "icon": "icon.svg",
   "name": "Unreal Engine",
   "publisher": "Genex",
@@ -508,6 +508,7 @@
       "id": "editor",
       "label": "Unreal",
       "ariaLabel": "Unreal Editor",
+      "icon": "unreal",
       "requiresProject": false,
       "target": {
         "kind": "panel",

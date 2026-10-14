@@ -16,6 +16,7 @@ import { noisyRegressions, remeasurable } from "../round-judgement.ts";
 import { OutagePhase, recordDecision, roundFields } from "../record.ts";
 import { tasteVerdict } from "./taste.ts";
 import { lostProviderOf, waitForProvider } from "../provider.ts";
+import { clockRoom, sleepOnPausedClock } from "../paused-clock.ts";
 import { registryRefusal } from "../../registry.ts";
 import { FacetStage, isZeroDiff, roundStage } from "../stage.ts";
 
@@ -159,14 +160,14 @@ function outageTie(loop: FacetLoop, round: FacetRound, err: AnyRecord): RoundFlo
 
 /**
  * An overloaded judge is waited for when the run's outage ladder has a step left and the wait
- * ends before the deadline. Answers whether it waited.
+ * ends inside the room the paused clock has (paused-clock.ts): the worker's clock stands still
+ * while it waits. Answers whether it waited.
  */
 async function waitOutOutage(loop: FacetLoop, round: FacetRound, err: AnyRecord, outages: number): Promise<boolean> {
-  const { deadline, run, sleepFor } = loop;
-  const wait = isTransientProviderError(err) ? outageDelays(run)[outages] : undefined;
-  if (wait === undefined || Date.now() + wait >= deadline) return false;
+  const wait = isTransientProviderError(err) ? outageDelays(loop.run)[outages] : undefined;
+  if (wait === undefined || Date.now() + wait >= clockRoom(loop)) return false;
   await announceVerifyOutage(loop, round, { err, wait, attempt: outages + 1 });
-  await sleepFor(wait);
+  await sleepOnPausedClock(loop, wait);
   return true;
 }
 

@@ -2,8 +2,9 @@
  * The `chat-workers` dev fixture: two games whose Builds graphs show workers. The fixture game's
  * chat holds an earlier Loop, then a chat message whose two workers ended (one's work added to the
  * game), so Builds opens on that chat turn. A second game holds a Loop still going: three workers,
- * the lead's background work and the finish check that has not run yet. Every worker is one line
- * in its chat, and seeding again writes nothing.
+ * the lead's background work and the finish check that has not run yet. A chat turn's worker is one
+ * line in its chat; a Loop's workers are rows of its Building card, as on its graph. Seeding again
+ * writes nothing.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -13,6 +14,8 @@ import { seedChatWorkers, seedChatWorkersLoop } from "../../src/main/dev/fixture
 import { seedLeadGraph } from "../../src/main/dev/fixture-lead-graph.ts";
 import { buildHistory, historyLabel, isNewestBuild, projectBuildGraph } from "../../src/renderer/build-progress.ts";
 import { EntryAction, EntryKind, toEntries } from "../../src/renderer/chat-entries.ts";
+import { buildChecklist, PartMark, runPlanParts } from "../../src/renderer/chat/build-checklist.ts";
+import { BUILD_CHECKLIST_WORDS } from "../../src/renderer/words.ts";
 import { buildRunGraph, FinishCheckState, GraphNodeKind, type RunGraph } from "../../src/renderer/run-graph.ts";
 import { partRows, statusLine, stepWord } from "../../src/renderer/run-steps.ts";
 import { LeadFace, leadFace, leadNodeOf } from "../../src/renderer/run-tree.ts";
@@ -79,6 +82,12 @@ function rowWords(graph: RunGraph) {
   return partRows(graph, graph.summary ?? null).flatMap((row) =>
     row.steps.map((step) => [row.facet.title, stepWord(step, graph.active)]),
   );
+}
+
+/** What a running Loop's Building card lists: each part's title and mark, the lead's own last step left out. */
+function cardRows(events: EventEnvelope[], project: string, runId: string) {
+  const parts = { summary: summarizeRun(events, project, runId), plan: runPlanParts(events, runId), finishing: false };
+  return (buildChecklist({ ...parts, now: START })?.rows ?? []).filter((row) => row.id !== "together");
 }
 
 const workerLines = (events: EventEnvelope[]): string[] =>
@@ -163,17 +172,19 @@ describe("the chat-workers dev fixture", () => {
     const done = projectBuildGraph(events, webLoopThread, [], core.layout.runs, "fixture-graph-run");
     assert.ok(done);
     assert.deepEqual(rowWords(done)[0], ["Sword, ice and light", "Added to your game"]);
+    // Flipped: each builder had a line ("Sword, ice and light. Added to your game.", "Frozen landscape…").
+    assert.deepEqual(workerLines(events), [], "a Loop's builders are its card's rows, never lines");
+    const live = projectBuildGraph(events, webLoopThread, [], core.layout.runs, "fixture-graph-live");
+    assert.ok(live);
+    const graphSays = partRows(live, null).map((row) => [
+      row.facet.title,
+      row.working ? PartMark.Working : row.integrated ? PartMark.Added : PartMark.Next,
+    ]);
+    const cardSays = cardRows(events, "fixture-web-loop", "fixture-graph-live").map((row) => [row.title, row.mark]);
     assert.deepEqual(
-      workerLines(events),
-      [
-        "Sword, ice and light. Added to your game.",
-        "Frozen landscape. Added to your game.",
-        "Sky and fog. Added to your game.",
-        "Sword, ice and light. Added to your game.",
-        "Frozen landscape…",
-        "Sky and fog…",
-      ],
-      "a builder the lead integrated reads as added in the chat once it is over, even stopped, as on its row; one still at work reads working",
+      [...cardSays].sort(),
+      [...graphSays].sort(),
+      "the card's rows say what the graph's rows say: added, working, or still to come",
     );
   });
 
@@ -196,11 +207,8 @@ describe("the chat-workers dev fixture", () => {
     assert.ok(done);
     const katana = rowWords(done).find(([title]) => title === "Blender: Katana");
     assert.deepEqual(katana, ["Blender: Katana", "Added to your game"]);
-    assert.deepEqual(workerLines(events).slice(0, 3), [
-      "Blender: Katana. Added to your game.",
-      "Texture: Wet concrete.",
-      "Meshy: Goblin: didn't finish.",
-    ]);
+    // Flipped: the typed workers had lines ("Blender: Katana. Added to your game.").
+    assert.deepEqual(workerLines(events), [], "the lead's workers are its card's rows, never lines");
   });
 
   it("the first game's history lists the Loop, then the chat turn", async () => {
@@ -220,17 +228,25 @@ describe("the chat-workers dev fixture", () => {
     );
   });
 
-  it("names each worker once in the chat", async () => {
-    const { logs, loopThread } = await seeded();
+  it("names a chat turn's workers once in the chat, and the Loop's on its Building card", async () => {
+    const { logs, loopThread, loopGame } = await seeded();
     assert.deepEqual(workerLines(logs.get(GAME_THREAD) ?? []), [
       "Checked the physics: the front wheels sit off center.",
       "Centered the steering. Added to your game.",
     ]);
-    assert.deepEqual(workerLines(logs.get(loopThread) ?? []), [
-      "Studied the web game.",
-      "Ported the car. Added to your game.",
-      "Build the track…",
-    ]);
+    const events = logs.get(loopThread) ?? [];
+    // Flipped: the Loop's workers were lines ("Ported the car. Added to your game.", "Build the track…").
+    assert.deepEqual(workerLines(events), []);
+    const graph = buildRunGraph(events);
+    assert.ok(graph);
+    assert.deepEqual(
+      cardRows(events, loopGame.name, graph.runId).map((row) => [row.title, row.mark, row.status]),
+      [
+        ["Study the web game", PartMark.Next, BUILD_CHECKLIST_WORDS.notAdded],
+        ["Port the car", PartMark.Added, BUILD_CHECKLIST_WORDS.added],
+        ["Build the track", PartMark.Working, BUILD_CHECKLIST_WORDS.working],
+      ],
+    );
   });
 
   it("seeding again writes nothing", async () => {

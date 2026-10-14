@@ -3,28 +3,29 @@
 ## From a request to a game
 
 Auto edits directly; Loop delegates workers (four by default) while the chat
-leads. Parts grow boldly within the ask; an art director reviews the whole game and returns defects
-for polish, never a veto. Other
+leads. Parts grow boldly within the ask; an art director reviews the whole game, and only its
+blockers send a part back (flaws and nits are reported). Other
 projects' Loops run [in place](projects-engines.md#loops-in-place). Loop hours are a soft cap: a
 reviewer's yes ends it early; 15 minutes' grace follows.
 Acceptance persists across workers and restarts. External blockers pause the run at its
-checkpoint. User Finish overrides the clock, never the final judge
+checkpoint. ∞ ends on verified outcomes with no blocker. Asked in chat to finish, the lead lets
+rounds end, then lands. Finish overrides the clock, never the final judge
 ([details](../harness-runtime.md#goal-completion-and-worker-approvals)).
 
-An active run opens Builds once; a build shown from the chat opens Live, as does Builds with
-nothing to draw. Files and images opened from the chat get closable tabs.
+An active run opens Builds once; a build shown from the chat, or Builds with nothing to draw, opens
+Live. Files and images opened from the chat get closable tabs.
 
 ## The two views
 
 **Live** plays the browser game in a native view; unwatched previews pause. The strip
 holds Live/Builds/Assets, Play/Stop, Reload, the sound switch (⌥⌘M; only a shown Live is heard),
-Full screen (hold Esc) and plugin actions such as Publish. Stop halts it until Play
+Full screen (hold Esc) and plugin actions (Publish). Stop halts it until Play
 or Reload. An empty scaffold shows “Ready for your first idea”, or
-“Building your game” with Watch progress while a run works, Play latest once a build is ready; the first healthy build then shows itself. Otherwise only the user changes Live (opening a
-game, Reload, Play, Make live, a chat request while hidden). A newer healthy build, a
-changed game folder (checkpoint, landing, rewind), a chat's show or landing, or a shown build found
-broken lights Reload. While Live is hidden and
-not stopped, all but a new build go in at once. The
+“Building your game” with Watch progress, then Play latest; the first healthy build shows itself.
+Otherwise only the user changes Live (opening a game, Reload, Play, Make live, a chat request while
+hidden). A newer healthy build, a changed game folder (checkpoint, landing, rewind), a chat's show
+or landing, or a broken shown build lights Reload; hidden and not stopped, all but a new build go
+in at once. The
 preview reaches only public library CDNs; Open Game names other hosts. Other folders' views:
 [projects](projects-engines.md#lives-views).
 
@@ -34,14 +35,14 @@ destination in the sandbox; **Web | Native** shows the Mac build in Live. Rust n
 
 **Builds** is a graph: You asked, a row per part, Your build, then the lead while no part
 works. Tries at one step fold into one node; what reached the build forms the line, the rest
-hangs below. Tries a pause cut off show Paused until added. An eye marks nodes the reviewers looked at. A new build is “Checking it starts…” until
-it has run. A working node shows its agent's screen. A selected
-node opens as a card; an eye opens the reviewers' notes. **Follow up in chat** notes the next message to that node's build.
+hangs below. Tries a pause cut off show Paused until added. An eye marks (and opens) the reviewers'
+notes. A new build is “Checking it starts…” until it has run. A working node shows its agent's
+screen; a selected one opens as a card. **Follow up in chat** notes the next message to its build.
 Earlier builds open from chat cards. A Loop in place draws the lead's save points on one row
 (no eye). A Loop's lead, workers and jobs make a tree ending in the finish check (Checking, Not
 yet, Done or Stopped; [feature map](../agent/feature-map.md)); a chat message's workers get a graph.
 
-Agents test in hidden windows, never in Live; chat frames never certify a build. A finished
+Agents test in hidden windows, never Live; chat frames never certify a build. A finished
 worker, passing checks, integration and Live's revision are distinct facts; Builds and Studio
 report missing checks and coverage limits.
 
@@ -49,10 +50,9 @@ report missing checks and coverage limits.
 
 After a chat-led build, its session takes follow-ups: game edits, resuming a paused run
 with its time left, starting over only when asked. With Loop on, small changes are made directly;
-more work reopens the build until checked (other projects start anew). A chat that
-cannot continue, like Ollama's, answers as with Loop off, noting it once. **Stop** interrupts at once, keeping finished
-work; a stopped Loop run shows one Stopped line with Resume, and Builds or a chat request makes its
-build live. Limit, outage and crash pauses resume twice unless stopped (Settings → Harness); sign-in
+more work reopens the build until checked (other projects start anew); a chat that cannot, like
+Ollama's, answers as with Loop off, saying so once. **Stop** interrupts at once, keeping finished
+work: a stopped Loop shows one Stopped line with Resume, and Builds or a chat request makes it live. Limit, outage and crash pauses resume twice unless stopped (Settings → Harness); sign-in
 pauses wait. A crash or restart settles abandoned activity from saved state.
 
 ## Where to work

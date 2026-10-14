@@ -1832,6 +1832,31 @@ export const WORKER_LINE_WORDS = {
   stopped: (title: string) => `${title}: stopped.`,
 } as const;
 
+/**
+ * The Building card's checklist (`chat/build-checklist.ts`): each part's status on its row, the
+ * lead's last step, and the card's one line, counted from the parts.
+ */
+export const BUILD_CHECKLIST_WORDS = {
+  added: "Added",
+  working: "Working",
+  workingFor: (minutes: number) => `Working · about ${minutes} min`,
+  workingRound: (round: number) => `Working · round ${round}`,
+  waiting: "Waiting to start",
+  notAdded: "Not added",
+  notStarted: "Not started",
+  next: "Next",
+  /** The lead's own last step, after the parts. */
+  together: "Put it together and check",
+  caption: (added: number, total: number, working: number) =>
+    working ? `${added} of ${total} parts added · ${working} working` : `${added} of ${total} parts added`,
+  finishing: (working: number) => (working ? `Finishing up · ${working} working` : "Finishing up"),
+  open: "Open in Builds",
+  /** The card's toggle, as a screen reader names it. */
+  toggle: "Building: show or hide its parts",
+  /** The list's own name, for a screen reader. */
+  list: "Parts of the build",
+} as const;
+
 /** The status line's rest while a Loop's workers work: "3 workers on it". */
 export const workersOnIt = (count: number): string => `${plural(count, "worker")} on it`;
 
@@ -2517,6 +2542,7 @@ const STUDIO_TOOLS: Record<string, ToolWords> = {
   integrate: { icon: "write", label: "merged a worker's work", active: "Merging a worker's work" },
   show: { icon: "see", label: "showed you a build" },
   note: { icon: "think", label: "noted a decision" },
+  wrap_up: { icon: "run", label: "began finishing the build", active: "Finishing the build" },
   finish: { icon: "run", label: "wrapped up the build", active: "Wrapping up the build" },
 };
 

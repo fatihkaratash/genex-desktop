@@ -33,6 +33,8 @@ import { isOpenRung } from "../facet/growth.ts";
 import { isCommit } from "../shell.ts";
 import { addToScope, restoreScope, runScope, type RunScope } from "../scope.ts";
 import { linkScreenOwner, runningScreenOwner, SCREEN_CRITIC } from "../screen-owner.ts";
+import { drawsTheHud } from "./hud-owner.ts";
+import { headLooked } from "./merge-hold.ts";
 import { CheckWeight, MAX_DONE, MAX_MILESTONES } from "../spec.ts";
 import { CLIP_BRIEF, CLIP_DETAIL, CLIP_QUOTE, CLIP_REASON, clip } from "../text.ts";
 import { MINUTE_MS, minutes, SECOND_MS, sleep } from "../time.ts";
@@ -80,7 +82,12 @@ import { WorkerStopCode } from "../workers/contract.ts";
 import { keptWorkOf } from "./kept-work.ts";
 import { stoppableRoomClock, withWorkerRoom } from "../workers/room.ts";
 import { briefOf, recordBuilderEnded, recordBuilderStarted } from "../workers/director-pool.ts";
-import type { LoopRun, StartingWorker, Worker } from "./loop-run.ts";
+import { finishAsked } from "./wrap-up.ts";
+import { wholeRoundsBudget } from "./whole-rounds.ts";
+import { refundProviderAttempt } from "./attempt-refund.ts";
+import { FINISH_ASKED_NO_WORKERS } from "./wrap-up-prompts.ts";
+import type { LoopRun, LoopRunState, StartingWorker, Worker } from "./loop-run.ts";
+import type { RoundStop } from "../facet/rules.ts";
 import type { AcquireCall } from "../native-contract.ts";
 import type { FacetSpec } from "../spec.ts";
 import type { AnyRecord } from "../../types/harness.d.ts";
@@ -1104,6 +1111,7 @@ async function forkGate(loopRun: LoopRun, worker: OpenedWorker, from: string): P
     inheritedConsole: consoleInheritedBy(),
   });
   state.healthByHead.set(commit, gate.ok === true);
+  headLooked(state, commit, gate.ok === true);
   worker.baseConsole = errorsLogged(gate);
   state.consoleByHead.set(commit, worker.baseConsole);
   rememberEvidence(commit, gate);
@@ -1208,6 +1216,7 @@ function compileContract(loopRun: LoopRun, worker: Worker, parsed: WorkerArgs, a
   const { id } = worker;
   const workerKind = workerKindOf(loopRun, id, args);
   if (worker.mode !== WorkerMode.Loop) return;
+  const critic = workerCriticOf(loopRun, id, args);
   const compiled = compileWorkerSpec(
     {
       id,
@@ -1221,7 +1230,7 @@ function compileContract(loopRun: LoopRun, worker: Worker, parsed: WorkerArgs, a
       milestones: parsed.ladder,
       traits: list(args.traits),
       kind: workerKind,
-      critic: workerCriticOf(loopRun, id, args),
+      critic,
       ownsMain: worker.ownsMain,
       setup: worker.setup,
       screen: !ownShape,
@@ -1229,6 +1238,7 @@ function compileContract(loopRun: LoopRun, worker: Worker, parsed: WorkerArgs, a
       forkedFrom: worker.from,
       stage: String(args.stage ?? "").trim() || null,
       stack: stampedStack(loopRun.run),
+      drawsHud: drawsTheHud({ critic, ownsMain: worker.ownsMain, replaces: worker.replaces }, state.facetSpecs),
     },
     state.evidenceByHead.get(worker.from) ?? null,
     { rarelyMeasurable: neverMeasured() },
@@ -1367,13 +1377,18 @@ function loopStartFields(worker: Worker): AnyRecord {
  * What `worker_start` answers once the worker is running; `waking` for a lead that ends its turn
  * instead of waiting, `lead` for one that writes nothing (one session) and so commits nothing first.
  */
-function startAnswer(worker: Worker, { budgetMs, roundWarning, policySpec, dirty, waking, lead }: AnyRecord): string {
+function startAnswer(
+  worker: Worker,
+  { budgetMs, rounds, roundWarning, policySpec, dirty, waking, lead }: AnyRecord,
+): string {
   return JSON.stringify({
     started: worker.id,
     mode: worker.mode,
     worktree: worker.worktree,
     forkedFrom: shortSha(worker.from ?? ""),
     minutes: minutes(budgetMs),
+    // Its minutes, fitted to whole rounds of this game (whole-rounds.ts `wholeRoundsBudget`).
+    ...(typeof rounds === "number" ? { rounds } : {}),
     ...(roundWarning ? { roundWarning } : {}),
     ...(Object.keys(policySpec.overrides).length ? { policy: policySpec.overrides } : {}),
     ...(policySpec.warnings.length ? { policyWarnings: policySpec.warnings } : {}),
@@ -1389,6 +1404,8 @@ function startAnswer(worker: Worker, { budgetMs, roundWarning, policySpec, dirty
  */
 async function startPreconditions(loopRun: LoopRun, id: string, args: AnyRecord): Promise<string | null> {
   const { holdForPlanReview, state } = loopRun;
+  // A conflict worker only finishes a merge of work the run already has: the wrap-up needs it.
+  if (!conflictMergeOf(args) && (await finishAsked(loopRun))) return FINISH_ASKED_NO_WORKERS;
   if (RESERVED_WORKER_IDS.has(id)) return `"${id}" is reserved; pick another id`;
   if (state.workers.has(id)) return `worker "${id}" already exists (${state.workers.get(id)?.state}); pick another id`;
   const buried = priorIdRefusal(loopRun, id, slug(args.from));
@@ -1436,6 +1453,25 @@ async function contractedFork(
   return { from: fork.from, commit: fork.commit, owns: contracted.owns ?? list(args.owns) };
 }
 
+/**
+ * The time a worker is given: its `minutes` (at least `WORKER_MIN_MINUTES`, at most what the run has
+ * left), and for a loop worker fitted to whole rounds of this game, a part-round at its end being
+ * time no round would use (whole-rounds.ts). `rounds` is how many, when they could be counted.
+ */
+function workerBudget(
+  loopRun: LoopRun,
+  args: AnyRecord,
+  mode: WorkerMode,
+  remaining: number,
+): { budgetMs: number; rounds: number | null } {
+  const asked = Math.min(
+    Math.max(WORKER_MIN_MINUTES, num(args.minutes, WORKER_DEFAULT_MINUTES)) * MINUTE_MS,
+    remaining,
+  );
+  if (mode !== WorkerMode.Loop) return { budgetMs: asked, rounds: null };
+  return wholeRoundsBudget(asked, loopRun.medianRoundMs(), remaining);
+}
+
 export async function startWorker(loopRun: LoopRun, args: AnyRecord) {
   const { ctx, integrationWorktree, medianRoundMs, note, run, runningWorkers, startRefusal, state } = loopRun;
   const id = slug(args.id) || defaultWorkerId(loopRun);
@@ -1448,10 +1484,7 @@ export async function startWorker(loopRun: LoopRun, args: AnyRecord) {
   if (typeof allowed === "string") return allowed;
   const { pooled, remaining, replaces, policySpec } = allowed;
   const mode = workerModeOf(args);
-  const budgetMs = Math.min(
-    Math.max(WORKER_MIN_MINUTES, num(args.minutes, WORKER_DEFAULT_MINUTES)) * MINUTE_MS,
-    remaining,
-  );
+  const { budgetMs, rounds } = workerBudget(loopRun, args, mode, remaining);
   // What a round on this game has actually cost, against what this worker is being given.
   const roundWarning = shortBudgetWarning(budgetMs, medianRoundMs());
   const ownsMain = yes(args.owns_main, runningWorkers().length === 0);
@@ -1498,6 +1531,7 @@ export async function startWorker(loopRun: LoopRun, args: AnyRecord) {
   launchWorker(loopRun, worker);
   return startAnswer(worker, {
     budgetMs,
+    rounds,
     roundWarning,
     policySpec,
     dirty,
@@ -1598,18 +1632,33 @@ function roundNote(id: string, kept: AnyRecord): string {
 }
 
 /**
- * The integration hook a loop worker's facet loop merges from: the head the last wave closed on,
- * so running workers take the integration branch once per wave and not after every commit the
- * lead makes (integrate.ts); the integration head itself until a wave has closed. `latest` is the
- * lead's newest head, which a worker may have been told to merge before its wave closes: its
- * review walks back from there (facet/merged-heads.ts).
+ * The base a loop worker takes at its next round: the newest integration head — the lead's own
+ * commits too — once it is seen to load, or while nobody has looked at it; but the head before a
+ * worker's merge until that merge's health pass answers (integrate.ts `headBeforeMerge`), and the
+ * head the last healthy wave closed on when a health pass saw it fail. Workers once took the branch
+ * only when a wave closed, and their merges then landed behind every commit the lead made in between.
+ */
+function freshBase(
+  state: Pick<LoopRunState, "healthByHead" | "headBeforeMerge" | "integrationHead" | "waveHead">,
+): string | null {
+  const head = state.integrationHead ?? null;
+  if (head && state.healthByHead?.get(head) === true) return head;
+  const base = state.headBeforeMerge ?? head;
+  if (base && state.healthByHead?.get(base) === false) return state.waveHead ?? base;
+  return base ?? state.waveHead ?? null;
+}
+
+/**
+ * The integration hook a loop worker's facet loop merges from at each round (`freshBase`). `latest`
+ * is the lead's newest head, which a worker may have been told to merge already: its review walks
+ * back from there (facet/merged-heads.ts).
  */
 export function loopIntegration(loopRun: LoopRun): {
   head: () => Promise<string | null>;
   latest: () => Promise<string | null>;
 } {
   const { state } = loopRun;
-  return { head: async () => state.waveHead ?? state.integrationHead, latest: async () => state.integrationHead };
+  return { head: async () => freshBase(state), latest: async () => state.integrationHead };
 }
 
 /**
@@ -1665,6 +1714,12 @@ async function runLoopWorker(loopRun: LoopRun, worker: Worker): Promise<void> {
       worker.loop = loop;
       if (said) note(said, NoteKind.WorkerLoop);
     },
+    // A wait for the model provider is no time the worker built: its clock stands still, up to the
+    // run's own working deadline (facet/paused-clock.ts), and the digests read the moved deadline.
+    deadlineCeiling: () => loopRun.softDeadline,
+    onDeadline: (deadline: number) => {
+      worker.deadline = deadline;
+    },
     // A round that waits for a lost provider wakes the lead; a lost sign-in then pauses the run (wake.ts).
     onProviderLost: (lost: AnyRecord) =>
       note(
@@ -1675,21 +1730,8 @@ async function runLoopWorker(loopRun: LoopRun, worker: Worker): Promise<void> {
       const own = worker.steering.splice(0, worker.steering.length);
       return own;
     },
-    // Who stopped it, in words. Nothing here is ever the user's doing: the director
-    // stops its own workers, and a run that stops five to fix a shader must not tell
-    // the owner they asked for it.
-    finishRequested: async () => {
-      if (worker.stopRequested)
-        return { by: "director", reason: worker.stopWhy ?? "stopped by the director", code: roundStopCode(worker) };
-      if (state.finish)
-        return {
-          by: "director",
-          reason: "stopped by the director: the build is wrapping up",
-          code: WorkerStopCode.RunEnded,
-        };
-      return false;
-    },
-    // Once a wave has closed, a worker takes the integration branch once per wave (integrate.ts).
+    finishRequested: () => workerStopAsk(loopRun, worker),
+    // Each round takes the newest integration head once it is seen to load (`freshBase`).
     integration: loopIntegration(loopRun),
     projectDir,
     onIteration: (record: AnyRecord) => recordRound(loopRun, worker, record),
@@ -1712,14 +1754,37 @@ async function runLoopWorker(loopRun: LoopRun, worker: Worker): Promise<void> {
     loopState: result.loopState ?? null,
   });
   if (result.limit) noteWorkerLimit(worker, result.limit);
+  await refundProviderAttempt(loopRun, worker, result);
   worker.lastCommit = result.lastCommit ?? (await headOf(ctx, worker.worktree).catch(() => null));
   // A stopped round's work is committed on its worktree beyond what was accepted: the lead can still add it.
   worker.keptCommit = await keptWorkOf(loopRun, worker);
   setWorkerState(worker, worker.stopRequested ? WorkerState.Stopped : WorkerState.Done);
 }
 
+/**
+ * Who asked a loop worker to stop, as its loop reads it (facet/rules.ts `stopSignal`). The lead's
+ * `worker_stop` and the run's close end the round where it stands, in the director's name: a run
+ * that stops five workers to fix a shader must not tell the owner they asked for it. The user's
+ * ask to finish (`wrap_up`, or the app's) is theirs, and lets the round it is in reach its verdict
+ * before the next one is refused.
+ */
+export async function workerStopAsk(
+  loopRun: Pick<LoopRun, "inbox" | "state">,
+  worker: Pick<Worker, "stopRequested" | "stopWhy" | "stoppedByLead">,
+): Promise<RoundStop | boolean> {
+  if (worker.stopRequested)
+    return { by: "director", reason: worker.stopWhy ?? "stopped by the director", code: roundStopCode(worker) };
+  if (loopRun.state.finish)
+    return {
+      by: "director",
+      reason: "stopped by the director: the build is wrapping up",
+      code: WorkerStopCode.RunEnded,
+    };
+  return finishAsked(loopRun);
+}
+
 /** Why a round was stopped, in the app's code: the lead's `worker_stop`, else the run's own close (a pause, the end). */
-const roundStopCode = (worker: Worker): WorkerStopCode =>
+const roundStopCode = (worker: Pick<Worker, "stoppedByLead">): WorkerStopCode =>
   worker.stoppedByLead ? WorkerStopCode.StoppedByLead : WorkerStopCode.RunEnded;
 
 /**

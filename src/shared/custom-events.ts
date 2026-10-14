@@ -415,6 +415,8 @@ export interface DelegatedData {
   tool_name?: string | null;
   decision_reason?: string | null;
   message?: string | null;
+  /** The CLI's own API error code: the message is its error text, never the model's words. */
+  apiError?: string;
   parts?: Array<{
     type: string;
     name?: string;

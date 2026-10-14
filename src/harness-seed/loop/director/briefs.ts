@@ -397,7 +397,11 @@ function lastHealthWords(integrationHealthy: boolean | null): string {
   return "";
 }
 
-/** The wrap-up session's prompt: minutes left, finish now. */
+/**
+ * The wrap-up session's prompt: minutes left, finish now. Once the user asked to finish
+ * (`userAsked`), their finish closes the run with no reviewer (integrate.ts `finishHeld`), so it
+ * invites no claim.
+ */
 export function wrapUpPrompt({
   run,
   finalDeadline,
@@ -405,6 +409,7 @@ export function wrapUpPrompt({
   integrationHealthy,
   workers,
   fromScratch = false,
+  userAsked = false,
 }: {
   run: Run;
   finalDeadline: number;
@@ -412,17 +417,20 @@ export function wrapUpPrompt({
   integrationHealthy: boolean | null;
   workers: Worker[];
   fromScratch?: boolean;
+  userAsked?: boolean;
 }): string {
   const running = workers.filter((w) => isRunning(w)).map((w) => w.id);
   const head = integrationHead ? shortSha(integrationHead) : "none";
   return [
-    `Run ${run.runId}: your session reached its deadline; ${minutes(finalDeadline - Date.now())} minutes remain. Do not start workers or long looks.`,
+    `Run ${run.runId}: the working time is over; ${minutes(finalDeadline - Date.now())} minutes remain. Do not start workers or long looks.`,
     running.length
       ? `Workers still running: ${running.join(", ")} — finish stops them; integrate what is worth keeping first (integrate is quick).`
       : "",
     `Integration branch: ${head}${lastHealthWords(integrationHealthy)}.`,
     `Call finish now with land=yes if the integrated build loads and ${fromScratch ? "does what the goal asked (this run started from an empty project — the user had no game at all, so anything that runs and plays is this run's build)" : "is better than what the user had"}, otherwise land=no, and an honest summary. Then stop.`,
-    `A claim that the goal is reached (victory=yes) needs at least ${CLAIM_BEFORE_END_MINUTES} minutes before the end for a reviewer to check it; a later one closes the run without a yes.`,
+    userAsked
+      ? "The user asked to finish: this finish claims nothing and no reviewer checks it — say in the summary what is verified and what is not."
+      : `A claim that the goal is reached (victory=yes) needs at least ${CLAIM_BEFORE_END_MINUTES} minutes before the end for a reviewer to check it; a later one closes the run without a yes.`,
   ]
     .filter(Boolean)
     .join("\n");

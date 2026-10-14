@@ -1,7 +1,7 @@
 {
   "apiVersion": 4,
   "id": "blender",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "name": "Local Blender",
   "publisher": "Studio",
   "description": "Model 3D assets with Blender on this Mac. No account or credits.",

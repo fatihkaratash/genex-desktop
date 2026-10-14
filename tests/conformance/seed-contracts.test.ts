@@ -29,6 +29,7 @@ import unrealManifest from "../../src/plugins/unreal/plugin.json" with { type: "
 import * as seedInbox from "../../src/harness-seed/loop/run-inbox.ts";
 import * as seedQueue from "../../src/harness-seed/loop/message-queue.ts";
 import * as seedRoles from "../../src/harness-seed/loop/model-roles.ts";
+import * as seedEffort from "../../src/harness-seed/loop/effort-cap.ts";
 import * as seedOutage from "../../src/harness-seed/loop/outage.ts";
 import * as seedOutcomes from "../../src/harness-seed/loop/outcomes.ts";
 import {
@@ -97,6 +98,7 @@ import { SnapshotRefusal } from "../../src/substrate/snapshots.ts";
 import { DelegationRefusal, EngineFailureKind, StopReason } from "../../src/shared/engine-requests.ts";
 import * as queue from "../../src/shared/message-queue.ts";
 import * as roles from "../../src/shared/model-roles.ts";
+import { ReasoningEffort } from "../../src/shared/model-preferences.ts";
 import { GameFront, GameSteer, PreviewConsoleSource, PreviewGone } from "../../src/shared/preview-contract.ts";
 import { EngineId } from "../../src/shared/providers.ts";
 import {
@@ -583,6 +585,28 @@ describe("model roles (shared/model-roles.ts ↔ loop/model-roles.ts)", () => {
         );
       }
     }
+  });
+});
+
+describe("effort per role (shared/model-roles.ts ↔ loop/effort-cap.ts)", () => {
+  it("caps a worker's and a reviewer's effort at high, keeps the lead's as set, and agrees on every level", () => {
+    assert.deepEqual(seedEffort.EFFORT_ORDER, Object.values(ReasoningEffort), "the same levels, least to most");
+    assert.equal(seedEffort.WORKER_EFFORT_CEILING, roles.WORKER_EFFORT_CEILING);
+    const levels = [...Object.values(ReasoningEffort), "turbo", undefined];
+    for (const role of ["planner", "builder", "judge"] as const)
+      for (const effort of levels)
+        assert.equal(
+          roles.roleEffortCap(role, effort),
+          seedEffort.effortCap(effort, role === "planner"),
+          `${role} at ${String(effort)}`,
+        );
+    assert.deepEqual(
+      ["max", "ultra", "xhigh", "high", "medium", "low"].map((effort) => roles.roleEffortCap("builder", effort)),
+      ["high", "high", "high", "high", "medium", "low"],
+    );
+    assert.equal(roles.roleEffortCap("judge", "max"), "high");
+    assert.equal(roles.roleEffortCap("planner", "max"), "max", "the lead thinks as hard as the user set");
+    assert.equal(roles.roleEffortCap("builder", "turbo"), "turbo", "a level no engine names is left alone");
   });
 });
 

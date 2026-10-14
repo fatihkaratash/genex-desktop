@@ -3,7 +3,7 @@
  * line, and where it stands (Ready, Off, waiting on the account) or the one setting it needs.
  * They used to hide on the Plugins list behind "Show disabled and optional connections". An engine
  * plugin's connection is only as ready as its editor: once on, it says what its toolbar button
- * says (Unreal: Get, Set up, Not open, Starting, Ready), not the bridge's own Ready.
+ * says (Unreal: Not installed, Set up, Not open, Starting, Ready), not the bridge's own Ready.
  */
 import type { JSX } from "react";
 import { useState } from "react";

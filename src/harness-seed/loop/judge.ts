@@ -988,7 +988,7 @@ function describeEvidence(candidate: Candidate, hudBudget: number | null = null)
     );
     if (candidate.shots.some((s: AnyRecord) => s.camera === "user:view")) {
       lines.push(
-        `user:view is the page as the user sees it (DOM included) on the default camera; every other frame is the canvas alone. Anything on user:view that default lacks is UI the player sees and the checks did not — a defect.`,
+        `user:view is the page as the user sees it (DOM included) on the default camera, taken a moment after the canvas frames; every other frame is the canvas alone. So a HUD drawn in the page shows on user:view only, and what moves may have moved: neither is a defect. A [duplicate-overlay] is one element drawn twice within a single frame.`,
       );
     }
   }

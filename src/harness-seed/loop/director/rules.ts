@@ -625,6 +625,8 @@ export interface WorkerSpecInput {
   stack?: GameStack | null;
   /** "finish" for a worker that finishes what exists (facet/stage.ts); absent or anything else, the build stage. */
   stage?: string | null;
+  /** This part draws the HUD (spec.ts `withHarnessChecks`): its coverage and overlap are its own; absent, it does. */
+  drawsHud?: boolean;
 }
 
 /**
@@ -641,6 +643,7 @@ function withDeclaredGame<S extends FacetSpec>(
     ownsMain,
     screen,
     keepsFrontEnd,
+    drawsHud,
     stack,
   }: {
     kind: string | null;
@@ -648,6 +651,7 @@ function withDeclaredGame<S extends FacetSpec>(
     ownsMain: boolean;
     screen: boolean;
     keepsFrontEnd: boolean;
+    drawsHud: boolean;
     stack: GameStack | null;
   },
 ): S {
@@ -655,7 +659,8 @@ function withDeclaredGame<S extends FacetSpec>(
   if (!kindName && !traits.length) return spec;
   const declared: AnyRecord = { ...(kindName ? { kind: kindName } : {}) };
   for (const trait of Object.values(GameTrait)) if (traits.includes(trait)) declared[trait] = true;
-  return withHarnessChecks(spec, { ownsMain, game: normalizeGameTraits(declared), screen, keepsFrontEnd, stack });
+  const game = normalizeGameTraits(declared);
+  return withHarnessChecks(spec, { ownsMain, game, screen, keepsFrontEnd, drawsHud, stack });
 }
 
 /**
@@ -714,6 +719,7 @@ export function compileWorkerSpec(
     forkedFrom = null,
     stage = null,
     stack = null,
+    drawsHud = true,
   }: WorkerSpecInput,
   base: AnyRecord | null = null,
   { rarelyMeasurable: rarely = [] }: { rarelyMeasurable?: Array<{ id: string; rounds: number }> } = {},
@@ -731,6 +737,7 @@ export function compileWorkerSpec(
     ownsMain,
     screen,
     keepsFrontEnd: setup?.begin === false,
+    drawsHud,
     stack,
   });
   const expr = setupVerifyExpr(setup?.verify);

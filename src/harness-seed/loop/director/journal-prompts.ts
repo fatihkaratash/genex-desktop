@@ -9,6 +9,7 @@ import { shortSha } from "../git.ts";
 import { WorkerState } from "../outcomes.ts";
 import { clip } from "../text.ts";
 import { LEAD_PRIOR_BRINGS_IN } from "./lead-session-prompts.ts";
+import { KEPT_WORDS } from "./kept-work-prompts.ts";
 
 /**
  * This part serves a lead that is its chat's own session and writes nothing (one session): a run
@@ -59,7 +60,8 @@ export function priorWorkerState(state: string, era: PriorEra = PAUSE_ERA): stri
 /**
  * A worker from before the pause: what it committed, and how to go on from it — for a lead that
  * writes nothing (`lead`), through a worker started from it; for a director with its own hands,
- * also by merging it in its worktree.
+ * also by merging an accepted commit in its worktree. A stopped round nobody judged is judged
+ * against the build first, whoever leads.
  */
 export function priorCommitWords({
   lastCommit,
@@ -76,9 +78,10 @@ export function priorCommitWords({
 }): string {
   const bringIn = (commit: string) =>
     lead ? LEAD_PRIOR_BRINGS_IN : `\`git merge ${commit}\` in your worktree brings it in`;
-  // A round the run stopped left its work committed beyond what was accepted: unjudged, and kept.
+  // A round the run stopped left its work committed beyond what was accepted: unjudged, so it is
+  // judged against the build before it goes in, never merged by hand (kept-work.ts).
   if (kept && kept !== lastCommit)
-    return `the run stopped its round before a verdict; that work is kept as ${shortSha(kept)} on ${ref} — worker_start from=${kept} builds on it, ${bringIn(kept)}`;
+    return `the run stopped its round before a verdict; that work is kept as ${shortSha(kept)} on ${ref}, never judged — ${KEPT_WORDS.judgedFirst(kept)}`;
   if (!lastCommit || lastCommit === from) return "it left no commit of its own";
   return `its last commit ${shortSha(lastCommit)} is kept on ${ref} — worker_start from=${lastCommit} builds on it, ${bringIn(lastCommit)}`;
 }
