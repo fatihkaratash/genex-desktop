@@ -961,6 +961,22 @@ impl SkyState {
     /// alone: no sun disk (the analytic sun lights the scene directly). False, and nothing
     /// recorded, before the LUTs were first computed.
     pub fn encode_cube(&self, device: &Device, encoder: &mut CommandEncoder, cube: &TextureView, side: u32) -> bool {
+        if !self.has_luts() {
+            return false;
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("sky cube"), timestamp_writes: None });
+        self.dispatch_cube(device, &mut pass, cube, side)
+    }
+
+    /// Whether the LUTs were computed at least once ([`SkyState::encode_cube`] and
+    /// [`SkyState::dispatch_cube`] record nothing before).
+    pub fn has_luts(&self) -> bool {
+        self.gpu.as_ref().is_some_and(|gpu| gpu.view_key.is_some())
+    }
+
+    /// [`SkyState::encode_cube`] recorded into `pass` (the IBL bake's own pass: its next dispatch may
+    /// read the faces). False, and nothing recorded, before the LUTs were first computed.
+    pub fn dispatch_cube(&self, device: &Device, pass: &mut wgpu::ComputePass<'_>, cube: &TextureView, side: u32) -> bool {
         let Some(gpu) = self.gpu.as_ref().filter(|gpu| gpu.view_key.is_some()) else { return false };
         let group = bind_group(
             device,
@@ -973,7 +989,6 @@ impl SkyState {
                 (6, wgpu::BindingResource::TextureView(cube)),
             ],
         );
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("sky cube"), timestamp_writes: None });
         pass.set_pipeline(&gpu.cube_pipeline);
         pass.set_bind_group(0, &group, &[]);
         pass.dispatch_workgroups(side.div_ceil(WORKGROUP_SIDE), side.div_ceil(WORKGROUP_SIDE), CUBE_FACES);

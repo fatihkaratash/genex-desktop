@@ -127,7 +127,7 @@ fn particle_fog_optical_depth(dir: vec3<f32>, reach: f32) -> f32 {
 
 // The environment's radiance towards unit `n`, read from the prefiltered cube at the fog's
 // roughness (lighting/fog.wgsl's `GX_FOG_ENV_ROUGHNESS`).
-const PARTICLE_FOG_ENV_ROUGHNESS: f32 = 0.05;
+const PARTICLE_FOG_ENV_ROUGHNESS: f32 = 0.0;
 
 // At the ambient chunk's perceptual level (`gx_env_lod`: `last · r · (2 − r)`).
 fn particle_env_radiance(n: vec3<f32>) -> vec3<f32> {

@@ -14,7 +14,8 @@
 // (high and ultra; never below Lagarde's estimate), else through Lagarde's NdotV/roughness fit
 // (Frostbite 2014). Ambient occlusion
 // darkens indirect light only (this chunk: the flat ambient or the environment), never the sun or
-// local lights, with Jimenez's multi-bounce fit so bright albedo is not over-darkened. A blended
+// local lights, with Jimenez's multi-bounce fit so bright albedo is not over-darkened; where GTAO
+// carries a bent normal the diffuse environment light is looked up along it (SI-06). A blended
 // surface takes no screen-space occlusion: the AO map holds the opaque surface behind it.
 
 // Whether the environment may light this pipeline's surfaces (`frame.ambient.w` then says whether
@@ -146,6 +147,23 @@ fn gx_env_irradiance(n: vec3<f32>) -> vec3<f32> {
     return max(e, vec3<f32>(0.0));
 }
 
+// The direction the diffuse environment light is looked up in (SI-06; Filament's
+// `diffuseNormal = shading_bentNormal`): GTAO's bent normal `bent` (zero when the AO term carries
+// none) where it is trusted, faded in over the same occlusion as the specular cone test
+// (GX_BENT_TRUST_OCCLUSION) so the estimate's noise on open ground does not tilt the light, else
+// the shading normal `n`. Sky light then comes from the open part of a crevice, under an overhang
+// or through a room's opening instead of straight through the occluder.
+fn gx_diffuse_normal(n: vec3<f32>, bent: vec3<f32>, visibility: f32) -> vec3<f32> {
+    let trusted = smoothstep(0.0, GX_BENT_TRUST_OCCLUSION, 1.0 - visibility);
+    let mixed = mix(n, bent, trusted);
+    let length_squared = dot(mixed, mixed);
+    let untrusted = trusted <= 0.0 || dot(bent, bent) <= 0.0;
+    if untrusted || length_squared < 1e-6 {
+        return n;
+    }
+    return mixed * inverseSqrt(length_squared);
+}
+
 // The split-sum scale and bias of F0 for a view at `n_dot_v` on a surface of perceptual
 // `roughness`. The LUT holds N.V along x and roughness along y at texel centres, so the bilinear
 // sample at (N.V, roughness) interpolates between them; the 1x1 neutral LUT answers its one texel.
@@ -208,9 +226,9 @@ fn gx_environment_light(s: Surface) -> vec3<f32> {
     let k_d = s.albedo * (1.0 - s.metallic) * (vec3<f32>(1.0) - fss_ess - fms_ems);
     let r = reflect(-s.v, s.n);
     let radiance = gx_env_specular(gx_specular_dominant(s.n, r, s.roughness), s.roughness);
-    let irradiance = gx_env_irradiance(s.n);
     let ao = gx_surface_occlusion(s);
     let occlusion = ao.w;
+    let irradiance = gx_env_irradiance(gx_diffuse_normal(s.n, ao.xyz, occlusion));
     let ao_lagarde = gx_specular_occlusion(n_dot_v, occlusion, s.roughness);
     var ao_specular = ao_lagarde;
     if dot(ao.xyz, ao.xyz) > 0.0 {

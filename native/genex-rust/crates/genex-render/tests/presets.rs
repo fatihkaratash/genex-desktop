@@ -11,7 +11,7 @@ use genex_render::budget::{
 };
 use genex_render::device_class::{DeviceClass, DeviceFacts, FormFactor, PerformanceTier, TargetOs, WebHints};
 use genex_render::presets::{
-    ANDROID_REFERENCE, ClassOverride, DESKTOP_REFERENCE, IPHONE_REFERENCE, LAPTOP_REFERENCE, OFF_RENDER_PASSES, RenderOverrides,
+    ANDROID_REFERENCE, ClassOverride, DESKTOP_REFERENCE, IPHONE_REFERENCE, LAPTOP_REFERENCE, MOBILE_MAX_RADIANCE_PX, OFF_RENDER_PASSES, RenderOverrides,
     SHADOW_MAP_MAX_PX, SHADOW_MAP_MIN_PX, ShadowOverride, WEB_REFERENCE, class_budget_bytes, class_defaults, default_preset, drs_step_sizes, hdri_map_width, preset_quality, profile, reference_resolution,
     on_ldr_scene, render_pass_budget, resolve, scene_format, with_world_samples, work_limits,
 };
@@ -649,17 +649,27 @@ fn the_ledger_gives_fixed_byte_totals_at_the_reference_resolutions() {
         // term it ping-pongs with are `rgba16float`, 4 more bytes a texel each at the AO size:
         // desktop-high +7_372_800 at 1440p (was 262_529_924) and +4_147_200 at 1080p (was
         // 173_703_564), desktop-ultra +29_491_200 (was 568_435_172).
-        ("desktop-high", QualityPreset::High, (2560, 1440), false, 269_902_724),
-        ("desktop-mid", QualityPreset::Medium, (1920, 1080), false, 174_595_608),
-        ("desktop-ultra", QualityPreset::Ultra, (2560, 1440), false, 597_926_372),
-        ("desktop-low", QualityPreset::Low, (1920, 1080), false, 67_314_108),
-        ("desktop-high", QualityPreset::High, (1920, 1080), false, 177_850_764),
-        ("mobile-high", QualityPreset::Medium, (786, 1704), true, 30_934_388),
-        ("mobile-mid", QualityPreset::Low, (824, 1830), true, 20_721_524),
-        ("mobile-mid", QualityPreset::Low, (1080, 2400), true, 33_284_588),
-        ("mobile-mid", QualityPreset::High, (1179, 2556), true, 57_138_492),
-        ("mobile-mid", QualityPreset::High, (1179, 2556), false, 100_363_068),
-        ("mobile-low", QualityPreset::Low, (824, 1830), true, 18_334_948),
+        // Pass 2 P2-0.11 (SI-01, SI-02) flips every row (named in the log): the radiance cube the
+        // prefilter reads is half the specular side, uncapped (was 32 px), one cube shared by both
+        // sets (was one per set), plus the sky's 16 px SH9 source: high and the phones' high
+        // (256 px cubes) +929_808 (desktop-high was 269_902_724 at 1440p and 177_850_764 at 1080p,
+        // mobile-mid high 57_138_492 and 100_363_068), medium (128) +143_376 (desktop-mid was
+        // 174_595_608, mobile-high medium 30_934_388), low (64) -53_232 (desktop-low was
+        // 67_314_108, mobile-mid low 20_721_524 and 33_284_588, mobile-low 18_334_948), ultra
+        // (a 512 px map cube) +4_075_536 (was 597_926_372). The phones' radiance cube is capped at
+        // 64 px (`MOBILE_MAX_RADIANCE_PX`), so mobile-mid's high rows take +143_376, not +929_808,
+        // and the row without transient MSAA keeps its 96 MiB budget.
+        ("desktop-high", QualityPreset::High, (2560, 1440), false, 270_832_532),
+        ("desktop-mid", QualityPreset::Medium, (1920, 1080), false, 174_738_984),
+        ("desktop-ultra", QualityPreset::Ultra, (2560, 1440), false, 602_001_908),
+        ("desktop-low", QualityPreset::Low, (1920, 1080), false, 67_260_876),
+        ("desktop-high", QualityPreset::High, (1920, 1080), false, 178_780_572),
+        ("mobile-high", QualityPreset::Medium, (786, 1704), true, 31_077_764),
+        ("mobile-mid", QualityPreset::Low, (824, 1830), true, 20_668_292),
+        ("mobile-mid", QualityPreset::Low, (1080, 2400), true, 33_231_356),
+        ("mobile-mid", QualityPreset::High, (1179, 2556), true, 57_281_868),
+        ("mobile-mid", QualityPreset::High, (1179, 2556), false, 100_506_444),
+        ("mobile-low", QualityPreset::Low, (824, 1830), true, 18_281_716),
     ];
     for (wire, preset, output, transient, bytes) in rows {
         let quality = preset_quality(preset, class(wire));
@@ -725,7 +735,9 @@ fn mobile_mid_high_on_an_iphone_panel_degrades_in_the_documented_order_to_fit_96
     // spot and bins at most 256 lights in 32 px tiles (`presets::cap_lights`); same steps.
     // RQ5.6 flipped (was 121_640_380 and 89_912_700 fitted): FSR1's intermediate at render size
     // (789 x 1712 rgb10a2unorm, 5_403_072 bytes); same steps.
-    assert_eq!(total(&quality, &at), 127_043_452, "over the 96 MB class budget");
+    // P2-0.11 flipped (was 127_043_452 and 95_315_772 fitted; named in the log): the shared
+    // radiance cube, capped at 64 px on phones, and the sky's SH9 source; same steps.
+    assert_eq!(total(&quality, &at), 127_186_828, "over the 96 MB class budget");
     let fitted = fit(&quality, &at, class_defaults(mobile_mid).budget_bytes, DegradeMode::Boot);
     let step = |rung, from, to| DegradeStep { rung, from, to };
     assert_eq!(
@@ -740,10 +752,42 @@ fn mobile_mid_high_on_an_iphone_panel_degrades_in_the_documented_order_to_fit_96
         "transient MSAA saves nothing to drop, AO is already off: bloom, shadows, IBL, materials"
     );
     assert!(fitted.fits);
-    assert_eq!(fitted.total_bytes, 95_315_772);
+    assert_eq!(fitted.total_bytes, 95_262_540);
     assert_eq!(fitted.materials, vec![MaterialClass { size_px: 256, layers: 64 }, MaterialClass { size_px: 256, layers: 16 }]);
     assert_eq!(fitted.quality.anti_aliasing, AntiAliasing::Msaa4, "tile MSAA kept");
     assert_eq!(fitted.quality.shadows.cascades, 2, "cascades come last and were not needed");
+}
+
+/// P2-0.11 (SI-01) integration: mobile-mid at high (not its class default) without transient MSAA
+/// held 99.7% of its 96 MiB budget; the half-side radiance cube passed it by 629_580 bytes and its
+/// boot ladder gave up MSAA. A phone caps its radiance cube ([`MOBILE_MAX_RADIANCE_PX`]), so it
+/// fits with no step.
+#[test]
+fn mobile_mid_high_without_transient_msaa_fits_96_mib_without_a_step() {
+    let mobile_mid = class("mobile-mid");
+    let quality = preset_quality(QualityPreset::High, mobile_mid);
+    let at = input(&quality, mobile_mid, (1179, 2556), false);
+    let budget = class_defaults(mobile_mid).budget_bytes;
+    assert!(total(&quality, &at) <= budget, "{} over {budget}", total(&quality, &at));
+    let fitted = fit(&quality, &at, budget, DegradeMode::Boot);
+    assert!(fitted.fits);
+    assert_eq!(fitted.steps, vec![], "no step");
+}
+
+/// Each phone class's radiance cube (the prefilter's source) is at most
+/// [`MOBILE_MAX_RADIANCE_PX`] at every preset; a desktop's is half its specular side.
+#[test]
+fn a_phones_radiance_cube_is_capped_and_a_desktops_is_half_its_specular_side() {
+    for class in DeviceClass::ALL {
+        for preset in QualityPreset::ALL {
+            let quality = preset_quality(preset, class);
+            let descs = genex_render::ibl::target_descs(&quality.environment);
+            let [specular, radiance, _] = descs.as_slice() else { continue };
+            let half = specular.size.0 / 2;
+            let expected = if class.form == FormFactor::Mobile { half.min(MOBILE_MAX_RADIANCE_PX) } else { half };
+            assert_eq!(radiance.size.0, expected, "{} {}", class.wire(), preset.wire());
+        }
+    }
 }
 
 #[test]
@@ -774,10 +818,12 @@ fn boot_degrades_drop_msaa_first_when_it_saves_memory() {
     // FSR1's intermediate at render size (2176 x 1224 rgb10a2unorm at scale 0.85).
     // Pass-1 fix gate (visual RED 01) flipped (was 184_232_248): + 665_856 bytes, medium's raw AO
     // term in `rg8unorm` with its weight (1088 x 612); after the MSAA rung too (was 99_002_680).
-    assert_eq!(total(&quality, &at), 184_898_104);
+    // P2-0.11 flipped (was 184_898_104 and 99_668_536; named in the log): + 143_376 bytes, the
+    // shared 64 px radiance cube of medium's 128 px specular cube and the sky's SH9 source.
+    assert_eq!(total(&quality, &at), 185_041_480);
     let fitted = fit(&quality, &at, 128 * MIB, DegradeMode::Boot);
     assert_eq!(fitted.steps, vec![DegradeStep { rung: DegradeRung::Msaa, from: 4, to: 1 }]);
-    assert_eq!((fitted.total_bytes, fitted.quality.anti_aliasing), (99_668_536, AntiAliasing::Off));
+    assert_eq!((fitted.total_bytes, fitted.quality.anti_aliasing), (99_811_912, AntiAliasing::Off));
 }
 
 #[test]
@@ -831,7 +877,9 @@ fn the_ladder_order_is_fixed_and_a_runtime_degrade_skips_the_pipeline_rungs() {
             step(DegradeRung::ShadowSize, 4096, 2048),
         ]
     );
-    assert_eq!(boot.total_bytes, 249_996_548, "ultra's 512 px HDR map cube, two sets (RQ2 review)");
+    // P2-0.11 flipped (was 249_996_548; named in the log): + 4_075_536 bytes, the shared 256 px
+    // radiance cube of the 512 px map cube and the sky's SH9 source; same steps.
+    assert_eq!(boot.total_bytes, 254_072_084, "ultra's 512 px HDR map cube, two sets (RQ2 review)");
     assert!(boot.quality.anti_aliasing.temporal(), "ultra keeps TAA");
     // At runtime the shadow format and TAA rungs are closed: the resource rungs step after the
     // boot ladder's. RQ5.6 flipped (named in the log): TAA draws one sample, not MSAA 4x, so the
@@ -853,7 +901,8 @@ fn the_ladder_order_is_fixed_and_a_runtime_degrade_skips_the_pipeline_rungs() {
     // spot atlas layer at the cascades' side, halved with them down to 768 px. RQ6 review flipped
     // (was 272_925_828): no spot atlas for a game without shadowed spots. RQ5.6 flipped (was
     // 270_566_532, over budget): one TAA sample, so the frame fits.
-    assert_eq!((runtime.total_bytes, runtime.fits), (233_219_332, true));
+    // P2-0.11 flipped (was 233_219_332; named in the log): + 4_075_536 bytes, as the boot total.
+    assert_eq!((runtime.total_bytes, runtime.fits), (237_294_868, true));
     // A game that uses shadowed spots reserves the atlas, and its own rung gives the spots up
     // before the sun's cascades are halved for their memory.
     let spotted = at.clone().with_spot_atlas(true);

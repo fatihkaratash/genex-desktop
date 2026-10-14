@@ -4,10 +4,13 @@
 //! - a prefiltered specular cube (`rgba16float`, [`SPECULAR_MIPS`] roughness levels spaced
 //!   perceptually, [`mip_roughness`]): the map or the sky straight into mip 0 at full size
 //!   (`shaders/ibl/equirect.wgsl`), then a GGX prefilter per mip by filtered importance sampling
-//!   (`prefilter.wgsl`) from a small radiance cube ([`radiance_side`], box mips) that the same
-//!   equirect pass writes;
+//!   (`prefilter.wgsl`) from a radiance cube at half the specular side ([`radiance_side`], box
+//!   mips; phones cap it at 64 px) that the same equirect pass writes, so the sharpest lobes read
+//!   a source as fine as their own mip (SI-01);
 //! - the diffuse irradiance as SH9 (`GxEnvSh`, `sh9.wgsl`, one 64-thread workgroup over the
-//!   radiance cube's [`SH9_SOURCE_SIDE`]² mip), in the convention [`sh9_eval`] holds on the CPU;
+//!   radiance cube's [`SH9_SOURCE_SIDE`]² mip; the physical sky's straight from its sky-view LUT
+//!   on every frame the LUT changes, [`SKY_SH_SOURCE_SIDE`]), deringed where it would go negative
+//!   ([`sh9_dering`]), in the convention [`sh9_eval`] holds on the CPU;
 //! - the split-sum BRDF LUT ([`BRDF_LUT_SIZE`]² `rg16float`), written once by a fragment pass with
 //!   the height-correlated Smith GGX the shading uses ([`brdf_lut_reference`] is its CPU twin).
 //!
@@ -70,13 +73,22 @@ pub const SPECULAR_MIPS: u32 = 6;
 pub const CUBE_SIZE_MAX: u32 = 512;
 /// The smallest specular cube side (its last roughness mip is then one texel).
 pub const CUBE_SIZE_MIN: u32 = 1 << (SPECULAR_MIPS - 1);
-/// The largest radiance cube side: the prefilter's source for roughness 0.25 and up. Filtered
-/// importance sampling reads it at or above the mip a sample's solid angle asks for at every
-/// preset (at most a fifth of a mip finer for the sharpest lobe), so a larger cube would only
-/// cost memory.
-pub const RADIANCE_SIZE_MAX: u32 = 32;
 /// The side of the radiance mip SH9 projects (six faces of this many texels squared).
 pub const SH9_SOURCE_SIDE: u32 = 16;
+/// The side of the cube the physical sky's SH9 is projected from (SI-02): the sky-view LUT read
+/// into six faces of this many texels squared on every frame the LUT changes, so the diffuse light
+/// follows a moving sun continuously instead of stepping once per rebake (the radiance cube's
+/// [`SH9_SOURCE_SIDE`]: the one 64-thread projection over 32 px faces took 0.3 ms).
+pub const SKY_SH_SOURCE_SIDE: u32 = SH9_SOURCE_SIDE;
+/// The bands of the SH9 window's cutoff (Sloan's deringing): from this, the strongest window
+/// tried (it keeps any non-negative environment's irradiance non-negative)...
+pub const SH9_WINDOW_MIN: f32 = 3.0;
+/// ... to this, the weakest (Filament's `4 · bands + 1`).
+pub const SH9_WINDOW_MAX: f32 = 13.0;
+/// Bisection steps of the window's cutoff (fixed: two bakes are byte-identical).
+pub const SH9_WINDOW_STEPS: u32 = 16;
+/// Texel centres per face side of the directions the SH9's minimum is taken over (six faces).
+pub const SH9_MIN_GRID: u32 = 8;
 /// Threads of the SH9 projection's one workgroup (plan §2.3: at most 64).
 pub const SH9_THREADS: u32 = 64;
 /// The cosine lobe's `A_l / pi` per band (0, 1, 2): what the SH9 bake multiplies each band's
@@ -94,6 +106,7 @@ pub const SLICE_STEPS: u32 = 13;
 const SPECULAR_LABEL: &str = "env specular";
 const RADIANCE_LABEL: &str = "env radiance";
 const BRDF_LUT_LABEL: &str = "brdf lut";
+const SKY_SH_LABEL: &str = "env sky sh source";
 /// Usages of the cubes: written as storage, sampled as cubes, read back by captures and tests.
 const CUBE_USAGE: TextureUsages = TextureUsages::STORAGE_BINDING.union(TextureUsages::TEXTURE_BINDING).union(TextureUsages::COPY_SRC);
 /// Usages of the BRDF LUT: a fragment pass's attachment, sampled, read back by tests.
@@ -181,11 +194,15 @@ fn largest_side(quality: &EnvironmentQuality) -> Option<u32> {
     Some(sky.max(map))
 }
 
-/// The radiance cube's side for a specular cube of `side`: half of it, at most
-/// [`RADIANCE_SIZE_MAX`].
-pub const fn radiance_side(side: u32) -> u32 {
+/// The radiance cube's side for a specular cube of `side`: half of it, uncapped (SI-01). The
+/// prefilter's sharpest mip (1, half the specular side) then reads a source as fine as itself:
+/// filtered importance sampling's level for its median sample is -0.2 at 128 (64 samples), +0.3
+/// at 256 and +1.3 at 512 (128 samples), where a 32 px cap asked for -1.7 at 256 and read a lobe
+/// blurred 3 to 6 times its own width. `side_max` (`EnvironmentQuality::radiance_side_max`, 0:
+/// none) caps it: phones keep a quarter of their largest cube for their memory budget.
+pub const fn radiance_side(side: u32, side_max: u32) -> u32 {
     let half = side / 2;
-    if half > RADIANCE_SIZE_MAX { RADIANCE_SIZE_MAX } else { half }
+    if side_max == 0 || half <= side_max { half } else { side_max }
 }
 
 /// The radiance mip SH9 projects: the first whose side is at most [`SH9_SOURCE_SIDE`].
@@ -202,7 +219,7 @@ pub fn target_descs(quality: &EnvironmentQuality) -> Vec<TargetDesc> {
         return Vec::new();
     };
     let cube = |label, side, mips| TargetDesc { label, format: ENV_CUBE_FORMAT, usage: CUBE_USAGE, samples: 1, size: (side, side), mips, srgb_view: false };
-    let radiance = radiance_side(side);
+    let radiance = radiance_side(side, quality.radiance_side_max);
     vec![
         cube(SPECULAR_LABEL, side, SPECULAR_MIPS),
         cube(RADIANCE_LABEL, radiance, full_mips(radiance)),
@@ -219,17 +236,24 @@ pub fn target_descs(quality: &EnvironmentQuality) -> Vec<TargetDesc> {
 }
 
 /// The bytes the bake holds under `quality` at most, by part, at its largest cube (None with IBL
-/// off): the specular cubes, the radiance cubes with their SH9 blocks (the diffuse irradiance),
-/// and the BRDF LUT. Two sets of cubes and SH9 ([`BAKE_SETS`]: the bound bake and the rebake
-/// behind it), six faces each, every mip. The budget registers exactly these (`budget::ledger`).
+/// off): the specular cubes, the radiance cube with the SH9 blocks and the sky's SH9 source (the
+/// diffuse irradiance), and the BRDF LUT. Two sets of specular cubes and SH9 ([`BAKE_SETS`]: the
+/// bound bake and the rebake behind it) over one shared radiance cube, six faces each, every mip.
+/// The budget registers exactly these (`budget::ledger`).
 pub fn bake_parts(quality: &EnvironmentQuality) -> Option<(u64, u64, u64)> {
     let descs = target_descs(quality);
     let [specular, radiance, lut] = descs.as_slice() else {
         return None;
     };
     let faces = u64::from(FACES);
-    Some((BAKE_SETS * faces * specular.bytes(), BAKE_SETS * (faces * radiance.bytes() + SH_BYTES), lut.bytes()))
+    // One radiance cube for both sets (`EnvironmentMaps::ensure_back` shares it), an SH9 block each.
+    let irradiance = faces * radiance.bytes() + BAKE_SETS * SH_BYTES + SKY_SH_SOURCE_BYTES;
+    Some((BAKE_SETS * faces * specular.bytes(), irradiance, lut.bytes()))
 }
+
+/// Bytes of the sky's SH9 source cube ([`SKY_SH_SOURCE_SIDE`], six faces, one mip): one, shared
+/// by both sets.
+const SKY_SH_SOURCE_BYTES: u64 = FACES as u64 * SKY_SH_SOURCE_SIDE as u64 * SKY_SH_SOURCE_SIDE as u64 * 8;
 
 /// The bytes the bake holds under `quality` at most (0 with IBL off): the sum of [`bake_parts`].
 pub fn bake_bytes(quality: &EnvironmentQuality) -> u64 {
@@ -387,6 +411,92 @@ pub fn sh9_eval(sh: &GxEnvSh, n: [f32; 3]) -> [f32; 3] {
     sum.map(|value| value.max(0.0))
 }
 
+/// The value of the SH9 `sh` at unit `n`, channel `channel`, with bands 1 and 2 scaled by
+/// `window` (`ibl_sh9_windowed` in `sh9.wgsl`), not clamped.
+pub fn sh9_windowed(sh: &GxEnvSh, n: [f32; 3], channel: usize, window: [f32; 2]) -> f32 {
+    let basis = sh9_basis(n);
+    let band = |index: usize| match sh9_band(index) {
+        0 => 1.0,
+        1 => window[0],
+        _ => window[1],
+    };
+    (0..9).map(|index| sh.coefficients[index][channel] * basis[index] * band(index)).sum()
+}
+
+/// Sloan's sinc⁴ window of band `band` for a cutoff of `cutoff` bands (Filament's
+/// `CubemapSH::sincWindow`, Apache-2.0; `ibl_sh9_window`): 1 for band 0, falling to 0 at the
+/// cutoff.
+pub fn sh9_window(band: u32, cutoff: f32) -> f32 {
+    if band == 0 {
+        return 1.0;
+    }
+    if band as f32 >= cutoff {
+        return 0.0;
+    }
+    let x = core::f32::consts::PI * band as f32 / cutoff;
+    let sinc = libm::sinf(x) / x;
+    sinc * sinc * sinc * sinc
+}
+
+/// The unit directions the SH9's minimum is taken over (`sh9.wgsl`'s): the centres of an
+/// [`SH9_MIN_GRID`]² grid on each cube face, in point order (face, row, column).
+pub fn sh9_min_directions() -> Vec<[f32; 3]> {
+    let grid = SH9_MIN_GRID;
+    (0..FACES * grid * grid)
+        .map(|point| {
+            let (face, x, y) = (point / (grid * grid), point % grid, (point / grid) % grid);
+            cube_direction(face, (x as f32 + 0.5) / grid as f32, (y as f32 + 0.5) / grid as f32)
+        })
+        .collect()
+}
+
+/// The least value over [`sh9_min_directions`] and every channel of `sh` windowed by `window`.
+fn sh9_min(sh: &GxEnvSh, directions: &[[f32; 3]], window: [f32; 2]) -> f32 {
+    directions.iter().flat_map(|n| (0..3).map(move |channel| sh9_windowed(sh, *n, channel, window))).fold(f32::INFINITY, f32::min)
+}
+
+/// The band-1 and band-2 factors that dering `sh` (SI-05; Sloan, "Deringing Spherical
+/// Harmonics", 2017; the auto-windowing of Filament's `CubemapSH::windowSH`, Apache-2.0): none
+/// (`[1, 1]`) when the SH is non-negative over [`sh9_min_directions`] already, so a smooth
+/// environment's SH is exactly the projection; else the weakest sinc⁴ window between
+/// [`SH9_WINDOW_MIN`] and [`SH9_WINDOW_MAX`] bands that makes it non-negative there, found by
+/// [`SH9_WINDOW_STEPS`] bisection steps. An HDRI with a bright compact source left in the map
+/// (`HdriSun::Off`, a rejected sun, windows) otherwise rings to a black side. The CPU twin of the
+/// last step of `cs_sh9`.
+pub fn sh9_dering_window(sh: &GxEnvSh) -> [f32; 2] {
+    let directions = sh9_min_directions();
+    if sh9_min(sh, &directions, [1.0, 1.0]) >= 0.0 {
+        return [1.0, 1.0];
+    }
+    let (mut low, mut high) = (SH9_WINDOW_MIN, SH9_WINDOW_MAX);
+    for _ in 0..SH9_WINDOW_STEPS {
+        let middle = 0.5 * (low + high);
+        if sh9_min(sh, &directions, [sh9_window(1, middle), sh9_window(2, middle)]) < 0.0 {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    [sh9_window(1, low), sh9_window(2, low)]
+}
+
+/// `sh` deringed ([`sh9_dering_window`]): what the bake stores.
+pub fn sh9_dering(sh: &GxEnvSh) -> GxEnvSh {
+    let window = sh9_dering_window(sh);
+    let mut out = *sh;
+    for (index, coefficient) in out.coefficients.iter_mut().enumerate() {
+        let factor = match sh9_band(index) {
+            0 => 1.0,
+            1 => window[0],
+            _ => window[1],
+        };
+        for value in coefficient.iter_mut().take(3) {
+            *value *= factor;
+        }
+    }
+    out
+}
+
 /// The SH9 band of coefficient `index`.
 pub const fn sh9_band(index: usize) -> usize {
     match index {
@@ -453,12 +563,12 @@ impl SliceStep {
     }
 
     /// Texel samples the step reads for a specular cube of `side` from a `kind` source (the bake's
-    /// work model).
+    /// work model), over the uncapped radiance cube: a capped one (phones) reads at most this.
     pub fn work(self, side: u32, kind: SourceKind) -> u64 {
         let texels = |side: u32| u64::from(side) * u64::from(side);
         match self {
             SliceStep::Source { face } => {
-                let radiance = radiance_side(side);
+                let radiance = radiance_side(side, 0);
                 let chain: u64 = (1..full_mips(radiance)).map(|mip| 4 * texels((radiance >> mip).max(1))).sum();
                 let mip0 = texels(side) + texels(radiance);
                 match kind {
@@ -471,16 +581,25 @@ impl SliceStep {
                 let samples = u64::from(prefilter_samples(side));
                 (1..SPECULAR_MIPS).map(|mip| texels((side >> mip).max(1)) * samples).sum()
             }
-            SliceStep::Sh9 => u64::from(FACES) * texels(SH9_SOURCE_SIDE.min(radiance_side(side))),
+            SliceStep::Sh9 => match kind {
+                SourceKind::Map => u64::from(FACES) * texels(SH9_SOURCE_SIDE.min(radiance_side(side, 0))),
+                SourceKind::Sky => sky_sh_work(),
+            },
         }
     }
 }
 
+/// Texel samples of the sky's SH9 from its sky-view LUT: the LUT into [`SKY_SH_SOURCE_SIDE`]
+/// faces, then their projection (a time-sliced step's, or a frame's whose LUT changed).
+pub const fn sky_sh_work() -> u64 {
+    2 * FACES as u64 * SKY_SH_SOURCE_SIDE as u64 * SKY_SH_SOURCE_SIDE as u64
+}
+
 /// The most texel samples one time-sliced frame reads for a specular cube of `side`, whatever the
-/// source.
+/// source: its largest step, plus the sky's SH9 refresh when its LUT changed that frame.
 pub fn slice_budget(side: u32) -> u64 {
     let steps = (0..SLICE_STEPS).flat_map(|index| SourceKind::ALL.map(|kind| SliceStep::at(index).work(side, kind)));
-    steps.max().unwrap_or(0)
+    steps.max().unwrap_or(0) + sky_sh_work()
 }
 
 /// Texel samples of a whole bake of a specular cube of `side` from a `kind` source (every step).
@@ -672,6 +791,9 @@ struct BakePipelines {
     uniforms: Buffer,
     equirect_sampler: Sampler,
     cube_sampler: Sampler,
+    /// The sky's SH9 source ([`SKY_SH_SOURCE_SIDE`]², six faces as array layers): the sky-view
+    /// LUT written by the sky's cube pass as storage, then read by `cs_sh9`. Shared by both sets.
+    sky_sh_faces: TextureView,
 }
 
 fn texture_entry(binding: u32, filterable: bool, view_dimension: TextureViewDimension) -> BindGroupLayoutEntry {
@@ -705,6 +827,12 @@ fn layout(device: &Device, label: &str, entries: &[BindGroupLayoutEntry]) -> Bin
 }
 
 fn compute(device: &Device, label: &str, source: &str, entry_point: &str, layout: &BindGroupLayout) -> Result<Compiled<ComputePipeline>, RenderError> {
+    compute_with(device, (label, source, entry_point), layout, true)
+}
+
+/// [`compute`], zero-initializing its workgroup memory only when `zero_init` (WebGPU's default;
+/// a kernel that writes every workgroup variable before reading it may skip it).
+fn compute_with(device: &Device, (label, source, entry_point): (&str, &str, &str), layout: &BindGroupLayout, zero_init: bool) -> Result<Compiled<ComputePipeline>, RenderError> {
     let module = crate::shaders::module(device, label, source)?;
     let pipeline_layout = crate::tables::pipeline_layout(device, label, &[layout]);
     Ok(crate::compile::compute_pipeline(device, &wgpu::ComputePipelineDescriptor {
@@ -712,7 +840,7 @@ fn compute(device: &Device, label: &str, source: &str, entry_point: &str, layout
         layout: Some(&pipeline_layout),
         module: &module,
         entry_point: Some(entry_point),
-        compilation_options: Default::default(),
+        compilation_options: wgpu::PipelineCompilationOptions { zero_initialize_workgroup_memory: zero_init, ..Default::default() },
         cache: None,
     }))
 }
@@ -764,11 +892,16 @@ impl BakePipelines {
             equirect: compute(device, "ibl equirect", shaders, "cs_equirect", &equirect_layout)?,
             downsample: compute(device, "ibl downsample", shaders, "cs_downsample", &downsample_layout)?,
             prefilter: compute(device, "ibl prefilter", crate::shaders::IBL_PREFILTER, "cs_prefilter", &prefilter_layout)?,
-            sh9: compute(device, "ibl sh9", crate::shaders::IBL_SH9, "cs_sh9", &sh9_layout)?,
+            // Every workgroup variable of `cs_sh9` is written before it is read (each lane's partial
+            // sums and minimum before a barrier, the ringing flag by lane 0 before its uniform
+            // load): zero-initializing its 9 KB took about 0.18 ms of the kernel's 0.23 on an M4 Max,
+            // which the sky's SH9 refresh pays on every frame its LUT changes (SI-02).
+            sh9: compute_with(device, ("ibl sh9", crate::shaders::IBL_SH9, "cs_sh9"), &sh9_layout, false)?,
             lut: lut_pipeline(device)?,
             uniforms: crate::tables::buffer(device, "ibl bake", SLOTS * SLOT_BYTES, BufferUsages::UNIFORM | BufferUsages::COPY_DST)?,
             equirect_sampler: sampler(device, "ibl equirect", wgpu::AddressMode::Repeat),
             cube_sampler: sampler(device, "ibl cube", wgpu::AddressMode::ClampToEdge),
+            sky_sh_faces: sky_sh_source(device),
             equirect_layout,
             downsample_layout,
             prefilter_layout,
@@ -821,6 +954,22 @@ fn array_view(texture: &Texture, mip: u32, layers: u32) -> TextureView {
     })
 }
 
+/// The sky's SH9 source: six [`SKY_SH_SOURCE_SIDE`]² faces, one mip, as a `D2Array` view (the
+/// sky's cube pass writes it as storage, `cs_sh9` loads it).
+fn sky_sh_source(device: &Device) -> TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(SKY_SH_LABEL),
+        size: wgpu::Extent3d { width: SKY_SH_SOURCE_SIDE, height: SKY_SH_SOURCE_SIDE, depth_or_array_layers: FACES },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: ENV_CUBE_FORMAT,
+        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    array_view(&texture, 0, FACES)
+}
+
 fn cube_texture(device: &Device, label: &str, side: u32, mips: u32) -> (Texture, TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -853,15 +1002,20 @@ struct CubeMaps {
     /// The GGX prefilter into each specular mip from 1 (index `mip - 1`).
     prefilter_groups: Vec<BindGroup>,
     sh9_group: BindGroup,
+    /// SH9 from the sky's source faces into this set's block (a sky's bake and LUT refreshes).
+    sky_sh9_group: BindGroup,
     /// The equirect source into both cubes' mip 0, for the map version it was made for.
     equirect_groups: Option<(u64, [BindGroup; 2])>,
 }
 
 impl CubeMaps {
-    fn new(device: &Device, side: u32, pipelines: &BakePipelines) -> Result<CubeMaps, RenderError> {
+    /// A set at `side` that writes and reads the shared `radiance` cube ([`radiance_side`] of
+    /// `side`, six layers, its full chain).
+    fn new(device: &Device, side: u32, pipelines: &BakePipelines, radiance: &Texture) -> Result<CubeMaps, RenderError> {
         let (specular, specular_cube) = cube_texture(device, SPECULAR_LABEL, side, SPECULAR_MIPS);
-        let radiance_size = radiance_side(side);
-        let (radiance, radiance_cube) = cube_texture(device, RADIANCE_LABEL, radiance_size, full_mips(radiance_size));
+        let radiance_size = radiance.width();
+        let radiance = radiance.clone();
+        let radiance_cube = radiance.create_view(&wgpu::TextureViewDescriptor { dimension: Some(TextureViewDimension::Cube), array_layer_count: Some(FACES), ..Default::default() });
         let usage = BufferUsages::STORAGE | BufferUsages::UNIFORM | BufferUsages::COPY_SRC;
         let sh = crate::tables::buffer(device, "env sh9", SH_BYTES, usage)?;
         let specular_mips: Vec<TextureView> = (0..SPECULAR_MIPS).map(|mip| array_view(&specular, mip, FACES)).collect();
@@ -891,6 +1045,11 @@ impl CubeMaps {
             (1, BindingResource::TextureView(sh9_source)),
             (3, sh.as_entire_binding()),
         ]);
+        let sky_sh9_group = pipelines.group(device, "ibl sky sh9", &pipelines.sh9_layout, &[
+            (0, pipelines.slot(SLOT_SH9)),
+            (1, BindingResource::TextureView(&pipelines.sky_sh_faces)),
+            (3, sh.as_entire_binding()),
+        ]);
         Ok(CubeMaps {
             side,
             specular,
@@ -902,6 +1061,7 @@ impl CubeMaps {
             downsample_groups,
             prefilter_groups,
             sh9_group,
+            sky_sh9_group,
             equirect_groups: None,
         })
     }
@@ -938,6 +1098,14 @@ impl Source<'_> {
         match self {
             Source::Map { .. } => SourceKind::Map,
             Source::Sky(_) => SourceKind::Sky,
+        }
+    }
+
+    /// The sky's LUT generation (None for a map).
+    fn sky_generation(&self) -> Option<u64> {
+        match self {
+            Source::Map { .. } => None,
+            Source::Sky(sky) => Some(sky.generation()),
         }
     }
 
@@ -992,6 +1160,10 @@ pub struct EnvironmentMaps {
     versions: u64,
     schedule: Schedule,
     work: BakeWork,
+    /// The sky's LUT generation ([`SkyState::generation`]) the bound SH9 was projected from (SI-02).
+    sky_sh_generation: Option<u64>,
+    /// The radiance cube both sets share at the current size ([`EnvironmentMaps::ensure_back`]).
+    radiance: Option<Texture>,
 }
 
 /// The v2 material map's row of the environment input `name` (one of `FRAME_ENV_BINDINGS`).
@@ -1015,6 +1187,8 @@ impl EnvironmentMaps {
             versions: 0,
             schedule: Schedule::default(),
             work: BakeWork::default(),
+            sky_sh_generation: None,
+            radiance: None,
         }
     }
 
@@ -1027,6 +1201,11 @@ impl EnvironmentMaps {
     /// uploaded map is released when the environment is no longer an HDR map (it is uploaded
     /// again when one returns).
     pub fn set_environment(&mut self, environment: &Environment) {
+        if self.environment.lights_scene() != environment.lights_scene() {
+            // The frame group binds the bake or the neutral inputs by whether the environment
+            // lights the scene ([`EnvironmentMaps::binding`]): rebuild it.
+            self.generation += 1;
+        }
         if self.environment != *environment {
             self.environment = environment.clone();
         }
@@ -1147,14 +1326,17 @@ impl EnvironmentMaps {
     }
 
     /// The resource bound under `name` (one of `layout::FRAME_ENV_BINDINGS`): the bake's once it
-    /// has run, else the neutral input of the v2 row of that name; the environment sampler for
+    /// has run and while the environment lights the scene, else the neutral input of the v2 row of
+    /// that name (so the flat colour reads the identity BRDF LUT even after a sky or a map was
+    /// baked: direct specular's energy compensation reads it); the environment sampler for
     /// `env_sampler`. None for a name that is not an environment binding.
     pub fn binding(&self, name: &str) -> Option<BindingResource<'_>> {
         if name == "env_sampler" {
             return Some(BindingResource::Sampler(&self.sampler));
         }
         let row = env_row(name)?;
-        if let (true, Some(maps), Some((_, lut))) = (self.baked(), &self.maps, &self.lut) {
+        let lit = self.environment.lights_scene() && self.baked();
+        if let (true, Some(maps), Some((_, lut))) = (lit, &self.maps, &self.lut) {
             match name {
                 "env_specular" => return Some(BindingResource::TextureView(&maps.specular_cube)),
                 "env_sh" => return Some(maps.sh.as_entire_binding()),
@@ -1240,7 +1422,9 @@ impl EnvironmentMaps {
             self.generation += 1;
         }
         self.back = None;
+        self.radiance = None;
         self.schedule = Schedule::default();
+        self.sky_sh_generation = None;
     }
 
     /// The source of `environment`: its uploaded map, or `sky`.
@@ -1290,9 +1474,12 @@ impl EnvironmentMaps {
             BakeAction::Slice(step) => vec![step],
         };
         if steps.is_empty() {
+            let (passes, texel_samples) = self.refresh_sky_sh(&device, frame, (request, source), writes);
+            counters.compute += passes;
+            self.work = BakeWork { action, texel_samples };
             return Ok(counters);
         }
-        self.ensure_back(&device, baking.side)?;
+        self.ensure_back(&device, baking.side, request.quality.radiance_side_max)?;
         let Some(passes) = self.encode_steps(&device, frame, &steps, source, (request.frame_index, writes)) else {
             // The sky has no LUTs yet: nothing was recorded, and the step stays due.
             self.schedule = before;
@@ -1305,15 +1492,62 @@ impl EnvironmentMaps {
             self.generation += 1;
         }
         let kind = source.kind();
-        self.work = BakeWork { action, texel_samples: steps.iter().map(|step| step.work(side, kind)).sum() };
+        let mut texel_samples = steps.iter().map(|step| step.work(side, kind)).sum();
+        if steps.contains(&SliceStep::Sh9) {
+            // The SH9 step projected the sky's current LUT into the set it bound.
+            self.sky_sh_generation = source.sky_generation();
+        } else {
+            let (passes, work) = self.refresh_sky_sh(&device, frame, (request, source), None);
+            counters.compute += passes;
+            texel_samples += work;
+        }
+        self.work = BakeWork { action, texel_samples };
         Ok(counters)
     }
 
-    /// The set a rebake writes, at `side` (made, or remade at a new size, before its first step).
-    fn ensure_back(&mut self, device: &Device, side: u32) -> Result<(), RenderError> {
-        if self.back.as_ref().is_none_or(|back| back.side != side) {
+    /// SI-02: the bound SH9 projected again from the sky's sky-view LUT when the LUT changed since
+    /// it was (the sky alone, and only while the bound bake is of the same sky): the diffuse light
+    /// follows a moving sun on every LUT refresh instead of stepping once per rebake, while the
+    /// specular cube keeps its time-sliced cycle. One compute pass (timestamped with `writes`): the
+    /// LUT into the source faces, then the projection. The passes it opened and the texel samples it
+    /// read.
+    fn refresh_sky_sh(
+        &mut self,
+        device: &Device,
+        frame: &mut FrameEncoder,
+        (request, source): (&BakeRequest<'_>, &Source<'_>),
+        writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
+    ) -> (u32, u64) {
+        let Source::Sky(sky) = source else { return (0, 0) };
+        let same_sky = self.schedule.baked.as_ref().is_some_and(|baked| baked.environment == *request.environment);
+        let due = same_sky && self.sky_sh_generation != Some(sky.generation()) && sky.has_luts();
+        if !due {
+            return (0, 0);
+        }
+        let (Some(pipelines), Some(maps)) = (self.pipelines.as_ref(), self.maps.as_ref()) else { return (0, 0) };
+        let mut pass = frame.encoder().begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("environment sky sh9"), timestamp_writes: writes });
+        sky.dispatch_cube(device, &mut pass, &pipelines.sky_sh_faces, SKY_SH_SOURCE_SIDE);
+        pass.set_pipeline(&pipelines.sh9);
+        pass.set_bind_group(0, &maps.sky_sh9_group, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+        drop(pass);
+        self.sky_sh_generation = Some(sky.generation());
+        (1, sky_sh_work())
+    }
+
+    /// The set a rebake writes, at `side` (made, or remade at a new size or over another radiance
+    /// cube, before its first step). Both sets share one radiance cube per size: the frame binds a
+    /// set's specular cube and SH9 only, and a complete bake never reads its radiance again, so
+    /// the rebake behind it may overwrite it (one radiance cube instead of one per set).
+    fn ensure_back(&mut self, device: &Device, side: u32, radiance_max: u32) -> Result<(), RenderError> {
+        let radiance_size = radiance_side(side, radiance_max);
+        if self.radiance.as_ref().is_none_or(|radiance| radiance.width() != radiance_size) {
+            self.radiance = Some(cube_texture(device, RADIANCE_LABEL, radiance_size, full_mips(radiance_size)).0);
+        }
+        let radiance = self.radiance.as_ref().expect("made above");
+        if self.back.as_ref().is_none_or(|back| back.side != side || back.radiance != *radiance) {
             let pipelines = self.pipelines.as_ref().expect("made by bake_with");
-            self.back = Some(CubeMaps::new(device, side, pipelines)?);
+            self.back = Some(CubeMaps::new(device, side, pipelines, radiance)?);
         }
         Ok(())
     }
@@ -1369,6 +1603,7 @@ impl EnvironmentMaps {
         let source_faces = faces_of(|step| if let SliceStep::Source { face } = step { Some(*face) } else { None });
         let prefilter_faces = faces_of(|step| if let SliceStep::Prefilter { face } = step { Some(*face) } else { None });
         let sh9 = steps.contains(&SliceStep::Sh9);
+        let sky_sh9 = sh9 && matches!(source, Source::Sky(_));
         let mut passes = 1;
         if let (Some(faces), Source::Sky(sky)) = (&source_faces, source)
             && faces.start == 0
@@ -1379,6 +1614,9 @@ impl EnvironmentMaps {
                 }
                 passes += 1;
             }
+        }
+        if sky_sh9 && matches!(source, Source::Sky(sky) if !sky.has_luts()) {
+            return None;
         }
         let queue = frame.queue().clone();
         let schedule = [(frame_index & u64::from(u32::MAX)) as u32, 0, 0, 0];
@@ -1394,7 +1632,12 @@ impl EnvironmentMaps {
             encode_prefilter(&queue, pipelines, maps, &mut pass, &faces, schedule);
         }
         if sh9 {
-            encode_sh9(&queue, pipelines, maps, &mut pass, schedule);
+            if let Source::Sky(sky) = source {
+                // SI-02: the sky's SH9 straight from its sky-view LUT, as on every frame it changes.
+                sky.dispatch_cube(device, &mut pass, &pipelines.sky_sh_faces, SKY_SH_SOURCE_SIDE);
+            }
+            let group = if sky_sh9 { &maps.sky_sh9_group } else { &maps.sh9_group };
+            encode_sh9(&queue, pipelines, maps, group, &mut pass, schedule);
         }
         Some(passes)
     }
@@ -1448,12 +1691,13 @@ fn encode_prefilter(queue: &Queue, pipelines: &BakePipelines, maps: &CubeMaps, p
     }
 }
 
-/// The SH9 projection of the radiance cube's [`SH9_SOURCE_SIDE`] mip.
-fn encode_sh9(queue: &Queue, pipelines: &BakePipelines, maps: &CubeMaps, pass: &mut ComputePass<'_>, schedule: [u32; 4]) {
+/// The SH9 projection through `group`: the radiance cube's [`SH9_SOURCE_SIDE`] mip, or the sky's
+/// source faces.
+fn encode_sh9(queue: &Queue, pipelines: &BakePipelines, maps: &CubeMaps, group: &BindGroup, pass: &mut ComputePass<'_>, schedule: [u32; 4]) {
     let mip = sh9_mip(maps.radiance.width());
     pipelines.write(queue, SLOT_SH9, &GpuIblBake { dest: [0, mip, 0, 0], schedule, ..GpuIblBake::default() });
     pass.set_pipeline(&pipelines.sh9);
-    pass.set_bind_group(0, &maps.sh9_group, &[]);
+    pass.set_bind_group(0, group, &[]);
     pass.dispatch_workgroups(1, 1, 1);
 }
 
@@ -1476,6 +1720,42 @@ mod tests {
         }
         assert_eq!(sh9_eval(&GxEnvSh::default(), [0.0, 1.0, 0.0]), [0.0; 3], "the neutral SH lights nothing");
         assert_eq!((0..9).map(sh9_band).collect::<Vec<_>>(), [0, 1, 1, 1, 2, 2, 2, 2, 2]);
+    }
+
+    /// The SH9 of a single bright direction `d` (radiance `peak` over solid angle `area`), with the
+    /// cosine lobe: what the bake projects for a compact source alone.
+    fn delta_sh(d: [f32; 3], peak: f32, area: f32) -> GxEnvSh {
+        let mut sh = GxEnvSh::default();
+        for (index, value) in sh9_basis(d).iter().enumerate() {
+            let c = peak * area * value * SH9_LOBE[sh9_band(index)];
+            sh.coefficients[index] = [c, c, c, 0.0];
+        }
+        sh
+    }
+
+    #[test]
+    fn deringing_keeps_a_compact_source_s_irradiance_non_negative_and_leaves_a_smooth_one_alone() {
+        // SI-05: the SH9 of a compact source rings below zero on its far side.
+        let directions = sh9_min_directions();
+        let dense: Vec<[f32; 3]> = (0..64).flat_map(|row| (0..128).map(move |column| equirect_direction((column as f32 + 0.5) / 128.0, (row as f32 + 0.5) / 64.0))).collect();
+        let least = |sh: &GxEnvSh, over: &[[f32; 3]]| over.iter().map(|n| sh9_windowed(sh, *n, 0, [1.0, 1.0])).fold(f32::INFINITY, f32::min);
+        let source = delta_sh([0.3, 0.8, -0.52], 1000.0, 1e-3);
+        assert!(least(&source, &dense) < -0.1 * source.coefficients[0][0] * 0.282_095, "a compact source rings: {}", least(&source, &dense));
+        let window = sh9_dering_window(&source);
+        assert!(window[0] < 1.0 && window[1] < window[0], "both bands damped, band 2 more: {window:?}");
+        let deringed = sh9_dering(&source);
+        assert_eq!(deringed.coefficients[0], source.coefficients[0], "the mean irradiance is kept");
+        assert!(least(&deringed, &directions) >= 0.0, "non-negative over the bake's directions");
+        let constant = deringed.coefficients[0][0] * 0.282_095;
+        assert!(least(&deringed, &dense) >= -1e-3 * constant, "and nearly so everywhere: {}", least(&deringed, &dense));
+        // A smooth sky (brighter overhead, never negative) is stored exactly as projected.
+        let mut sky = GxEnvSh::default();
+        sky.coefficients[0] = [1.0, 1.2, 1.5, 0.0];
+        sky.coefficients[1] = [0.3, 0.35, 0.4, 0.0];
+        sky.coefficients[6] = [-0.05, -0.05, -0.06, 0.0];
+        assert_eq!(sh9_dering_window(&sky), [1.0, 1.0]);
+        assert_eq!(sh9_dering(&sky).coefficients, sky.coefficients);
+        assert_eq!((sh9_window(0, 3.0), sh9_window(3, 3.0)), (1.0, 0.0));
     }
 
     #[test]
@@ -1502,7 +1782,9 @@ mod tests {
         assert!(mip_roughness(1) < 0.15, "most levels go to low roughness: {}", mip_roughness(1));
         quality.cube_size = 4096;
         assert_eq!(target_descs(&quality)[0].size, (CUBE_SIZE_MAX, CUBE_SIZE_MAX), "capped");
-        assert_eq!(target_descs(&quality)[1].size, (RADIANCE_SIZE_MAX, RADIANCE_SIZE_MAX));
+        // SI-01 flips this (named in the log): the radiance cube is half the specular side,
+        // uncapped (was 32 px at every size).
+        assert_eq!(target_descs(&quality)[1].size, (CUBE_SIZE_MAX / 2, CUBE_SIZE_MAX / 2));
         quality.cube_size = 200;
         assert_eq!(cube_side(&quality), Some(128), "a power of two");
         quality.cube_size = 3;

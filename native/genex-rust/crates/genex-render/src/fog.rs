@@ -9,10 +9,12 @@
 //!   each other and the closed form to a numeric integral;
 //! - the in-scatter comes from the sky model: the flat colour environment's is the fog's colour
 //!   ([`inscatter_flat`]); under a sky or an HDR map it is the environment's radiance towards the
-//!   horizon in the ray's azimuth (the prefiltered cube at [`ENV_ROUGHNESS`], [`inscatter_env`]) plus the sun's forward lobe
-//!   through an analytic sun transmittance, tinted by the fog's colour. The sky background
-//!   (`sky_draw.wgsl`) fogs itself with the sky-view LUT's horizon colour, so the fog at the horizon
-//!   is the sky's colour;
+//!   horizon in the ray's azimuth (the prefiltered cube's mirror level, [`ENV_ROUGHNESS`],
+//!   [`inscatter_env`]) plus the sun's forward lobe of the sun as it reaches the ground, tinted by
+//!   the fog's colour. The sky background (`sky_draw.wgsl`) fogs itself with the sky-view LUT's
+//!   horizon colour plus the same lobe (and the HDR map's backdrop with the map's horizon plus the
+//!   lobe), so the fog is one colour on geometry and on the sky behind it, towards the sun too
+//!   (SI-03);
 //! - on medium and above [`AerialPerspective`] writes Hillaire's camera-space volume (32³
 //!   `rgba16float`, graph node 11): the sky's in-scatter and transmittance between the camera and
 //!   a point `AERIAL_RANGE × w²` away along each pixel's ray, which the chunk applies
@@ -52,8 +54,9 @@ const EXPONENT_LIMIT: f32 = 60.0;
 /// (`GX_FOG_HORIZON_SLOPE`).
 pub const HORIZON_SLOPE: f32 = 0.02;
 /// The roughness the environment's prefiltered cube is read at (`GX_FOG_ENV_ROUGHNESS`, at the
-/// cube's perceptual level `ibl::roughness_lod`).
-pub const ENV_ROUGHNESS: f32 = 0.05;
+/// cube's perceptual level `ibl::roughness_lod`): its mirror level, the sky as the background
+/// shows it (SI-03).
+pub const ENV_ROUGHNESS: f32 = 0.0;
 /// The sun lobe's Henyey-Greenstein asymmetry (`GX_FOG_SUN_G`).
 const SUN_G: f32 = 0.6;
 /// The sun lobe's share of the sun's radiance (`GX_FOG_SUN_SHARE`).

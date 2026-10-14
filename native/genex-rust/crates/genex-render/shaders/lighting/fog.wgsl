@@ -13,9 +13,11 @@
 //   which the renderer makes the fog's colour times the flat backdrop's (`fog::gpu_fog_over`);
 // - under a sky or an HDR map (`frame.ambient.w` 1) it is the environment's radiance towards the
 //   horizon in the ray's azimuth (the prefiltered cube `env_specular` at GX_FOG_ENV_ROUGHNESS,
-//   the sky-view LUT's colour barely blurred) plus the sun's forward lobe of the frame's sun colour
-//   (already the sun as it reaches the ground: under the sky through the transmittance LUT, under
-//   a map its analytic sun; never reddened again), both multiplied by the fog's colour. With the default white colour the fog
+//   its mirror level, the sky-view LUT's colour unblurred) plus the sun's forward lobe of the
+//   frame's sun colour (already the sun as it reaches the ground: under the sky through the
+//   transmittance LUT, under a map its analytic sun; never reddened again), both multiplied by the
+//   fog's colour. The sky's background and the HDR map's backdrop fog with the same lobe
+//   (sky_draw.wgsl, backdrop.wgsl; SI-03). With the default white colour the fog
 //   at the horizon is the sky's colour; any other colour tints it away from the sky, so fully
 //   fogged geometry stands out against the sky behind it (warm a whole frame with the look's
 //   white balance instead).
@@ -40,9 +42,12 @@ const GX_FOG_EXPONENT_LIMIT: f32 = 60.0;
 // Just over the horizon's edge, where the sky is brightest and the bake has not blurred it with the
 // ground (tests/fog.rs measures the sky-view LUT, the baked cube and this slope against each other).
 const GX_FOG_HORIZON_SLOPE: f32 = 0.02;
-// The roughness the environment cube is read at (through the ambient chunk's `gx_env_lod`): a
-// little blurred, so a seam of hot Mie glow does not speckle the fog.
-const GX_FOG_ENV_ROUGHNESS: f32 = 0.05;
+// The roughness the environment cube is read at (through the ambient chunk's `gx_env_lod`): its
+// mirror level, the sky as the background shows it. A read at 0.05 mixed the ground under the
+// horizon into the fog's colour and fogged geometry came out 13 to 17 percent darker than the fogged
+// sky behind it (SI-03, tests/fog.rs's towards-the-sun row); the level is a smooth function of the
+// direction, so the fog does not speckle.
+const GX_FOG_ENV_ROUGHNESS: f32 = 0.0;
 // The sun lobe's Henyey-Greenstein asymmetry and share of the sun's radiance.
 const GX_FOG_SUN_G: f32 = 0.6;
 const GX_FOG_SUN_SHARE: f32 = 0.5;

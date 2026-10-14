@@ -98,6 +98,11 @@ pub const OFF_RENDER_PASSES: u32 = 4;
 pub const ULTRA_HDRI_CUBE_PX: u32 = 512;
 /// The largest specular cube a phone bakes, whatever the preset.
 pub const MOBILE_MAX_CUBE_PX: u32 = 256;
+/// The largest radiance cube (the prefilter's source, `ibl::radiance_side`) a phone bakes: a
+/// quarter of its largest specular cube. Half the side (desktop) cost mobile-mid's high row
+/// 930 KB, past its 96 MiB budget without transient MSAA; a quarter costs 180 KB over the 32 px
+/// cube it replaced (renderer pass 2, P2-0.11).
+pub const MOBILE_MAX_RADIANCE_PX: u32 = 64;
 /// The most local lights a phone bins (`LightQuality::cap`), whatever the preset asks.
 pub const MOBILE_MAX_LIGHTS: u32 = 256;
 /// The smallest binning tile a phone uses, in pixels (fewer tiles to bin and walk).
@@ -253,6 +258,7 @@ fn environment(cube_size: u32, sky_lut: (u32, u32), cadence: u8, sun_rebake_tent
         sky_lut,
         sky_cadence: cadence,
         aerial_perspective,
+        radiance_side_max: 0,
     }
 }
 
@@ -497,6 +503,7 @@ fn apply_mobile_caps(quality: &mut Quality, preset: QualityPreset, class: Device
     }
     quality.environment.cube_size = quality.environment.cube_size.min(MOBILE_MAX_CUBE_PX);
     quality.environment.hdri_cube_size = quality.environment.hdri_cube_size.min(MOBILE_MAX_CUBE_PX);
+    quality.environment.radiance_side_max = MOBILE_MAX_RADIANCE_PX;
 }
 
 /// The widest HDR environment map `class` keeps on the GPU (an equirect `width × width / 2`

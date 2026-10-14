@@ -1060,15 +1060,23 @@ fn metal_the_fog_at_the_horizon_is_the_sky_view_colour() {
     write_evidence_radiance("sky-wholly-fogged-61", SKY_SIDE, &fogged, 2.0);
     let centre = SKY_SIDE / 2;
     // The fog's colour is the sky-view LUT's colour just over the horizon's edge (the fixed
-    // slope): the background's pixels there, between the two rows that straddle that slope.
+    // slope): the background's pixels there, between the two rows that straddle that slope; plus
+    // the sun's forward lobe along each pixel's ray (SI-03: as fogged geometry's in-scatter).
     let row = (1.0 - genex_render::fog::HORIZON_SLOPE / libm::tanf(30.0_f32.to_radians())) / 2.0 * SKY_SIDE as f32 - 0.5;
     let (above, fraction) = (row.floor() as u32, row - row.floor());
     let (a, b) = (sky_pixel(&clear, centre, above), sky_pixel(&clear, centre, above + 1));
     let lut = [0, 1, 2].map(|c| a[c] * (1.0 - fraction) + b[c] * fraction);
-    relative_close("horizon", sky_pixel(&fogged, centre, SKY_SIDE / 2), lut, 1e-2);
-    // Every ray of the column reads the same horizon colour: the fog is the one colour, up and down.
+    let sun = sun_behind(30.0);
+    let ground_sun = sky_ground_sun(sun);
+    let lobe = |y: u32| inscatter_env(&thick, [0.0; 3], sky_pixel_ray(centre, y), sun, ground_sun);
+    let horizon_lobe = lobe(SKY_SIDE / 2);
+    relative_close("horizon", sky_pixel(&fogged, centre, SKY_SIDE / 2), [0, 1, 2].map(|c| lut[c] + horizon_lobe[c]), 1e-2);
+    // Every ray of the column reads the same horizon colour (the fog is the one colour, up and
+    // down) plus the sun's lobe along its own ray.
+    let horizon = [0, 1, 2].map(|c| sky_pixel(&fogged, centre, SKY_SIDE / 2)[c] - horizon_lobe[c]);
     for row in 0..SKY_SIDE {
-        relative_close(&format!("row {row}"), sky_pixel(&fogged, centre, row), sky_pixel(&fogged, centre, SKY_SIDE / 2), 2e-3);
+        let want = [0, 1, 2].map(|c| horizon[c] + lobe(row)[c]);
+        relative_close(&format!("row {row}"), sky_pixel(&fogged, centre, row), want, 2e-3);
     }
     let (zenith, horizon) = (sky_pixel(&clear, centre, 0), sky_pixel(&clear, centre, SKY_SIDE / 2));
     // The sky is not one colour without the fog: it is bluer overhead than at the horizon.
@@ -1102,6 +1110,71 @@ fn metal_the_sky_background_blends_into_the_fog_by_the_closed_form_and_a_zero_de
     // The tint colours the in-scatter.
     let (r, b) = (sky_pixel(&target, 30, 30)[0], sky_pixel(&target, 30, 30)[2]);
     assert!(b > 0.0 && r / b > 1.0, "a warm fog over a blue horizon: {r} vs {b}");
+}
+
+/// The sun of [`sky_fixture`] (illuminance [`SKY_FIXTURE_SUN`]) towards unit `sun` as it reaches a
+/// camera 2 m up: the forward frame's sun under the sky.
+fn sky_ground_sun(sun: [f32; 3]) -> [f32; 3] {
+    sky::sun_transmittance(0.002, sun, SkyParams::default().sun_angular_radius).map(|t| t * SKY_FIXTURE_SUN)
+}
+
+/// The sun's illuminance [`sky_fixture`] and [`sky_frame_with`] use.
+const SKY_FIXTURE_SUN: f32 = 2.5;
+
+/// The unit view direction through the centre of pixel `(x, y)` of [`render_sky`]'s target under
+/// the camera at [`SKY_EYE`] looking at [`SKY_TARGET`].
+fn sky_pixel_ray(x: u32, y: u32) -> [f32; 3] {
+    let (_, inverse) = camera_matrices(SKY_EYE, SKY_TARGET, 1.0);
+    let (u, v) = ((x as f32 + 0.5) / SKY_SIDE as f32, (y as f32 + 0.5) / SKY_SIDE as f32);
+    let point = inverse.project_point3(glam::Vec3::new(u * 2.0 - 1.0, 1.0 - v * 2.0, 0.0));
+    (point - glam::Vec3::from(SKY_EYE)).normalize().to_array()
+}
+
+/// How far fully fogged geometry towards a low sun may be from the fogged sky behind it, per
+/// channel share (SI-03; the forward fog's horizon is the baked cube's, the sky's the LUT's).
+const TOWARDS_SUN_FOG_TOLERANCE: f32 = 0.03;
+
+#[test]
+#[ignore = "needs a WebGPU-core adapter; run with --ignored metal"]
+fn metal_fog_towards_a_low_sun_is_one_colour_on_geometry_and_on_the_sky() {
+    // SI-03: fogged geometry took the sun's forward lobe and the fogged sky behind it did not, so
+    // distant silhouettes glowed against a darker sky towards a low sun (Lakeside's 7 degrees).
+    // Looking along the horizon towards the sun's azimuth, a wall deep in the fog and the sky
+    // around it show one colour.
+    let Some(gpu) = gpu() else { return };
+    let mut failures = Vec::new();
+    for elevation in [7.0_f32, 20.0] {
+        let e = elevation.to_radians();
+        let sun = [0.0, libm::sinf(e), -libm::cosf(e)];
+        let fixture = sky_fixture(&gpu, sun, 0.002);
+        let cube = baked_sky_cube(&gpu, sun);
+        let fog = fog_row(Fog::default().with_density(1.0).with_height(0.0, 0.0).with_range(0.0, 1.0));
+        let fogged = render_sky(&gpu, &fixture, &sky_draw_frame(&fixture, SKY_EYE, SKY_TARGET, &fog), SKY_SIDE);
+        write_evidence_radiance(&format!("sky-fogged-towards-sun-{elevation}"), SKY_SIDE, &fogged, 1.0);
+        let ground_sun = sky_ground_sun(sun);
+        let frame = GpuFrame {
+            camera_pos: [SKY_EYE[0], SKY_EYE[1], SKY_EYE[2], 1.0],
+            sun_dir: [sun[0], sun[1], sun[2], 0.0],
+            sun_color: [ground_sun[0], ground_sun[1], ground_sun[2], 0.0],
+            ..sky_frame()
+        };
+        for (x, y) in [(SKY_SIDE / 2, SKY_SIDE / 2), (SKY_SIDE / 2 + 8, SKY_SIDE / 2), (SKY_SIDE / 2, SKY_SIDE / 2 - 6)] {
+            let dir = sky_pixel_ray(x, y);
+            let world = [0, 1, 2].map(|k| SKY_EYE[k] + 5000.0 * dir[k]);
+            let rows = [Row { mode: 0.0, color: [0.0; 3], world }];
+            let geometry = chunk_through(&gpu, Source::Forward, &frame, &fog, &cube, &rows)[0];
+            let sky = sky_pixel(&fogged, x, y);
+            let lobe = inscatter_env(&fog, [0.0; 3], dir, sun, ground_sun);
+            eprintln!("sun {elevation} deg, pixel ({x}, {y}): fogged geometry {geometry:?}, fogged sky {sky:?} (the sun's lobe {lobe:?})");
+            for c in 0..3 {
+                let error = (geometry[c] - sky[c]).abs() / sky[c];
+                if error > TOWARDS_SUN_FOG_TOLERANCE {
+                    failures.push(format!("sun {elevation} pixel ({x}, {y}) channel {c}: geometry {} sky {} ({:.1}%)", geometry[c], sky[c], 100.0 * error));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "fog towards the sun differs on geometry and on the sky: {failures:?}");
 }
 
 /// How far the forward fog's horizon colour (the baked sky cube towards the horizon at the fog's

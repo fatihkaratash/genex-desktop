@@ -241,7 +241,7 @@ fn sky(dir_in: vec3<f32>, time: f32) -> vec3<f32> {
 // built-in fog this leaves out.
 const LOOK_FOG_HORIZON_RISE: f32 = 0.02;
 // lighting/fog.wgsl's GX_FOG_ENV_ROUGHNESS, through the cube's perceptual mip mapping.
-const LOOK_FOG_ENV_ROUGHNESS: f32 = 0.05;
+const LOOK_FOG_ENV_ROUGHNESS: f32 = 0.0;
 const LOOK_FOG_SUN_G: f32 = 0.6;
 const LOOK_FOG_SUN_SHARE: f32 = 0.5;
 const LOOK_FOG_FLAT: f32 = 1e-2;

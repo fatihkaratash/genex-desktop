@@ -1506,6 +1506,9 @@ pub struct EnvironmentQuality {
     pub sky_cadence: u8,
     /// Whether the aerial-perspective volume is used.
     pub aerial_perspective: bool,
+    /// The largest radiance cube (the prefilter's source, `ibl::radiance_side`) in pixels; 0
+    /// keeps it at half the specular side. Phones cap it (`presets::MOBILE_MAX_RADIANCE_PX`).
+    pub radiance_side_max: u32,
 }
 
 /// Local lights.
@@ -1689,6 +1692,7 @@ impl Quality {
                 sky_lut: (0, 0),
                 sky_cadence: 1,
                 aerial_perspective: false,
+                radiance_side_max: 0,
             },
             lights: LightQuality { cap: MAX_LIGHTS as u32, clustered: false, tile_px: 0, shadowed_spots: 0 },
             textures: TextureQuality::OFF,

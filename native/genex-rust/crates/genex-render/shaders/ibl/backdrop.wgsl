@@ -7,8 +7,11 @@
 // which have no seam where the map's u wraps. Radiance times the frame's pre-exposure.
 //
 // Fog: as the sky's background, the frame's fog takes the map at a very large finite distance
-// into the map's colour at the horizon in the pixel's azimuth, tinted by the fog's colour
-// (sky_draw.wgsl's closed form, repeated: WGSL has no includes; tests/sky.rs holds the two).
+// into the map's colour at the horizon in the pixel's azimuth plus the sun's forward lobe of the
+// frame's sun (the map's analytic sun, or the scene's), tinted by the fog's colour (sky_draw.wgsl's
+// closed form and lighting/fog.wgsl's lobe, repeated: WGSL has no includes; tests/sky.rs and
+// tests/fog.rs hold them to one behaviour), so fogged geometry towards the sun does not glow
+// against a darker fogged backdrop (SI-03).
 //
 // The map's mapping is `ibl::equirect_uv` and the turn `ibl::map_direction` (equirect.wgsl's).
 
@@ -41,6 +44,11 @@ const BACKDROP_FOG_CLEAR_DEPTH: f32 = 1e-7;
 const BACKDROP_FOG_FLAT_EXPONENT: f32 = 1e-2;
 const BACKDROP_FOG_EXPONENT_LIMIT: f32 = 60.0;
 const BACKDROP_FOG_HORIZON_SLOPE: f32 = 0.02;
+// The sun lobe's Henyey-Greenstein asymmetry, its share of the sun's radiance and the band (sine
+// of elevation) over which it sets (lighting/fog.wgsl's GX_FOG_SUN_*).
+const BACKDROP_FOG_SUN_G: f32 = 0.6;
+const BACKDROP_FOG_SUN_SHARE: f32 = 0.5;
+const BACKDROP_FOG_SET_BAND: f32 = 0.04;
 
 fn backdrop_fog_exp(x: f32) -> f32 {
     return exp(clamp(x, -BACKDROP_FOG_EXPONENT_LIMIT, BACKDROP_FOG_EXPONENT_LIMIT));
@@ -90,8 +98,19 @@ fn backdrop_radiance(dir: vec3<f32>, lod: f32) -> vec3<f32> {
     return textureSampleLevel(equirect, equirect_sampler, backdrop_uv(dir), lod).rgb * backdrop.map.z;
 }
 
+// The sun's forward lobe the fog scatters towards the camera along unit `dir` (lighting/fog.wgsl's
+// `gx_fog_inscatter` lobe of the frame's sun).
+fn backdrop_fog_sun_lobe(dir: vec3<f32>) -> vec3<f32> {
+    let sun = normalize(frame.sun_dir.xyz);
+    let g2 = BACKDROP_FOG_SUN_G * BACKDROP_FOG_SUN_G;
+    let denominator = max(1.0 + g2 - 2.0 * BACKDROP_FOG_SUN_G * dot(dir, sun), 1e-4);
+    let phase = (1.0 - g2) / (4.0 * BACKDROP_PI * denominator * sqrt(denominator));
+    let up = smoothstep(-BACKDROP_FOG_SET_BAND, 0.0, sun.y);
+    return frame.sun_color.rgb * (up * BACKDROP_FOG_SUN_SHARE * phase);
+}
+
 // `radiance` seen through the fog towards unit `dir`: blended into the map's colour at the horizon
-// in `dir`'s azimuth (read at `lod`), tinted by the fog's colour.
+// in `dir`'s azimuth (read at `lod`) plus the sun's forward lobe, tinted by the fog's colour.
 fn backdrop_fogged(radiance: vec3<f32>, dir: vec3<f32>, lod: f32) -> vec3<f32> {
     if frame.fog_color.a <= 0.0 {
         return radiance;
@@ -105,7 +124,7 @@ fn backdrop_fogged(radiance: vec3<f32>, dir: vec3<f32>, lod: f32) -> vec3<f32> {
     let azimuth = select(vec2<f32>(0.0, 1.0), dir.xz / around, around > 1e-6);
     let horizon_dir = normalize(vec3<f32>(azimuth.x, BACKDROP_FOG_HORIZON_SLOPE, azimuth.y));
     let horizon = backdrop_radiance(horizon_dir, lod + BACKDROP_FOG_LOD_BIAS);
-    return radiance * (1.0 - opacity) + frame.fog_color.rgb * horizon * opacity;
+    return radiance * (1.0 - opacity) + frame.fog_color.rgb * (horizon + backdrop_fog_sun_lobe(dir)) * opacity;
 }
 
 @fragment
