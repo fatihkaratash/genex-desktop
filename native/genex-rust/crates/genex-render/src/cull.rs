@@ -143,7 +143,8 @@ impl CullPass {
             layout: Some(&pipeline_layout),
             module: &module,
             entry_point: Some("cull"),
-            compilation_options: Default::default(),
+            // A8.6: every lane writes its scan slot first (`compile::WORKGROUP_AUDIT`).
+            compilation_options: crate::compile::written_first(),
             cache: None,
         });
         Ok(CullPass { layout, pipeline })

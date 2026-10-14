@@ -10,7 +10,10 @@ its builds; product behavior is in [Builds and Live](../product/builds-live.md).
 Seatbelt profile measured on macOS 26 (`gameSandboxProfile`): deny by default, `process-exec` of the
 bundle's executable only (no fork; `setsid`/`setpgid` denied by syscall), reads of the system, the
 bundle and `state/` (its only writable folder), Metal and audio, no network, and file-read denies on
-`OpenGL.framework` and `AppleMetalOpenGLRenderer.bundle`. The headless profile (agents, Live's
+`OpenGL.framework` and `AppleMetalOpenGLRenderer.bundle`. A run whose host-written Info.plist names
+a studio bundle id also reads and writes its own Metal shader cache, `<DARWIN_USER_CACHE_DIR>/<id>`
+(host-made, never a link, never another game's; plus `dirhelper` and two metadata reads), so its
+pipelines compile warm from the second run. The headless profile (agents, Live's
 embedded runs) has no WindowServer; an embedded run adds `IOSurfaceRootUserClient` and a lookup of
 its own frames service. The windowed one keeps `com.apple.view-bridge` denied; the port folds repeated stderr lines into one.
 `admitMacBundle` ([`native-bundle.ts`](../../src/substrate/native-bundle.ts)) reads the Mach-O

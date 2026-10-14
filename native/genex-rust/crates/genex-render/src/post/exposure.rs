@@ -562,7 +562,8 @@ fn compute_pipeline(device: &Device, label: &str, source: &str, entry_point: &st
         layout: Some(&pipeline_layout),
         module: &module,
         entry_point: Some(entry_point),
-        compilation_options: Default::default(),
+        // A8.6: the histogram and the adaptation write their workgroup arrays first.
+        compilation_options: crate::compile::written_first(),
         cache: None,
     }))
 }

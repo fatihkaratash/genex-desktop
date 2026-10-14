@@ -384,7 +384,9 @@ fn compute_pipeline(device: &Device, label: &str, module: &ShaderModule, entry_p
         layout: Some(&pipeline_layout),
         module,
         entry_point: Some(entry_point),
-        compilation_options: Default::default(),
+        // A8.6: the aerial and multiscatter scans write their workgroup arrays first; the other
+        // sky kernels have none.
+        compilation_options: crate::compile::written_first(),
         cache: None,
     })
 }

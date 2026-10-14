@@ -194,8 +194,13 @@ pub fn receipt(facts: &AdapterFacts) -> CapabilityReceipt {
 /// The features a device is requested with: the game's declared native-enhanced ones plus the
 /// renderer-owned ones `offered` has.
 pub fn requested_features(declared: Features, offered: Features) -> Features {
-    declared | renderer_features(offered)
+    declared | renderer_features(offered) | (offered & UNLISTED_RENDERER_FEATURES)
 }
+
+/// Renderer-owned features the device is opened with where offered but the receipt does not list
+/// (its `rendererFeatures` are a wire vocabulary): `PIPELINE_CACHE` (Vulkan only), the pipeline
+/// cache the compile pool keeps in the game's saves (renderer pass 2, RC-09). It only accelerates.
+pub const UNLISTED_RENDERER_FEATURES: Features = Features::PIPELINE_CACHE;
 
 /// Check the floor, then open a device with core limits and the renderer-owned features offered.
 pub fn open_device<A: GpuAdapter>(adapter: &A) -> Result<(A::Device, CapabilityReceipt), RenderError> {

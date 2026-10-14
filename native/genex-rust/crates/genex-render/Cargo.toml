@@ -46,3 +46,6 @@ serde_json = { workspace = true }
 # with (HLSL SM 5.1 for FXC, MSL, SPIR-V). Features of the already vendored naga, test builds only:
 # no crate is added and the shipped renderer's naga stays `wgsl-in` (crate-policy unchanged).
 naga = { workspace = true, features = ["hlsl-out", "msl-out", "spv-out"] }
+# tests/uploads.rs counts the driver buffers a frame makes (RC-08): wgpu's internal counters,
+# test builds only (no crate is added; the shipped renderer keeps them compiled out).
+wgpu = { workspace = true, features = ["counters"] }

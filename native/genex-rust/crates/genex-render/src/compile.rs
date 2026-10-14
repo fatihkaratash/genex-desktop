@@ -13,11 +13,20 @@
 //! On the web (no threads; the browser compiles off its own main thread) a pipeline is made where
 //! it is asked for. A game's own WGSL (Level-2 materials, Level-3 passes) is still compiled where
 //! it is admitted, inside its error scopes.
+//!
+//! Pipeline caches (renderer pass 2, RC-09; LG-14 is the game box's Metal half): Metal and D3D12
+//! drivers keep their own, Vulkan keeps none unless the application hands one in, and drivers on
+//! Android often do not. A device opened with `PIPELINE_CACHE` (offered on Vulkan only) gets one
+//! from the game's saves ([`open_pipeline_cache`], keyed by wgpu's adapter key: vendor and device,
+//! the driver checked by wgpu's header) and every built-in pipeline compiled on it afterwards uses
+//! it; [`save_pipeline_cache`] writes it back.
 
 use std::ops::Deref;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use wgpu::{ComputePipeline, Device, RenderPipeline};
+use genex_core::saves::Saves;
+use wgpu::{ComputePipeline, Device, PipelineCache, RenderPipeline};
 
 /// Compile threads at most: the driver's own compiler service does not scale past about this.
 #[cfg(not(target_arch = "wasm32"))]
@@ -61,9 +70,14 @@ impl<T: Send + Sync + 'static> Compiled<T> {
     pub fn spawn(job: impl FnOnce() -> T + Send + 'static) -> Self {
         let slot = Arc::new(OnceLock::new());
         let filled = Arc::clone(&slot);
+        PENDING_JOBS.fetch_add(1, Ordering::AcqRel);
         let run = move || {
             let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).map_err(|panic| panic_message(panic.as_ref()));
             let _ = filled.set(made);
+            // The last job of a burst (a launch's, a preset change's): keep what it compiled.
+            if PENDING_JOBS.fetch_sub(1, Ordering::AcqRel) == 1 {
+                save_pipeline_caches();
+            }
         };
         submit(Box::new(run));
         Compiled { slot }
@@ -206,6 +220,103 @@ impl Drop for CompileHold {
     }
 }
 
+/// The built-in compute shaders that declare workgroup memory, each audited to write every
+/// workgroup variable before any invocation reads it (renderer pass 2, A8.6), with the proof: the
+/// shader's name (as `shaders::SHADERS` or its module registers it) and why. Their pipelines skip
+/// wgpu's workgroup zeroing ([`written_first`]); a new kernel with workgroup memory joins only
+/// with its own audit (tests/workgroup_memory.rs holds every registered shader to this list).
+pub const WORKGROUP_AUDIT: &[(&str, &str)] = &[
+    ("cull", "each lane stores scan[lane] before the first barrier of every chunk"),
+    ("light-bin", "cs_light_zbins: each lane stores zbin_lowest/zbin_highest[lane] before the reduction's first barrier"),
+    ("exposure-histogram", "lanes below the bin count store 0 into every bin before the first barrier"),
+    ("exposure-adapt", "each of the 128 lanes stores gx_prefix[bin] and gx_sums[bin] before the barrier that precedes any read"),
+    ("aerial-perspective", "each of the 32 lanes stores its slice of both scans before the first barrier"),
+    ("sky-multiscatter", "each of the 64 lanes stores its direction's gathers before the reduction's first barrier"),
+    ("ibl-sh9", "each lane stores partial[lane] and lowest[lane] before reading; lane 0 stores ringing before the uniform load"),
+    ("meshlet-cull", "cull_mark, cull_scan and cull_scatter store every lane's scan_a, scan_b, marks and lane_slots before a barrier"),
+];
+
+/// Compilation options for a kernel in [`WORKGROUP_AUDIT`]: no workgroup zeroing on native, where
+/// naga's MSL writer otherwise zeroes every workgroup array from one thread before a barrier at the
+/// start of each workgroup. The web always zeroes (the browser does it, whatever wgpu is told).
+pub fn written_first<'a>() -> wgpu::PipelineCompilationOptions<'a> {
+    wgpu::PipelineCompilationOptions { zero_initialize_workgroup_memory: false, ..Default::default() }
+}
+
+/// Jobs handed to the compile pool and not finished yet.
+static PENDING_JOBS: AtomicUsize = AtomicUsize::new(0);
+
+/// The save folder a game's pipeline caches are kept in, one file per adapter key.
+pub const PIPELINE_CACHE_FOLDER: &str = "genex-pipeline-cache";
+
+/// The saves pipeline caches are kept in, and each open cache with its device and save file.
+struct PipelineCaches {
+    saves: Option<Saves>,
+    open: Vec<(Device, PipelineCache, String)>,
+}
+
+static PIPELINE_CACHES: Mutex<PipelineCaches> = Mutex::new(PipelineCaches { saves: None, open: Vec::new() });
+
+fn pipeline_caches() -> std::sync::MutexGuard<'static, PipelineCaches> {
+    PIPELINE_CACHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The save file a device on `info`'s adapter keeps its pipeline cache in:
+/// `genex-pipeline-cache/<wgpu's adapter key>.bin`, or None where the backend keeps its own (every
+/// backend but Vulkan) or the key is not a plain file name.
+pub fn pipeline_cache_file(info: &wgpu::AdapterInfo) -> Option<String> {
+    let key = wgpu::util::pipeline_cache_key(info)?;
+    let plain = !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+    plain.then(|| format!("{PIPELINE_CACHE_FOLDER}/{key}.bin"))
+}
+
+/// Keep pipeline caches in `saves` (the game's own; None keeps none): the devices opened from now
+/// on start from what is saved there, and [`save_pipeline_cache`] writes there.
+pub fn keep_pipeline_caches_in(saves: Option<Saves>) {
+    pipeline_caches().saves = saves;
+}
+
+/// Open `device`'s pipeline cache, from its save file when there is one: on a device opened with
+/// `PIPELINE_CACHE` (Vulkan) on `info`'s adapter while the game's saves are kept
+/// ([`keep_pipeline_caches_in`]). A later device on the same adapter (a lost device's
+/// replacement) takes its place. False when the device gets none.
+pub fn open_pipeline_cache(device: &Device, info: &wgpu::AdapterInfo) -> bool {
+    let Some(file) = pipeline_cache_file(info) else { return false };
+    let mut caches = pipeline_caches();
+    let Some(saves) = caches.saves.clone() else { return false };
+    let saved = saves.load(&file);
+    let Some(cache) = genex_gpu_memory::open_pipeline_cache(device, saved.as_deref()) else { return false };
+    caches.open.retain(|(_, _, open)| *open != file);
+    caches.open.push((device.clone(), cache, file));
+    true
+}
+
+/// Write `device`'s pipeline cache to its save file (the compile pool may still be adding to it;
+/// a later call writes what it has then). False when the device has none or the save is refused.
+pub fn save_pipeline_cache(device: &Device) -> bool {
+    let caches = pipeline_caches();
+    let Some(saves) = caches.saves.as_ref() else { return false };
+    let Some((_, cache, file)) = caches.open.iter().find(|(open, _, _)| open == device) else { return false };
+    cache.get_data().is_some_and(|bytes| saves.save(file, &bytes))
+}
+
+/// Write every open pipeline cache to its save file: when the compile pool finishes a burst of
+/// jobs, so a launch's or a preset change's pipelines are kept for the next launch.
+fn save_pipeline_caches() {
+    let caches = pipeline_caches();
+    let Some(saves) = caches.saves.as_ref() else { return };
+    for (_, cache, file) in &caches.open {
+        if let Some(bytes) = cache.get_data() {
+            let _ = saves.save(file, &bytes);
+        }
+    }
+}
+
+/// The pipeline cache `device` compiles with, when it has one.
+fn pipeline_cache_of(device: &Device) -> Option<PipelineCache> {
+    pipeline_caches().open.iter().find(|(open, _, _)| open == device).map(|(_, cache, _)| cache.clone())
+}
+
 /// `desc` compiled on the pool: the descriptor's borrowed parts are copied (the module, layout and
 /// device handles are reference-counted), so the call returns at once.
 pub fn render_pipeline(device: &Device, desc: &wgpu::RenderPipelineDescriptor<'_>) -> Compiled<RenderPipeline> {
@@ -255,7 +366,7 @@ struct OwnedBuffer {
     attributes: Vec<wgpu::VertexAttribute>,
 }
 
-/// A render pipeline descriptor, owned (no pipeline cache: the built-in pipelines use none).
+/// A render pipeline descriptor, owned (its device's pipeline cache is looked up where it is made).
 struct OwnedRender {
     label: Option<String>,
     layout: Option<wgpu::PipelineLayout>,
@@ -312,6 +423,7 @@ impl OwnedRender {
             .collect();
         let vertex_constants = self.vertex.constants();
         let fragment_constants = self.fragment.as_ref().map(|(stage, _)| stage.constants()).unwrap_or_default();
+        let cache = pipeline_cache_of(device);
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: self.label.as_deref(),
             layout: self.layout.as_ref(),
@@ -331,12 +443,12 @@ impl OwnedRender {
                 targets,
             }),
             multiview_mask: self.multiview_mask,
-            cache: None,
+            cache: cache.as_ref(),
         })
     }
 }
 
-/// A compute pipeline descriptor, owned (no pipeline cache).
+/// A compute pipeline descriptor, owned (its device's pipeline cache is looked up where it is made).
 struct OwnedCompute {
     label: Option<String>,
     layout: Option<wgpu::PipelineLayout>,
@@ -354,13 +466,14 @@ impl OwnedCompute {
 
     fn create(&self, device: &Device) -> ComputePipeline {
         let constants = self.stage.constants();
+        let cache = pipeline_cache_of(device);
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: self.label.as_deref(),
             layout: self.layout.as_ref(),
             module: &self.stage.module,
             entry_point: self.stage.entry_point.as_deref(),
             compilation_options: self.stage.options(&constants),
-            cache: None,
+            cache: cache.as_ref(),
         })
     }
 }

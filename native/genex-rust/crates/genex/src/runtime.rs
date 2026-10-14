@@ -287,6 +287,9 @@ impl<W: Default + 'static> Runtime<W> {
     pub fn new(mut game: Game<W>) -> Result<Runtime<W>, InstallError> {
         validate(&game)?;
         let world = std::mem::take(&mut game.initial);
+        let saves = saves_of(game.save_name.as_deref());
+        // RC-09: a Vulkan device keeps its pipeline cache with the game's saves.
+        genex_render::compile::keep_pipeline_caches_in(Some(saves.clone()));
         let core = Core {
             sim: fresh_sim(world, &game),
             seed: DEFAULT_SEED,
@@ -295,7 +298,7 @@ impl<W: Default + 'static> Runtime<W> {
             rng: Cell::new(Pcg32::seeded(u64::from(DEFAULT_SEED))),
             merger: Merger::default(),
             pointer_lock: false,
-            gfx: Gfx::new(game.world_size, saves_of(game.save_name.as_deref()), game.wgsl.clone()),
+            gfx: Gfx::new(game.world_size, saves, game.wgsl.clone()),
             hud: Hud::new(),
             clock: FrameClock::default(),
             tally: Tally::default(),

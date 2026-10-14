@@ -96,7 +96,8 @@ answer.
 `ctx.pads`, `ctx.pointer` (fraction of the frame, y down), `ctx.look`, `ctx.wheel`,
 `ctx.text`, `ctx.rng` (the only randomness), `ctx.dt` (1/60), `ctx.tick` (ticks since the last
 seed), `ctx.world_size`, and `ctx.save(file, bytes)` / `ctx.load(file)` for the game's own save
-folder (a safe relative name; a folder the studio gives each run).
+folder (a safe relative name; a folder the studio gives each run). On Vulkan the renderer keeps
+its pipeline cache in the same folder (`genex-pipeline-cache/<adapter>.bin`): leave that name alone.
 
 `world_size` is the game's logical size on every screen: touches, the pointer, the HUD's points
 and a capture's default size are measured in it. It is not the resolution: Live frames are drawn

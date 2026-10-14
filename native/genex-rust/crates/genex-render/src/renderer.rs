@@ -758,6 +758,8 @@ pub struct Renderer {
     /// Frame groups made mid-frame once a node replaced what they bind (AO's alternating history
     /// terms, a new environment bake), the last few kept.
     refreshed_groups: std::cell::RefCell<Vec<(GroupsKey, FrameGroups)>>,
+    /// Graph node 1's staging chunks, reused frame after frame (renderer pass 2, RC-08).
+    upload_arena: std::cell::RefCell<crate::tables::UploadArena>,
     /// How the frame being drawn (then the last one) draws its scene colour.
     path: ScenePath,
     last_path: Option<ScenePath>,
@@ -1376,6 +1378,14 @@ fn pre_exposure(look: &Look, quality: &Quality) -> f32 {
 /// Whether auto exposure reads the resolved HDR scene this frame (its histogram, node 20).
 fn auto_exposure(look: &Look, quality: &Quality) -> bool {
     quality.hdr && quality.exposure && look.exposure == ExposureMode::Auto
+}
+
+/// The background triangle covering the scene with `clear` (sRGB bytes) as linear light.
+fn background_vertices(clear: [u8; 4]) -> [LineVertex; 3] {
+    let [r, g, b, _] = clear.map(|c| exposed(f32::from(c) / 255.0, 1.0));
+    let color = [r, g, b, 1.0];
+    let corners = [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
+    corners.map(|position| LineVertex { position, color })
 }
 
 /// The sRGB byte `c` as linear light times `exposure` (a clear colour or line on the HDR path).
@@ -2026,12 +2036,14 @@ impl<'a> WorldNodes<'a> {
         let plan = &self.prep.plan;
         match id {
             NodeId::Tables => {
-                renderer.write_uploads(frame.queue(), &self.prep.uploads, plan);
-                frame.queue().write_buffer(&renderer.fog_row, 0, bytemuck::bytes_of(&renderer.frame_fog()));
-                renderer.write_meshlets(frame.queue(), self.prep);
-                if renderer.draws_background() {
-                    renderer.write_background(frame.queue(), self.prep.clear);
+                let fog = renderer.frame_fog();
+                let background = renderer.draws_background().then(|| background_vertices(self.prep.clear));
+                let mut rows: Vec<crate::tables::UploadWrite<'_>> = vec![(&renderer.fog_row, 0, bytemuck::bytes_of(&fog))];
+                if let Some(vertices) = background.as_ref() {
+                    rows.push((&renderer.background, 0, bytemuck::cast_slice(vertices)));
                 }
+                renderer.write_uploads(frame.queue(), &self.prep.uploads, plan, &rows);
+                renderer.write_meshlets(frame.queue(), self.prep);
                 // The frame's first command buffer opens with the armed timer's begin pass.
                 if let Some(timer) = renderer.timer.borrow_mut().as_mut() {
                     timer.encode_begin(frame.encoder());
@@ -2461,6 +2473,7 @@ impl Renderer {
             fog_row: uniform_buffer("frame fog", size_of::<crate::fog::GpuFog>() as u64)?,
             fog_backdrop: crate::fog::FogBackdrop::Environment,
             refreshed_groups: std::cell::RefCell::new(Vec::new()),
+            upload_arena: std::cell::RefCell::new(crate::tables::UploadArena::new(&device)),
             path: ScenePath::LEGACY,
             last_path: None,
             timer: std::cell::RefCell::new(None),
@@ -3878,15 +3891,6 @@ impl Renderer {
         self.path.hdr && auto_exposure(&self.look, &self.quality)
     }
 
-    /// The background triangle covering the scene with `clear` (sRGB bytes) as linear light.
-    fn write_background(&self, queue: &Queue, clear: [u8; 4]) {
-        let [r, g, b, _] = clear.map(|c| exposed(f32::from(c) / 255.0, 1.0));
-        let color = [r, g, b, 1.0];
-        let corners = [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
-        let vertices = corners.map(|position| LineVertex { position, color });
-        queue.write_buffer(&self.background, 0, bytemuck::cast_slice(&vertices));
-    }
-
     /// Graph node 4: the binned frame's tile masks and z-bins into `light_tiles` and `light_zbins`
     /// (the tables the forward pass and v2 materials read). False when the frame bins nothing or
     /// the node refused its tables, which then keep the zero header Uploads wrote: no local light
@@ -3900,11 +3904,13 @@ impl Renderer {
         node.encode(&device, &queue, frame.encoder(), input).is_ok()
     }
 
-    /// Graph node 1: this frame's frame uniforms, cull views and tables.
-    fn write_uploads(&self, queue: &Queue, uploads: &Uploads, plan: &FramePlan) {
-        queue.write_buffer(&self.frame_uniforms, 0, &uploads.frame);
-        queue.write_buffer(&self.cull_views, 0, &uploads.cull_views);
-        uploads.write(queue, &self.tables, plan);
+    /// Graph node 1: this frame's frame uniforms, cull views and tables, and the frame's own rows
+    /// `frame_rows` (fog, background), from the upload arena in one submission ahead of the frame (RC-08).
+    fn write_uploads(&self, queue: &Queue, uploads: &Uploads, plan: &FramePlan, frame_rows: &[crate::tables::UploadWrite<'_>]) {
+        let mut writes = vec![(&self.frame_uniforms, 0, uploads.frame.as_slice()), (&self.cull_views, 0, uploads.cull_views.as_slice())];
+        writes.extend(uploads.writes(&self.tables, plan));
+        writes.extend_from_slice(frame_rows);
+        self.upload_arena.borrow_mut().upload(&self.device, queue, &writes);
     }
 
     /// Prepare a frame of `scene`: plan and room in the tables, the targets of the current scale
@@ -4326,7 +4332,7 @@ impl Renderer {
     pub fn cull_only(&mut self, gpu: &Gpu, scene: &Scene) -> Result<(), RenderError> {
         let scene_path = self.scene_path(self.render_size(), None);
         let (plan, uploads, _) = self.prepare(scene, CullPath::Gpu, &scene_path, &FrameTemporal::NONE)?;
-        self.write_uploads(&gpu.queue, &uploads, &plan);
+        self.write_uploads(&gpu.queue, &uploads, &plan, &[]);
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("cull only") });
         self.encode_cull(&mut encoder, &plan);
         gpu.queue.submit([encoder.finish()]);

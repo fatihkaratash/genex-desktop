@@ -7,8 +7,15 @@
 //! draw. Indirect arguments: `batches` per view, tightly packed. Pass views: one 256-byte dynamic
 //! uniform per cull view, then one per transparent draw. Previous models (RQ5): one row per
 //! instance row, at the same index, filled only while motion vectors are drawn.
+//!
+//! Uploads (renderer pass 2, RC-08): graph node 1's writes come from one [`UploadArena`], whose
+//! mapped staging chunks are kept and reused, recorded as copies into an upload encoder submitted
+//! at once. `queue.write_buffer` made a staging buffer per call in wgpu-core and freed it after the
+//! GPU used it (16 a frame on a lit scene; 0.34 ms of CPU a frame against 0.08 ms for a 3 MB frame
+//! of 17 writes on an M4 Max). The upload encoder is submitted before anything else of the frame,
+//! as the queue writes landed ahead of every later submission.
 
-use wgpu::{BindGroupLayout, BindGroupLayoutEntry, BindingType, Buffer, BufferBindingType, BufferUsages, Device, ShaderStages};
+use wgpu::{BindGroupLayout, BindGroupLayoutEntry, BindingType, Buffer, BufferBindingType, BufferUsages, Device, Queue, ShaderStages};
 
 use crate::caps::{UploadBudget, check_buffer};
 use crate::cull::CpuCull;
@@ -93,6 +100,50 @@ pub(crate) fn entry(binding: u32, buffer: &Buffer) -> wgpu::BindGroupEntry<'_> {
 pub(crate) fn buffer(device: &Device, label: &str, size: u64, usage: BufferUsages) -> Result<Buffer, RenderError> {
     check_buffer(size)?;
     Ok(device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false }))
+}
+
+/// The upload arena's staging chunk: writes smaller than this share chunks, a larger one gets a
+/// chunk of its own size (kept and reused by the next frame that writes as much).
+const UPLOAD_CHUNK_BYTES: u64 = 1 << 20;
+
+/// One write a frame uploads: `bytes` into `target` at `offset` (both multiples of 4, as every
+/// table row and offset is).
+pub(crate) type UploadWrite<'a> = (&'a Buffer, u64, &'a [u8]);
+
+/// The per-frame upload arena (RC-08): [`wgpu::util::StagingBelt`]'s mapped chunks, reused once
+/// the GPU has copied out of them. Its chunks stay allocated (at most the upload budget per frame
+/// in flight).
+pub(crate) struct UploadArena {
+    belt: wgpu::util::StagingBelt,
+}
+
+impl UploadArena {
+    pub(crate) fn new(device: &Device) -> UploadArena {
+        UploadArena { belt: wgpu::util::StagingBelt::new(device.clone(), UPLOAD_CHUNK_BYTES) }
+    }
+
+    /// Record `writes` (empty ones skipped) as copies from the arena into one upload encoder and
+    /// submit it now, ahead of the rest of the frame. Nothing is submitted when every write is empty.
+    pub(crate) fn upload(&mut self, device: &Device, queue: &Queue, writes: &[UploadWrite<'_>]) {
+        if writes.iter().all(|(_, _, bytes)| bytes.is_empty()) {
+            return;
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame uploads") });
+        for (target, offset, bytes) in writes {
+            let Some(size) = wgpu::BufferSize::new(copy_size(bytes.len())) else { continue };
+            let mut view = self.belt.write_buffer(&mut encoder, target, *offset, size);
+            view.slice(..bytes.len()).copy_from_slice(bytes);
+            let pad = view.len() - bytes.len();
+            view.slice(bytes.len()..).copy_from_slice(&[0; 4][..pad]);
+        }
+        self.belt.finish_and_recall_on_submit(&encoder);
+        queue.submit([encoder.finish()]);
+    }
+}
+
+/// `len` bytes rounded up to wgpu's copy alignment (4).
+fn copy_size(len: usize) -> u64 {
+    (len as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
 }
 
 /// The smallest table: one row of the largest table struct (an `Instance`, 160 bytes) fits, so
@@ -369,35 +420,26 @@ impl Uploads {
         [&self.light_ext, &self.light_tiles, &self.light_zbins, &self.frame, &self.cull_views, &self.pass_views, &self.visible]
     }
 
-    /// Write every table this frame fills from the CPU: `plan`'s rows straight from the plan (the
-    /// one these uploads were made of), the rest from here.
-    pub(crate) fn write(&self, queue: &wgpu::Queue, tables: &Tables, plan: &FramePlan) {
+    /// Every table write this frame makes from the CPU, for the upload arena: `plan`'s rows straight
+    /// from the plan (the one these uploads were made of), the rest from here.
+    pub(crate) fn writes<'a>(&'a self, tables: &'a Tables, plan: &'a FramePlan) -> [UploadWrite<'a>; 15] {
         let [instances, materials, material_ext, lights, batches, slot_base, lines, joints, skin_jobs] = plan_rows(plan);
-        let writes = [
-            (&tables.instances, instances),
-            (&tables.materials, materials),
-            (&tables.material_ext, material_ext),
-            (&tables.lights, lights),
-            (&tables.batches, batches),
-            (&tables.slot_base, slot_base),
-            (&tables.pass_views, self.pass_views.as_slice()),
-            (&tables.lines, lines),
-            (&tables.joints, joints),
-            (&tables.skin_jobs, skin_jobs),
-            (&tables.light_ext, self.light_ext.as_slice()),
-            (&tables.light_tiles, self.light_tiles.as_slice()),
-            (&tables.light_zbins, self.light_zbins.as_slice()),
-        ];
-        for (table, bytes) in writes {
-            if !bytes.is_empty() {
-                queue.write_buffer(table.get(), 0, bytes);
-            }
-        }
-        if !self.prev_models.is_empty() {
-            queue.write_buffer(tables.prev_models.get(), 0, bytemuck::cast_slice(&self.prev_models));
-        }
-        if !self.visible.is_empty() {
-            queue.write_buffer(tables.visible.get(), self.visible_offset, &self.visible);
-        }
+        [
+            (tables.instances.get(), 0, instances),
+            (tables.materials.get(), 0, materials),
+            (tables.material_ext.get(), 0, material_ext),
+            (tables.lights.get(), 0, lights),
+            (tables.batches.get(), 0, batches),
+            (tables.slot_base.get(), 0, slot_base),
+            (tables.pass_views.get(), 0, self.pass_views.as_slice()),
+            (tables.lines.get(), 0, lines),
+            (tables.joints.get(), 0, joints),
+            (tables.skin_jobs.get(), 0, skin_jobs),
+            (tables.light_ext.get(), 0, self.light_ext.as_slice()),
+            (tables.light_tiles.get(), 0, self.light_tiles.as_slice()),
+            (tables.light_zbins.get(), 0, self.light_zbins.as_slice()),
+            (tables.prev_models.get(), 0, bytemuck::cast_slice(&self.prev_models)),
+            (tables.visible.get(), self.visible_offset, self.visible.as_slice()),
+        ]
     }
 }

@@ -151,6 +151,8 @@ impl Gpu {
         check_declared(&facts, declared)?;
         let features = requested_features(declared, facts.features);
         let (device, queue) = adapter.request_device(&device_descriptor(&core_limits(), features)).await.map_err(device_failed)?;
+        // RC-09: a Vulkan device starts from the game's saved pipeline cache.
+        crate::compile::open_pipeline_cache(&device, &adapter.get_info());
         let probed = DeviceFacts::probe(&adapter.get_info(), &facts).with_gpu_visible_memory(genex_gpu_memory::gpu_visible_memory(&adapter));
         Ok(Gpu { device, queue, receipt: receipt(&facts), facts: probed, adapter, instance: None })
     }

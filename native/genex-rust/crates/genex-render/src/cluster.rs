@@ -622,7 +622,8 @@ fn compute_pipeline(device: &Device, layout: &BindGroupLayout, module: &wgpu::Sh
         layout: Some(&pipeline_layout(device, entry, &[layout])),
         module,
         entry_point: Some(entry),
-        compilation_options: Default::default(),
+        // A8.6: the z-bin kernel writes its workgroup arrays first; the others have none.
+        compilation_options: crate::compile::written_first(),
         cache: None,
     })
 }
