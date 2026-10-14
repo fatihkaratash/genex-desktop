@@ -302,6 +302,23 @@ function nativeSurface(
       surface: CaptureSurface.Canvas,
       provenance: { seq: 1, digest: null, camera: "default", runId: null, build: null, render: null, outputSize: null },
     }),
+    screenshotAt: async (size: { width: number; height: number }) => {
+      asked.push(`capture at ${size.width}x${size.height}`);
+      return {
+        jpeg: Buffer.from("sized-jpeg"),
+        stats: { ...computePixelStats(bgra, 2, 2), width: size.width, height: size.height, canvas: true },
+        surface: CaptureSurface.Canvas,
+        provenance: {
+          seq: 2,
+          digest: null,
+          camera: "default",
+          runId: null,
+          build: null,
+          render: null,
+          outputSize: size,
+        },
+      };
+    },
     consoleEntries: () =>
       Array.from({ length: options.console ?? 5 }, (_, line) => ({
         at: line,
@@ -383,6 +400,44 @@ test("--surface native --frame live captures what Live shows; the run's own capt
     (error: unknown) => error instanceof DevError && error.code === DevErrorCode.MissingPrerequisite,
   );
   assert.throws(() => devOperation(["capture", "--profile", "p", "--surface", "native", "--frame", "drawn"]));
+});
+
+// Renderer pass 2, P2-0.9 step B (the 4K/1440p capture plan): `capture --size WxH` asks the run's
+// pinned capture at that size. Live's view is the window's own size, so `--frame live` with a size
+// is refused before anything is captured, as is a size outside whole pixels in 64..4096.
+test("--surface native --size WxH asks the run's pinned capture at that size", async (t) => {
+  const { performNative } = await runtimeModule();
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dev-native-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { rt, asked } = nativeSurface(root);
+  const args = ["capture", "--profile", "p", "--surface", "native", "--name", "k4", "--size", "3840x2160"];
+  const operation = devOperation(args);
+  assert.deepEqual(operation.method === DevMethod.Capture && operation.params.size, { width: 3840, height: 2160 });
+  const shot = (await performNative(rt, operation)) as { file: string; frame: string; dimensions: unknown };
+  assert.deepEqual(asked, ["pong", "capture at 3840x2160"]);
+  assert.equal(shot.frame, NativeCaptureFrame.Pinned);
+  assert.deepEqual(shot.dimensions, { width: 3840, height: 2160 });
+  assert.equal(fs.readFileSync(shot.file, "utf8"), "sized-jpeg");
+  const live = devOperation([...args.slice(0, 6), "l4", "--frame", "live", "--size", "3840x2160"]);
+  await assert.rejects(
+    performNative(rt, live),
+    (error: unknown) => error instanceof DevError && error.code === DevErrorCode.InvalidRequest,
+  );
+  assert.ok(!fs.existsSync(path.join(root, "native-l4.png")), "nothing captured");
+  for (const size of [
+    "3840",
+    "3840x",
+    "x2160",
+    "0x2160",
+    "63x64",
+    "4097x64",
+    "2560.5x1440",
+    "-2560x1440",
+    "2560x1440x2",
+    "big",
+  ]) {
+    assert.throws(() => devOperation([...args.slice(0, 8), size]), size);
+  }
 });
 
 test("game.renderSettings reaches the open game's native run: a read, and a frame budget set for this session", async (t) => {

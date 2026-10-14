@@ -868,7 +868,14 @@ fn rungs_of(steps: &[genex_render::budget::DegradeStep]) -> Vec<DegradeRung> {
 /// resolution and the frame-time window.
 pub struct RenderControl {
     config: RenderConfig,
+    /// The game's logical world size: the session's material arrays are fitted at it.
+    world: (u32, u32),
+    /// The size Live frames draw at (the window's pixels capped by the class, else the world).
     output: (u32, u32),
+    /// The letterbox the window present fills on Live frames, when a window is known.
+    window: Option<(u32, u32)>,
+    /// The size captures draw at when one was asked for (`capture --size`), else the world.
+    capture_output: Option<(u32, u32)>,
     facts: DeviceFacts,
     probed: bool,
     calibration: Option<ScoreLevel>,
@@ -971,6 +978,14 @@ fn texture_arrays(class: DeviceClass, textures: TextureQuality) -> Vec<MaterialC
     material_arrays(class, textures)
 }
 
+/// The surface a budget is fitted for: the output drawn and the window present's letterbox (Live
+/// only, renderer pass 2, P2-0.9 step B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BudgetSurface {
+    output: (u32, u32),
+    window: Option<(u32, u32)>,
+}
+
 /// What the budget is fitted at for `profile` on `facts`: the class's scene format, whether its
 /// MSAA colour is read by the weighted resolve (then never transient), and the widest HDR
 /// environment map the class keeps (reserved: a game may name one in any frame).
@@ -983,16 +998,21 @@ fn budget_input(output: (u32, u32), scale: f32, facts: &DeviceFacts, profile: &R
 }
 
 impl RenderControl {
-    /// The settings of a game with `config` and a world target of `output`, before the probe (an
-    /// unknown adapter of this build's destination).
-    pub fn new(config: RenderConfig, output: (u32, u32)) -> RenderControl {
+    /// The settings of a game with `config` and a logical world of `world`, before the probe (an
+    /// unknown adapter of this build's destination). Live and captures draw at the world size
+    /// until the presenter says otherwise ([`RenderControl::set_live_output`],
+    /// [`RenderControl::set_capture_size`]).
+    pub fn new(config: RenderConfig, world: (u32, u32)) -> RenderControl {
         let facts = unprobed_facts();
         let class = classify(&facts);
         let live = Resolved { profile: profile(&facts, class, &config.quality, None), quality: Quality::off(), budget_rungs: Vec::new() };
         let mut control = RenderControl {
             drs: controller(class, live.profile.preset, 1.0, 1.0, live.profile.target_fps),
             config,
-            output,
+            world,
+            output: world,
+            window: None,
+            capture_output: None,
             facts,
             probed: false,
             calibration: None,
@@ -1044,6 +1064,45 @@ impl RenderControl {
     /// The device's facts (an unknown adapter before the probe).
     pub fn facts(&self) -> &DeviceFacts {
         &self.facts
+    }
+
+    /// Live frames draw at `output` (the window's pixels, capped by the class's reference
+    /// resolution) into a window present filling `window` (renderer pass 2, P2-0.9 step B): the
+    /// budget, its ceiling and dynamic resolution's upscale cost are fitted at them again when
+    /// either changes. Captures never move with them.
+    pub fn set_live_output(&mut self, output: (u32, u32), window: Option<(u32, u32)>) {
+        if (output, window) == (self.output, self.window) {
+            return;
+        }
+        self.output = output;
+        self.window = window;
+        self.resolve();
+    }
+
+    /// The size Live frames draw at (the world size until [`RenderControl::set_live_output`]).
+    pub fn live_output(&self) -> (u32, u32) {
+        self.output
+    }
+
+    /// Captures draw at `size` from now on (`capture --size`, the 4K/1440p plan), or at the world
+    /// size again (None): the pinned profile is fitted to the class budget at that size.
+    pub fn set_capture_size(&mut self, size: Option<(u32, u32)>) {
+        self.capture_output = size;
+    }
+
+    /// The size captures draw at: the size asked for, else the world size.
+    pub fn capture_output(&self) -> (u32, u32) {
+        self.capture_output.unwrap_or(self.world)
+    }
+
+    /// What Live frames are fitted at.
+    fn live_surface(&self) -> BudgetSurface {
+        BudgetSurface { output: self.output, window: self.window }
+    }
+
+    /// What captures are fitted at: their own size, no window.
+    fn capture_surface(&self) -> BudgetSurface {
+        BudgetSurface { output: self.capture_output(), window: None }
     }
 
     /// The reference class the host recorded for this adapter (captures; None:
@@ -1098,7 +1157,7 @@ impl RenderControl {
         let class = self.detected_class();
         let profile = profile(&self.facts, class, &self.config.quality, None);
         let reserved = texture_arrays(class, profile.quality.textures);
-        let input = budget_input(self.output, profile.quality.render_scale, &self.facts, &profile).with_materials(reserved.clone());
+        let input = budget_input(self.world, profile.quality.render_scale, &self.facts, &profile).with_materials(reserved.clone());
         let fitted = fit(&profile.quality, &input, profile.budget_bytes, DegradeMode::Boot);
         (class, fitted_textures(profile.quality.textures, &reserved, &fitted.materials))
     }
@@ -1109,10 +1168,10 @@ impl RenderControl {
     /// degraded (they are fixed); a profile for another class (the verb's emulation, a capture's
     /// reference class) reserves the arrays that class would hold, which the material rung may
     /// shrink, as that device's budget would.
-    fn budget_for(&self, profile: &RenderProfile, scale: f32, facts: &DeviceFacts, own: bool) -> (BudgetInput, Vec<MaterialClass>) {
+    fn budget_for(&self, profile: &RenderProfile, scale: f32, facts: &DeviceFacts, own: bool, surface: BudgetSurface) -> (BudgetInput, Vec<MaterialClass>) {
         // Captures never count the spot atlas: it appears with the first frame that asks for a
         // shadowed spot, and a capture's settings must not depend on what was drawn before it.
-        let input = budget_input(self.output, scale, facts, profile).with_spot_atlas(own && self.spot_atlas);
+        let input = budget_input(surface.output, scale, facts, profile).with_spot_atlas(own && self.spot_atlas).with_window(surface.window);
         let (class, textures) = self.textures;
         if own && profile.class == class {
             return (input.with_fixed_materials(texture_arrays(class, textures)), Vec::new());
@@ -1125,8 +1184,8 @@ impl RenderControl {
     /// the device's own Live profile, see [`RenderControl::budget_for`]). On the device its
     /// texture quality is the session's arrays' ([`RenderControl::texture_arrays`]); elsewhere the
     /// size classes that survived the material rung.
-    fn fitted(&self, profile: RenderProfile, facts: &DeviceFacts, own: bool) -> Resolved {
-        let (input, reserved) = self.budget_for(&profile, profile.quality.render_scale, facts, own);
+    fn fitted(&self, profile: RenderProfile, facts: &DeviceFacts, own: bool, surface: BudgetSurface) -> Resolved {
+        let (input, reserved) = self.budget_for(&profile, profile.quality.render_scale, facts, own, surface);
         let fitted = fit(&profile.quality, &input, profile.budget_bytes, DegradeMode::Boot);
         let mut quality = fitted.quality;
         quality.textures = if input.materials_fixed {
@@ -1148,7 +1207,8 @@ impl RenderControl {
         let nominal = live.quality.render_scale;
         let steps = ScaleSteps::table(class_defaults(class).drs_steps, nominal);
         let own = self.live_is_own();
-        let fits = |scale: &f32| ledger(&live.quality, &self.budget_for(&live.profile, *scale, &self.facts, own).0).total() <= live.profile.budget_bytes;
+        let surface = self.live_surface();
+        let fits = |scale: &f32| ledger(&live.quality, &self.budget_for(&live.profile, *scale, &self.facts, own, surface).0).total() <= live.profile.budget_bytes;
         steps.steps().iter().copied().filter(|scale| *scale > nominal).take_while(fits).last().unwrap_or(nominal)
     }
 
@@ -1166,7 +1226,7 @@ impl RenderControl {
         self.textures = self.session_textures();
         let class = self.live_class();
         let top = self.verb_layer(&self.person, class);
-        let live = self.fitted(profile(&self.facts, class, &self.config.quality, Some(&top)), &self.facts, self.live_is_own());
+        let live = self.fitted(profile(&self.facts, class, &self.config.quality, Some(&top)), &self.facts, self.live_is_own(), self.live_surface());
         let ceiling = self.budget_ceiling(class, &live);
         let thermal = self.drs.sustained();
         // FSR1's passes run at the output size below scale 1 (RCAS alone at 1 under TAA's
@@ -1188,7 +1248,7 @@ impl RenderControl {
         let class = self.capture_class();
         let top = self.verb_layer(&ClassOverride::default(), class);
         let facts = capture_facts(class);
-        let resolved = self.fitted(profile(&facts, class, &self.config.quality, Some(&top)), &facts, false);
+        let resolved = self.fitted(profile(&facts, class, &self.config.quality, Some(&top)), &facts, false, self.capture_surface());
         let game_preset = self.config.quality.preset.is_some() || self.config.quality.class(class).is_some_and(|t| t.preset.is_some());
         let source = match (self.verb.is_empty(), game_preset) {
             (false, _) => SettingsSource::Verb,
@@ -1442,7 +1502,7 @@ impl RenderControl {
         let drawn = |preset: QualityPreset| {
             let person = ClassOverride { preset: Some(preset), ..self.person.clone() };
             let top = self.verb_layer(&person, class);
-            let fitted = self.fitted(profile(&self.facts, class, &self.config.quality, Some(&top)), &self.facts, own);
+            let fitted = self.fitted(profile(&self.facts, class, &self.config.quality, Some(&top)), &self.facts, own, self.live_surface());
             RenderControl::switches(&fitted.quality).into_iter().filter(|(_, on)| *on).map(|(feature, _)| feature).collect::<Vec<_>>()
         };
         let mut offered = Vec::new();
@@ -1953,6 +2013,32 @@ mod tests {
         assert_eq!(mac.live.profile.budget_bytes, 2 * GIB, "an eighth of 27 GB, at most 2 GiB");
     }
 
+    /// Renderer pass 2, P2-0.9 step B (F1/RC-03): Live is fitted at the output it draws (the
+    /// window's pixels, its window present's images counted) and captures at their own size, so a
+    /// window never changes a capture's settings. A small Mac fits high at the 960x540 world without
+    /// a step but not at a 3024x1964 Retina window, whose ledger is the larger one.
+    #[test]
+    fn live_is_fitted_at_the_window_s_output_and_captures_at_their_own_size() {
+        let world = (960, 540);
+        let mut mac = mac_with_memory(world, Some(SMALL_MAC_MEMORY));
+        drawn_at(&mut mac, QualityPreset::High);
+        let own = mac.live_is_own();
+        let at = |mac: &RenderControl| ledger(&mac.live.quality, &mac.budget_for(&mac.live.profile, 1.0, &mac.facts, own, mac.live_surface()).0).total();
+        let small = at(&mac);
+        let capture = mac.capture_frame();
+        assert_eq!(mac.live_output(), world, "Live draws the world size until a window is known");
+        let retina = (3024, 1964);
+        mac.set_live_output(retina, Some(retina));
+        assert_eq!(mac.live_output(), retina);
+        assert!(at(&mac) > small, "the ledger counts the window's output: {} vs {small}", at(&mac));
+        assert_eq!(mac.capture_frame().0.quality, capture.0.quality, "a window never reaches a capture's settings");
+        assert_eq!(mac.capture_output(), world, "captures draw at the world size");
+        mac.set_capture_size(Some((3840, 2160)));
+        assert_eq!(mac.capture_output(), (3840, 2160), "or at the size asked for");
+        mac.set_capture_size(None);
+        assert_eq!(mac.capture_output(), world);
+    }
+
     /// The ledger and probe rows of a Mac at [`MAC_OUTPUTS`] with a large, a small and an unknown
     /// GPU-visible memory (printed for the evidence with `--nocapture`).
     #[test]
@@ -1964,7 +2050,7 @@ mod tests {
                 for preset in QualityPreset::ALL {
                     let features = drawn_at(&mut mac, preset);
                     let own = mac.live_is_own();
-                    let total = ledger(&mac.live.quality, &mac.budget_for(&mac.live.profile, mac.live.quality.render_scale, &mac.facts, own).0).total();
+                    let total = ledger(&mac.live.quality, &mac.budget_for(&mac.live.profile, mac.live.quality.render_scale, &mac.facts, own, mac.live_surface()).0).total();
                     let rungs: Vec<_> = mac.live.budget_rungs.iter().map(|rung| rung.wire()).collect();
                     eprintln!(
                         "ROW memory={label} output={output:?} preset={} budget={} MiB ledger={} MiB ao={} degraded={rungs:?}",

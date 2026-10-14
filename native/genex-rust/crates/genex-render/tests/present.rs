@@ -11,11 +11,12 @@
 
 use genex_render::capture::Capture;
 use genex_render::device_loss::Resilient;
-use genex_render::immediate::ImmediateFrame;
+use genex_render::immediate::{ImmediateFrame, Rect2d};
 use genex_render::letterbox::{Viewport, letterbox};
 use genex_render::overlay::OverlayPainter;
 use genex_render::post::fsr::{estimated_cost_ms, gpu_ms};
 use genex_render::scene::{CameraDesc, Material, MeshId, PointLight, Scene, scaled, translation};
+use genex_render::renderer::Renderer;
 use genex_render::{CullPath, Gpu, RenderOptions, WORLD_FORMAT};
 
 /// The world a larger window shows: 2.5 window pixels per world pixel on the 800x450 window, a
@@ -424,4 +425,65 @@ fn metal_the_window_upscale_holds_the_fsr1_budget_at_1080p_1440p_and_4k() {
         eprintln!("window upscale {}x{} -> {}x{}: p50 {p50:.3} ms, p95 {p95:.3} ms (budget {budget:.3} ms)", world.0, world.1, window.0, window.1);
         assert!(p95 <= budget, "{world:?} -> {window:?}: p95 {p95} ms over {budget} ms");
     }
+}
+
+/// Step B (P2-0.9): `Renderer::present` and `present_to_texture` (test helpers, `FrameRenderer::
+/// present_repeat`) go through the window present too. On the port head they kept the nearest
+/// blit, so a 320x180 world in an 800x450 window repeated three columns and rows in five.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_the_renderer_s_own_present_is_filtered_too() {
+    let Some(gpu) = gpu() else { return };
+    let mut renderer = Renderer::new(&gpu, SMALL_WORLD.0, SMALL_WORLD.1).expect("renderer");
+    renderer.render(&gpu, &detailed_scene(), CullPath::Gpu).expect("frame");
+    let window = renderer.present_to_texture(&gpu, LARGE_WINDOW).expect("present");
+    let view = letterbox(LARGE_WINDOW, SMALL_WORLD);
+    let (columns, rows) = duplicate_shares(&window, view);
+    eprintln!("Renderer::present at 2.5x: repeated columns {columns:.3}, rows {rows:.3}");
+    assert!(columns <= DUPLICATE_SHARE_MAX && rows <= DUPLICATE_SHARE_MAX, "nearest-blocky: {columns:.3} / {rows:.3}");
+}
+
+/// Step B (P2-0.9; findings F1/RC-03): a renderer drawn at twice its world (Live at the window's
+/// pixels, a capture asked at twice the size) keeps the immediate 2D layer in the world's own
+/// pixels: a rectangle at world (40, 20) sized 80x40 covers (80, 40) to (240, 120).
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_an_output_twice_the_world_keeps_the_2d_layer_in_world_pixels() {
+    let Some(gpu) = gpu() else { return };
+    let mut resilient = Resilient::new(gpu, SMALL_WORLD.0, SMALL_WORLD.1, RenderOptions::default(), Gpu::headless).expect("resilient renderer");
+    let output = (SMALL_WORLD.0 * 2, SMALL_WORLD.1 * 2);
+    resilient.renderer_mut().renderer_mut().set_output_size(output).expect("output size");
+    let mut frame = ImmediateFrame::from_scene(detailed_scene());
+    frame.rect(Rect2d::new(40.0, 20.0, 80.0, 40.0), [255, 255, 255, 255]);
+    resilient.render(&frame, CullPath::Gpu, None).expect("frame");
+    let renderer = resilient.renderer().renderer();
+    assert_eq!(renderer.logical_size(), SMALL_WORLD, "the world stays the logical size");
+    assert_eq!(renderer.size(), output);
+    let shot = resilient.capture().expect("capture");
+    assert_eq!((shot.width(), shot.height()), output, "drawn at the output size");
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    for (x, y) in [(81, 41), (238, 41), (81, 118), (238, 118), (160, 80)] {
+        assert_eq!(px(&shot, x, y), WHITE, "inside the rectangle at ({x}, {y})");
+    }
+    for (x, y) in [(78, 80), (242, 80), (160, 38), (160, 122), (41, 21)] {
+        assert_ne!(px(&shot, x, y), WHITE, "outside the rectangle at ({x}, {y})");
+    }
+}
+
+/// An output size set after a frame applies from the next one: until then a capture and a present
+/// read the world target at the size it was drawn at, and the next frame draws the new size.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_an_output_size_applies_from_the_next_frame() {
+    let Some(gpu) = gpu() else { return };
+    let mut resilient = drawn(gpu, SMALL_WORLD);
+    let before = resilient.capture().expect("world");
+    resilient.renderer_mut().renderer_mut().set_output_size(LARGE_WINDOW).expect("output size");
+    let still = resilient.capture().expect("the drawn frame");
+    assert_eq!(still.digest(), before.digest(), "the frame already drawn, at its own size");
+    let window = present(&mut resilient, SMALL_WORLD, WORLD_FORMAT);
+    assert_eq!(window.digest(), before.digest(), "presented texel for texel at the drawn size");
+    resilient.render(&ImmediateFrame::from_scene(detailed_scene()), CullPath::Gpu, None).expect("frame");
+    let next = resilient.capture().expect("next frame");
+    assert_eq!((next.width(), next.height()), LARGE_WINDOW, "the next frame at the new size");
 }

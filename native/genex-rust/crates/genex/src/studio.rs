@@ -366,6 +366,10 @@ impl<W: Default + 'static> StudioGame for StudioRun<'_, W> {
     fn capture_provenance(&self) -> Option<Value> {
         provenance_value(&self.presenter.capture_render()?)
     }
+    fn set_capture_size(&mut self, size: Option<[u32; 2]>) -> bool {
+        self.presenter.set_capture_size(size.map(|[width, height]| (width, height)));
+        true
+    }
     fn render_settings(&mut self, change: Option<&RenderSettingsChange>) -> Result<Value, RenderSettingsRefusal> {
         let handle = self.game.render();
         let answer = match change {

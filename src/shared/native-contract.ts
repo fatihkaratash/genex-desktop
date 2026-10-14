@@ -447,6 +447,8 @@ export type GameBoxProblem = (typeof GameBoxProblem)[keyof typeof GameBoxProblem
 export const NATIVE_CAPTURE_FORMAT = "bgra8";
 /** The longest side a capture may have; a reply declaring more is refused before any read. */
 export const NATIVE_CAPTURE_MAX_PX = 4096;
+/** The shortest side a capture may be asked to draw at: the world target's smallest (`MIN_WORLD_PX`). */
+export const NATIVE_CAPTURE_MIN_PX = 64;
 /** The most bytes `readRegularFile` will take for one capture. */
 export const NATIVE_CAPTURE_MAX_BYTES = NATIVE_CAPTURE_MAX_PX * NATIVE_CAPTURE_MAX_PX * 4;
 /** One protocol line, in either direction, may not exceed this. */
@@ -1113,6 +1115,19 @@ export interface NativeCaptureReply {
   render?: CaptureProvenance;
 }
 
+/** A size a capture is asked to draw at, in whole pixels. */
+export interface NativeCaptureSize {
+  width: number;
+  height: number;
+}
+
+/** Whether `value` is a size a capture may be asked to draw at: whole pixels, each side 64..4096. */
+export function isNativeCaptureSize(value: unknown): value is NativeCaptureSize {
+  const side = (n: unknown) =>
+    Number.isSafeInteger(n) && Number(n) >= NATIVE_CAPTURE_MIN_PX && Number(n) <= NATIVE_CAPTURE_MAX_PX;
+  return isRecord(value) && side(value.width) && side(value.height);
+}
+
 /**
  * Per-op arguments: the host builds these, and the seed copy holds the same shapes. Ops absent
  * from the map take no argument.
@@ -1121,7 +1136,8 @@ export interface NativeOpArgs {
   [NativeOp.Seed]: { seed: number };
   [NativeOp.Step]: { ms: number };
   [NativeOp.Input]: { actions: NativeInputAction[] };
-  [NativeOp.Capture]: { camera?: string };
+  /** `size`: draw the pinned capture at that size (a Rust · wgpu game; the 4K/1440p plan). */
+  [NativeOp.Capture]: { camera?: string; size?: NativeCaptureSize };
   [NativeOp.DebugCamera]: { camera: string | null };
   [NativeOp.Demo]: { name: string };
   [NativeOp.Audio]: { muted: boolean };

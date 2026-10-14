@@ -87,7 +87,7 @@ fn asset_root() -> Option<PathBuf> {
 }
 
 impl Presenter {
-    /// Open the GPU headless with the game's declared features and a world target of `size`;
+    /// Open the GPU headless with the game's declared features for a logical world of `size`;
     /// models come from `assets`, then this process's asset folder ([`asset_root`]).
     pub fn open(size: [u32; 2], assets: AssetTable) -> Result<Presenter, RenderError> {
         Presenter::open_with_root(size, assets, asset_root())

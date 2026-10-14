@@ -841,7 +841,8 @@ fn start_readback(shell: &mut Shell) -> Result<Readback, JsValue> {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    // Nearest-texel present at world size with opaque alpha: the world target's own bytes.
+    // The world target at its own size (the window present's texel-for-texel copy) with opaque
+    // alpha: its own bytes.
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     presenter.resilient.present(&view, WORLD_FORMAT, (width, height));
     let gpu = presenter.gpu();

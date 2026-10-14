@@ -64,6 +64,8 @@ const MESSAGE = {
   noNativeRun: "start the open game first (Play, or an agent's run)",
   nativeViewHidden: "show the game's Native view in Live, playing, to capture what it shows",
   frameNotNative: "--frame names a native capture's frame; use it with --surface native",
+  sizeNotNative: "--size draws a native run's pinned capture at that size; use it with --surface native",
+  sizeNotLive: "--size draws the pinned capture; Live's view is the window's own size (drop --frame live)",
 } as const;
 /** JPEG quality of a native surface capture. */
 const NATIVE_CAPTURE_QUALITY = 90;
@@ -352,7 +354,7 @@ export function refuseNativeOperation(op: Operation): void {
 /** What a native operation does to a run's port. */
 export type NativeSurfacePort = Pick<
   NativeGamePort,
-  "studioState" | "input" | "screenshotWithStats" | "consoleEntries"
+  "studioState" | "input" | "screenshotWithStats" | "screenshotAt" | "consoleEntries"
 > & {
   /** The run's `renderSettings` op (a read without `set`). */
   call(op: typeof NativeOp.RenderSettings, arg: { set?: RenderSettingsChange }): Promise<unknown>;
@@ -410,12 +412,18 @@ type NativeCaptureParams = Extract<Operation, { method: typeof DevMethod.Capture
 
 /**
  * A capture of the native run, saved beside the other captures. `pinned` (the default) is the run's
- * own capture op, a JPEG of the pinned capture profile; `live` is the studio window's Native view,
- * the frame the person sees with their preset and panel applied (a PNG).
+ * own capture op, a JPEG of the pinned capture profile, at `size` when one is given (the 4K/1440p
+ * capture plan); `live` is the studio window's Native view, the frame the person sees with their
+ * preset and panel applied (a PNG), at the window's own size.
  */
 async function captureNative(rt: NativeSurfaceRuntime, port: NativeSurfacePort, params: NativeCaptureParams) {
-  if (params.frame === NativeCaptureFrame.Live) return captureLiveNative(rt, params.name);
-  const shot = await port.screenshotWithStats(NATIVE_CAPTURE_QUALITY);
+  if (params.frame === NativeCaptureFrame.Live) {
+    if (params.size !== undefined) throw new DevError(DevErrorCode.InvalidRequest, MESSAGE.sizeNotLive);
+    return captureLiveNative(rt, params.name);
+  }
+  const shot = params.size
+    ? await port.screenshotAt(params.size, NATIVE_CAPTURE_QUALITY)
+    : await port.screenshotWithStats(NATIVE_CAPTURE_QUALITY);
   const file = await rt.diagnostics.destination(`${DevSurface.Native}-${params.name}.jpg`);
   await fsp.writeFile(file, shot.jpeg, { flag: "wx", mode: 0o600 });
   return {
@@ -559,6 +567,7 @@ type CaptureParams = Extract<Operation, { method: typeof DevMethod.Capture }>["p
 
 async function captureSurface(rt: Runtime, params: CaptureParams) {
   if (params.frame !== undefined) throw new DevError(DevErrorCode.InvalidRequest, MESSAGE.frameNotNative);
+  if (params.size !== undefined) throw new DevError(DevErrorCode.InvalidRequest, MESSAGE.sizeNotNative);
   if (params.surface === DevSurface.Game && !gameViewShown(rt.preview))
     throw new DevError(DevErrorCode.MissingPrerequisite, "select Live to capture the current game surface");
   const target = surfaceContents(rt, params.surface);

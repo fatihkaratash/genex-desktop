@@ -54,14 +54,21 @@ renderer enables it. In-pass nodes draw inside one world pass.
 The HDR path draws camera views reverse-Z (`Greater`, cleared to 0) on `Depth32Float`; the
 legacy path keeps standard Z. `GxFrameV2` and `GxPostV2` expose `depth_reversed`.
 
-## Window present
+## Output size and window present
 
-Captures and goldens read the world target at the game's world size. Every shell (a window, the
-web canvas, a phone, Studio's Live ring) shows it through `Resilient::present`, which letterboxes
-it with `letterbox::present`: FSR1 EASU + RCAS into a letterbox larger than the world, a
-Catmull-Rom filter widened to the ratio into a smaller one, and a texel-for-texel copy only at the
-world's own size. Live paints the HUD over the letterbox after that, at the window's pixels
-(`genex::present::Presenter::present`); a capture paints it into the world target (node 24).
+A renderer is made at the game's logical `world_size` (`Renderer::logical_size`: the 2D layer's
+coordinates and the default output) and draws at whatever output it is given
+(`Renderer::set_output_size`; the scale, DRS, TAA, FSR1 and the ledger follow at the next frame).
+Live frames draw at the window's letterbox in its own pixels, capped at the Live class's
+reference resolution's pixels (`letterbox::output_for_window`); captures and goldens draw at the
+world size, or at the size a capture asks for (`capture --size`). Every shell (a window, the web
+canvas, a phone, Studio's Live ring) shows the world target through `Resilient::present`, which
+letterboxes it with `letterbox::present`: a texel-for-texel copy at its own size, FSR1 EASU + RCAS
+into a larger letterbox (a window past the cap), a Catmull-Rom filter widened to the ratio into a
+smaller one. `Renderer::present` and `present_to_texture` go the same way; nothing is stretched
+nearest-texel. Live paints the HUD over the letterbox after that, at the window's pixels
+(`genex::present::Presenter::present`); a capture paints it into the world target at its own
+pixels per point (node 24). The ledger counts the window present's images (`BudgetInput::window`).
 
 ## Extension layouts
 

@@ -129,10 +129,9 @@ use crate::hdri::{HdriImage, PreparedMap};
 use crate::hiz::{HizInput, HizNode};
 use crate::ibl::EnvironmentMaps;
 use crate::layout::{
-    DrawIndexedArgs, FRAME_EFFECT_BOUND, FRAME_ENV_BINDINGS, FRAME_LIGHT_BINDINGS, FRAME_MATERIAL_CLASS_BINDINGS, GpuBlitParams, GpuCullViews, GpuFrame,
+    DrawIndexedArgs, FRAME_EFFECT_BOUND, FRAME_ENV_BINDINGS, FRAME_LIGHT_BINDINGS, FRAME_MATERIAL_CLASS_BINDINGS, GpuCullViews, GpuFrame,
     GpuPassView, MAX_CASCADES, SHADOW_CASCADES,
 };
-use crate::letterbox::letterbox;
 use crate::mesh::{MeshData, Vertex};
 use crate::meshlet::MeshletSet;
 use crate::meshlet_cull::{
@@ -318,7 +317,6 @@ struct Layouts {
     shadow: BindGroupLayout,
     pass: BindGroupLayout,
     lines: BindGroupLayout,
-    blit: BindGroupLayout,
     /// The prepass's custom-geometry row (`prepass_draw`, group 1 binding 1, dynamic offset).
     prepass_draw: BindGroupLayout,
 }
@@ -762,8 +760,9 @@ pub struct Renderer {
     pipelines: Pipelines,
     cull: CullPass,
     skinning: SkinPass,
-    blit_module: ShaderModule,
-    blits: Vec<(TextureFormat, Compiled<RenderPipeline>)>,
+    /// The present into a window's target ([`Renderer::present`]): the world target filtered by
+    /// the ratio, never stretched nearest-texel (renderer pass 2, P2-0.9).
+    window_present: crate::letterbox::present::WindowPresent,
     frame_uniforms: Buffer,
     /// The background triangle's three vertices (clip space, the clear colour as linear light).
     background: Buffer,
@@ -852,6 +851,8 @@ pub struct Renderer {
     /// The camera's reprojection of the frame being drawn (last frame's view_proj × this frame's
     /// inverse; the identity without motion history): TAA's disocclusion test reads it.
     taa_reproject: [f32; 16],
+    /// The game's logical world size: the size the renderer was made at ([`Renderer::logical_size`]).
+    logical: (u32, u32),
     /// The most coverage the frame's transparent meshes write into TAA's reactive mask, each its
     /// material's alpha below it ([`crate::post::taa::transparent_coverage`]), read before the
     /// uploads take the plan's previous-model table.
@@ -937,7 +938,6 @@ pub fn frame_layout_entries() -> Vec<BindGroupLayoutEntry> {
 }
 
 fn layouts(device: &Device) -> Layouts {
-    use wgpu::TextureViewDimension::D2;
     let (vertex, fragment) = (ShaderStages::VERTEX, ShaderStages::FRAGMENT);
     let frame = frame_layout_entries();
     Layouts {
@@ -950,11 +950,6 @@ fn layouts(device: &Device) -> Layouts {
         pass: bind_group_layout(device, "pass view", &[uniform(0, true, vertex)]),
         // The line fragment reads the frame's pre-exposure on the HDR scene.
         lines: bind_group_layout(device, "lines", &[uniform(0, false, vertex | fragment)]),
-        blit: bind_group_layout(
-            device,
-            "blit",
-            &[texture_entry(0, wgpu::TextureSampleType::Float { filterable: false }, D2), uniform(1, false, fragment)],
-        ),
         prepass_draw: bind_group_layout(device, "prepass draw", &[uniform(1, true, vertex)]),
     }
 }
@@ -2415,8 +2410,7 @@ impl Renderer {
             mesh_uploads: 0,
             cull: CullPass::new(&device)?,
             skinning: SkinPass::new(&device)?,
-            blit_module: shader(&device, "blit", crate::shaders::BLIT)?,
-            blits: Vec::new(),
+            window_present: crate::letterbox::present::WindowPresent::default(),
             frame_uniforms: uniform_buffer("frame", size_of::<GpuFrame>() as u64)?,
             background: buffer(&device, "background", (3 * size_of::<LineVertex>()) as u64, BufferUsages::VERTEX | BufferUsages::COPY_DST)?,
             cull_views: uniform_buffer("cull views", size_of::<GpuCullViews>() as u64)?,
@@ -2469,12 +2463,33 @@ impl Renderer {
             device,
             width,
             height,
+            logical: (width, height),
         })
     }
 
-    /// The world target's size (the output: captures, Live, the HUD).
+    /// The world target's size: the output the next frame draws (Live at the window's pixels, a
+    /// capture at the world size or the size it asked for; [`Renderer::set_output_size`]).
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// The game's logical world size, the size the renderer was made at: the immediate 2D layer's
+    /// coordinates and the default output (renderer pass 2, P2-0.9 step B).
+    pub fn logical_size(&self) -> (u32, u32) {
+        self.logical
+    }
+
+    /// Draw the next frames at `size` (each side clamped to 64..=4096, as the world target's):
+    /// the world target, the render size the scale steps from, and the ledger follow at the next
+    /// frame; the logical size and everything drawn in it (the 2D layer) stay. Live sets the
+    /// window's pixels, a capture the world size or the size asked for. Refused, keeping the
+    /// output, when the target would break the texture limits.
+    pub fn set_output_size(&mut self, size: (u32, u32)) -> Result<(), RenderError> {
+        let (width, height) = world_size(size.0, size.1);
+        check_texture(width, height, 4)?;
+        self.width = width;
+        self.height = height;
+        Ok(())
     }
 
     /// Draw the scene at `scale` of the output size from the next frame on (clamped to
@@ -4703,16 +4718,24 @@ impl Renderer {
     /// Read the world target back: BGRA, top row first, no swizzle (native; the web awaits
     /// [`Renderer::capture_async`]).
     pub fn capture(&self, gpu: &Gpu) -> Result<Capture, RenderError> {
-        let (staging, padded) = self.stage_capture(gpu, &self.targets.world, self.width, self.height)?;
-        let data = map_read_blocking(gpu, &staging, u64::from(padded) * u64::from(self.height))?;
-        Capture::from_padded_rows(self.width, self.height, padded, &data)
+        let (width, height) = self.drawn_size();
+        let (staging, padded) = self.stage_capture(gpu, &self.targets.world, width, height)?;
+        let data = map_read_blocking(gpu, &staging, u64::from(padded) * u64::from(height))?;
+        Capture::from_padded_rows(width, height, padded, &data)
+    }
+
+    /// The world target's size as the last frame drew it (an output size set since applies from
+    /// the next frame on).
+    fn drawn_size(&self) -> (u32, u32) {
+        (self.targets.world.width(), self.targets.world.height())
     }
 
     /// [`Renderer::capture`] as a future: the browser maps the readback and wakes it.
     pub async fn capture_async(&self, gpu: &Gpu) -> Result<Capture, RenderError> {
-        let (staging, padded) = self.stage_capture(gpu, &self.targets.world, self.width, self.height)?;
-        let data = map_read(gpu, &staging, u64::from(padded) * u64::from(self.height)).await?;
-        Capture::from_padded_rows(self.width, self.height, padded, &data)
+        let (width, height) = self.drawn_size();
+        let (staging, padded) = self.stage_capture(gpu, &self.targets.world, width, height)?;
+        let data = map_read(gpu, &staging, u64::from(padded) * u64::from(height)).await?;
+        Capture::from_padded_rows(width, height, padded, &data)
     }
 
     fn stage_capture(&self, gpu: &Gpu, texture: &Texture, width: u32, height: u32) -> Result<(Buffer, u32), RenderError> {
@@ -4768,79 +4791,13 @@ impl Renderer {
         self.stats.instances
     }
 
-    fn blit_pipeline(&mut self, format: TextureFormat) -> Compiled<RenderPipeline> {
-        if let Some((_, pipeline)) = self.blits.iter().find(|(f, _)| *f == format) {
-            return pipeline.clone();
-        }
-        let layout = pipeline_layout(&self.device, "blit", &[&self.layouts.blit]);
-        let fragment = if format.is_srgb() { "fs_blit_decode" } else { "fs_blit" };
-        let pipeline = render_pipeline(
-            &self.device,
-            &PipelineSpec {
-                label: "blit",
-                module: &self.blit_module,
-                vertex: "vs_blit",
-                fragment: Some(fragment),
-                buffers: &[],
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                depth: None,
-                format,
-                blend: None,
-                samples: 1,
-                layout: &layout,
-            },
-        );
-        self.blits.push((format, pipeline.clone()));
-        pipeline
-    }
-
-    /// Letterbox the world target into `target` (a window surface's view), bars black.
+    /// Letterbox the world target into `target` (a window surface's view), bars black, through the
+    /// window present: FSR1 EASU + RCAS into a larger letterbox, Catmull-Rom into a smaller one,
+    /// texel for texel into one of the world target's own size ([`crate::letterbox::present`]).
+    /// Shells present through `Resilient::present`, which keeps its own across device recoveries.
     pub fn present(&mut self, gpu: &Gpu, target: &TextureView, format: TextureFormat, window: (u32, u32)) {
-        let pipeline = self.blit_pipeline(format);
-        let view = letterbox(window, (self.width, self.height));
-        let params = GpuBlitParams {
-            viewport: [view.x as f32, view.y as f32, view.width as f32, view.height as f32],
-            world: [self.width as f32, self.height as f32, 0.0, 0.0],
-        };
-        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("blit params"),
-            size: size_of::<GpuBlitParams>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        gpu.queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
-        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit"),
-            layout: &self.layouts.blit,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.targets.world_view) },
-                entry(1, &params_buffer),
-            ],
-        });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("present") });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("present"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            if view.width > 0 && view.height > 0 {
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &group, &[]);
-                pass.set_viewport(view.x as f32, view.y as f32, view.width as f32, view.height as f32, 0.0, 1.0);
-                pass.set_scissor_rect(view.x, view.y, view.width, view.height);
-                pass.draw(0..3, 0..1);
-            }
-        }
-        gpu.queue.submit([encoder.finish()]);
+        let into = crate::letterbox::present::PresentInto { world: (&self.targets.world_view, self.drawn_size()), target, format, window };
+        self.window_present.present(gpu, &into, None);
     }
 
     /// Present into an offscreen `Bgra8Unorm` window of `window` size and read it back (tests,

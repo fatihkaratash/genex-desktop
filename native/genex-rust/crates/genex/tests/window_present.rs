@@ -1,8 +1,8 @@
 //! A game in a window larger than its world (renderer pass 2, P2-0.9 step A; findings F1/RC-03):
 //! the desktop shell's own frames, presented into an offscreen window the way the shell presents
-//! onto a real one (`genex::desktop_shot`). The world is upscaled, never stretched nearest-texel
-//! (which repeated three window columns and rows in five at 2.5x and made every edge a staircase),
-//! and the HUD is painted after the upscale at the window's own pixels.
+//! onto a real one (`genex::desktop_shot`). The world is drawn at the window's own pixels (step B),
+//! never stretched nearest-texel (which repeated three window columns and rows in five at 2.5x and
+//! made every edge a staircase), and the HUD is painted after it at the window's own pixels.
 //!
 //! GPU rows: they skip when the host has no WebGPU-core adapter, and `GENEX_REQUIRE_METAL=1` turns
 //! that skip into a failure. With `GENEX_WINDOW_EVIDENCE_DIR` set to an absolute folder the
@@ -156,6 +156,8 @@ fn metal_the_template_in_a_1080p_window_is_upscaled_not_nearest_blocky() {
     template::wire(&mut game);
     let Some(shot) = shot_of(game, TEMPLATE_WINDOW) else { return };
     write_evidence(&shot, "template-1080p-window.ppm");
+    // Step B (F1/RC-03): rendered at the window's own pixels, not upscaled from 960x540.
+    assert_eq!(shot.output, TEMPLATE_WINDOW, "the template is rendered natively at 1080p");
     let (columns, rows) = duplicate_shares(&shot);
     eprintln!("template at 2x: repeated columns {columns:.3}, rows {rows:.3}");
     assert!(columns <= DUPLICATE_SHARE_MAX && rows <= DUPLICATE_SHARE_MAX, "nearest-blocky: {columns:.3} of columns and {rows:.3} of rows repeat");

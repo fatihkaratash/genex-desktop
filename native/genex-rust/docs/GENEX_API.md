@@ -98,6 +98,11 @@ answer.
 seed), `ctx.world_size`, and `ctx.save(file, bytes)` / `ctx.load(file)` for the game's own save
 folder (a safe relative name; a folder the studio gives each run).
 
+`world_size` is the game's logical size on every screen: touches, the pointer, the HUD's points
+and a capture's default size are measured in it. It is not the resolution: Live frames are drawn
+at the window's own pixels (capped per device class), so a larger window is sharper, never a
+stretched picture, and a capture is drawn at the world size unless a check asks for another.
+
 Edges fire on the first tick after input arrives, so a long step never presses a key twice.
 `Input::key_tap(Key::Space)`, `Input::key_down`, `Input::key_up`, `Input::click_at(x, y)`,
 `Input::pointer`, `Input::look`, `Input::wheel` and `Input::text` build injections;

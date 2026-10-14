@@ -161,6 +161,10 @@ pub struct BudgetInput {
     /// The widest HDR environment map the device keeps (`presets::hdri_map_width`; 0: none
     /// reserved).
     pub environment_map_width: u32,
+    /// The letterbox the window present fills on a Live frame (renderer pass 2, P2-0.9 step B),
+    /// None for a capture or a frame no window shows: its staged image (the HUD paints over it)
+    /// and, when the output is smaller, EASU's image are counted at this size.
+    pub window: Option<(u32, u32)>,
 }
 
 impl BudgetInput {
@@ -177,7 +181,14 @@ impl BudgetInput {
             spot_atlas: false,
             passes: Vec::new(),
             environment_map_width: 0,
+            window: None,
         }
+    }
+
+    /// The input with the window present filling a `letterbox` (a Live frame's), or none.
+    pub fn with_window(mut self, letterbox: Option<(u32, u32)>) -> BudgetInput {
+        self.window = letterbox;
+        self
     }
 
     /// The input with the MSAA colour read after the world pass (`read`) or not.
@@ -408,7 +419,21 @@ pub fn ledger(quality: &Quality, input: &BudgetInput) -> BudgetLedger {
     for (name, bytes) in &input.passes {
         ledger.register(BudgetKind::Pass, name, *bytes);
     }
+    register_window(&mut ledger, input);
     ledger
+}
+
+/// The window present's images ([`crate::letterbox::present`]) at the letterbox's size: the staged
+/// `bgra8` image the HUD is painted over, and EASU's `rgb10a2` image when the output is upscaled
+/// into a larger letterbox (the class's cap below the window's pixels).
+fn register_window(ledger: &mut BudgetLedger, input: &BudgetInput) {
+    let Some((width, height)) = input.window else { return };
+    let pixels = u64::from(width) * u64::from(height);
+    ledger.register(BudgetKind::Target, "window-staged", pixels * TEXEL4);
+    let upscaled = width >= input.output.0 && height >= input.output.1 && (width, height) != input.output;
+    if upscaled {
+        ledger.register(BudgetKind::Target, "window-easu", pixels * TEXEL4);
+    }
 }
 
 /// Scene colour, depth, the prepass, the output and the upscale target.

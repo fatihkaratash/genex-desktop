@@ -25,6 +25,7 @@ import {
   NATIVE_START_MAX_MS,
   NATIVE_STDERR_LINE_MAX_CHARS,
   type NativeCaptureReply,
+  type NativeCaptureSize,
   NativeError,
   NativeEvent,
   type NativeEventMessage,
@@ -39,6 +40,7 @@ import {
   NativeRunMode,
   type NativeRunStatus,
   type NativeTimers,
+  isNativeCaptureSize,
   isNativeProtocolVersion,
   isNativeResult,
   parseNativeEvent,
@@ -80,6 +82,9 @@ const MESSAGE = {
   captureTooLarge: "the capture file is larger than the game declared",
   captureDigest: "the capture's bytes are not the ones the game declared",
   captureFolder: "the capture is not a file in the run's own captures folder",
+  captureSizeRefused: "a capture size is whole pixels, each side 64 to 4096",
+  captureSizeIgnored: (asked: NativeCaptureSize, drawn: NativeCaptureSize) =>
+    `the game drew ${drawn.width}x${drawn.height}, not the ${asked.width}x${asked.height} asked for: it captures at its world size only`,
   noRun: "this native lease has no game loaded",
   repeated: (count: number, line: string) => `(repeated ${count} times) ${line}`,
   released: "this native lease was given back",
@@ -530,8 +535,26 @@ export class NativeGamePort implements PreviewPort {
    * another build's or another preset's.
    */
   async screenshotWithStats(quality = DEFAULT_CAPTURE_QUALITY): Promise<NativeCapture> {
+    return this.#capture({}, quality);
+  }
+
+  /**
+   * One capture drawn at `size` (renderer pass 2, the 4K/1440p capture plan: `capture --size`), as
+   * {@link NativeGamePort.screenshotWithStats}. A size outside whole pixels in 64..4096 is refused
+   * `unsupported` before anything is sent; a game that answers another size (a C++ game draws its
+   * world size only) is refused `unsupported` before its file is read.
+   */
+  async screenshotAt(size: NativeCaptureSize, quality = DEFAULT_CAPTURE_QUALITY): Promise<NativeCapture> {
+    if (!isNativeCaptureSize(size)) throw new NativeError(NativeRefusal.Unsupported, MESSAGE.captureSizeRefused);
+    return this.#capture({ size: { width: size.width, height: size.height } }, quality);
+  }
+
+  async #capture(arg: NativeOpArgs[typeof NativeOp.Capture], quality: number): Promise<NativeCapture> {
     const camera = this.#camera;
-    const reply = await this.call(NativeOp.Capture, {});
+    const reply = await this.call(NativeOp.Capture, arg);
+    const asked = arg.size;
+    if (asked && (reply.width !== asked.width || reply.height !== asked.height))
+      throw new NativeError(NativeRefusal.Unsupported, MESSAGE.captureSizeIgnored(asked, reply));
     const bgra = await this.#readCapture(reply);
     const stats = computePixelStats(bgra, reply.width, reply.height);
     const jpeg = await this.#io.encodeJpeg(bgra, reply.width, reply.height, quality);
@@ -1078,6 +1101,10 @@ export class NativeLeasePort implements PreviewPort {
 
   screenshotWithStats(quality?: number): Promise<NativeCapture> {
     return this.#port().screenshotWithStats(quality);
+  }
+
+  screenshotAt(size: NativeCaptureSize, quality?: number): Promise<NativeCapture> {
+    return this.#port().screenshotAt(size, quality);
   }
 
   evaluate(): Promise<unknown> {

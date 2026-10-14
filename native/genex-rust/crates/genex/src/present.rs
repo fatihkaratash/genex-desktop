@@ -106,7 +106,7 @@ use genex_render::immediate::HUD_TAG;
 use genex_render::mesh::{CUBE_TRIANGLES, GlbMaterial, GlbModel, MeshData, SPHERE_TRIANGLES, decode_image};
 use genex_render::meshlet::MeshletSet;
 use genex_render::motion::DrawId;
-use genex_render::letterbox::letterbox;
+use genex_render::letterbox::{letterbox, output_for_window};
 use genex_render::overlay::OverlayPainter;
 use genex_render::lights::SpotLight;
 use genex_render::scene::{CameraDesc, Lighting, Material, MeshId, PointLight, Scene, scaled};
@@ -120,9 +120,10 @@ use genex_render::{CullPath, Gpu, GpuCounters, ImmediateFrame, RenderCode, Rende
 /// The renderer's planes for a facade camera, which carries none.
 const NEAR_PLANE: f32 = 0.1;
 const FAR_PLANE: f32 = 1000.0;
-/// A capture paints the HUD into the world target at one device pixel per world pixel (captures
-/// are taken at the logical world size); Live paints it over the window after the upscale, at the
-/// letterbox's own ratio ([`Presenter::present`]).
+/// Device pixels per HUD point before a window is known. A capture paints the HUD into the world
+/// target at its own size's pixels per point (1 at the logical world size, 2 for a capture asked
+/// at twice it); Live paints it over the window after the upscale, at the letterbox's own ratio
+/// ([`Presenter::present`]).
 pub const WORLD_PIXELS_PER_POINT: f32 = 1.0;
 /// The native-enhanced features a game declares, as the lane compiles them in: wire names
 /// (`subgroup`, `ray-query`, ...) joined by commas. Absent or empty: WebGPU core only. The web is
@@ -531,6 +532,13 @@ pub struct Presenter {
     /// Device pixels per HUD point of the last window present: what the next Live HUD is
     /// tessellated at.
     window_pixels_per_point: f32,
+    /// The window the presents go to, in pixels, once a shell said or presented
+    /// ([`Presenter::set_window_size`]): Live frames draw at its letterbox's pixels.
+    window: Option<(u32, u32)>,
+    /// The size captures draw at when one was asked for ([`Presenter::set_capture_size`]).
+    capture_size: Option<(u32, u32)>,
+    /// The output size the last draw drew at (Live's window pixels or a capture's size).
+    last_output: Option<(u32, u32)>,
     source: Box<dyn ModelSource>,
     assets: AssetCache,
     /// Why the last frame was not drawn, until one is.
@@ -661,9 +669,10 @@ fn paints(paint: &HudPaint) -> bool {
 }
 
 impl Presenter {
-    /// A presenter on `gpu` (opened with the game's `declared` native-enhanced features) with a
-    /// world target of `size`; `open` re-opens a device after a loss, models come from `source`
-    /// and refusals go to `log`.
+    /// A presenter on `gpu` (opened with the game's `declared` native-enhanced features) for a game
+    /// whose logical world is `size` (Live frames then draw at the window's pixels, captures at the
+    /// world size or the size asked for); `open` re-opens a device after a loss, models come from
+    /// `source` and refusals go to `log`.
     pub fn with_gpu(
         gpu: Gpu,
         size: [u32; 2],
@@ -684,6 +693,9 @@ impl Presenter {
             hud_history: TexturesDelta::default(),
             live_hud: None,
             window_pixels_per_point: WORLD_PIXELS_PER_POINT,
+            window: None,
+            capture_size: None,
+            last_output: None,
             source,
             assets: AssetCache::default(),
             failed: None,
@@ -779,8 +791,9 @@ impl Presenter {
     /// Whether the last draw used what a Live frame uses now (so a capture left the Live picture
     /// in the world target, and no Live redraw is needed after it).
     pub fn last_draw_is_live(&self) -> bool {
-        let live = self.render.as_ref().map(|handle| handle.borrow().live_frame());
-        self.last_choice.is_some() && live == self.last_choice
+        let Some(handle) = self.render.as_ref() else { return false };
+        let (live, output) = (handle.borrow().live_frame(), handle.borrow().live_output());
+        self.last_choice == Some(live) && self.last_output == Some(output)
     }
 
     /// Attach `runtime`'s render settings, probing them with this device's facts when no shell
@@ -1018,11 +1031,53 @@ impl Presenter {
     /// frame says so (every present says so again), so even that frame's HUD lands on the
     /// window's pixels.
     pub fn set_window_size(&mut self, window: (u32, u32)) {
-        let world = self.resilient.renderer().renderer().size();
+        let world = self.resilient.renderer().renderer().logical_size();
         let view = letterbox(window, world);
         if view.width > 0 && world.0 > 0 {
             self.window_pixels_per_point = view.width as f32 / world.0 as f32;
+            self.window = Some(window);
         }
+    }
+
+    /// Draw the next captures at `size` (`capture --size`, the 4K/1440p plan; each side 64..=4096),
+    /// or at the world size again (None). The HUD is painted at that size's pixels per point.
+    pub fn set_capture_size(&mut self, size: Option<(u32, u32)>) {
+        self.capture_size = size.map(|(width, height)| genex_render::caps::world_size(width, height));
+    }
+
+    /// The size Live frames draw at now (renderer pass 2, P2-0.9 step B; findings F1/RC-03): the
+    /// window's letterbox in its own pixels, capped at the Live class's reference resolution's
+    /// pixels (`presets::reference_resolution`), or the world size before a window is known. The
+    /// window present copies it texel for texel, or upscales it past the cap.
+    fn live_output(&self, handle: &RenderHandle) -> (u32, u32) {
+        let world = self.resilient.renderer().renderer().logical_size();
+        let Some(window) = self.window else { return world };
+        let (cap_w, cap_h) = genex_render::presets::reference_resolution(handle.borrow().live_class());
+        output_for_window(world, window, u64::from(cap_w) * u64::from(cap_h))
+    }
+
+    /// Hand the settings this draw's output size (Live's window pixels, or the capture's size)
+    /// before they are asked for the frame's quality, so the budget is fitted at it; answers it.
+    fn frame_output(&mut self, handle: &RenderHandle) -> (u32, u32) {
+        handle.borrow_mut().set_capture_size(self.capture_size);
+        if self.capturing {
+            return handle.borrow().capture_output();
+        }
+        let output = self.live_output(handle);
+        let world = self.resilient.renderer().renderer().logical_size();
+        let window = self.window.map(|window| letterbox(window, world)).map(|view| (view.width, view.height));
+        handle.borrow_mut().set_live_output(output, window);
+        output
+    }
+
+    /// Draw the next frame at `output`: a refusal (a target over the texture limits) keeps the
+    /// size the renderer had and is logged.
+    fn set_output(&mut self, output: (u32, u32)) {
+        let renderer = self.resilient.renderer_mut().renderer_mut();
+        if let Err(error) = renderer.set_output_size(output) {
+            (self.log)(&format!("output size {}x{} refused: {error}", output.0, output.1));
+        }
+        self.last_output = Some(self.resilient.renderer().renderer().size());
     }
 
     /// Keep a Live frame's HUD primitives for the window presents (a capture keeps none); answers
@@ -1073,9 +1128,14 @@ impl Presenter {
     pub fn draw_view<W: Default + 'static>(&mut self, runtime: &mut Runtime<W>, view: View<'_>) -> Option<Result<Drawn, RenderError>> {
         let camera = runtime.camera(view)?;
         let frame = runtime.frame(view)?;
-        let pixels_per_point = if self.capturing { WORLD_PIXELS_PER_POINT } else { self.window_pixels_per_point };
-        let mut hud = runtime.hud_paint(pixels_per_point);
         let handle = self.attach(runtime);
+        let output = self.frame_output(&handle);
+        let world = self.resilient.renderer().renderer().logical_size();
+        // A capture paints its HUD into the world target at the capture's own pixels per point (1 at
+        // the world size); Live paints it over the window after the upscale.
+        let capture_ppp = output.0 as f32 / world.0.max(1) as f32;
+        let pixels_per_point = if self.capturing { capture_ppp } else { self.window_pixels_per_point };
+        let mut hud = runtime.hud_paint(pixels_per_point);
         let live = !self.capturing;
         // The frame's Level-2 extensions first: a v1 material it brings keeps it on the legacy LDR
         // scene, which `apply` reads to choose the anti-aliasing, so the first frame that draws one
@@ -1094,6 +1154,8 @@ impl Presenter {
                 self.apply(&handle, choice, live);
             }
         }
+        // After any rebuild `apply` made: a new renderer starts at the world size.
+        self.set_output(output);
         self.keep_warm_frame = live && self.wants_warm(&handle, held.is_some());
         let timing = live.then(|| self.begin_live());
         let drawn = crate::gpu::host::with_passes(runtime, |passes, tick| self.draw(&frame, &camera, passes, tick, &mut hud));

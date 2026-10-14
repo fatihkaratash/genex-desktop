@@ -540,7 +540,9 @@ impl QuadPass {
         }
         let Some(vertices) = &self.vertices else { return Ok(0) };
         gpu.queue.write_buffer(vertices, 0, bytes);
-        let view_proj = Camera2d::SCREEN.view_proj(renderer.size());
+        // 2D coordinates are the game's logical world pixels at any output size (renderer pass 2,
+        // P2-0.9 step B): a Live frame drawn at the window's pixels scales them, never moves them.
+        let view_proj = Camera2d::SCREEN.view_proj(renderer.logical_size());
         gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&GpuQuad2d { view_proj }));
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("quads"),
@@ -1316,7 +1318,7 @@ impl FrameRenderer {
     }
 
     /// Show the last world target again on a repeat frame: letterbox it into `target` (a window
-    /// surface's view of `format`, `window` pixels), a blit with no graph node.
+    /// surface's view of `format`, `window` pixels) through the window present, no graph node.
     pub fn present_repeat(&mut self, gpu: &Gpu, target: &wgpu::TextureView, format: wgpu::TextureFormat, window: (u32, u32)) {
         self.renderer.present(gpu, target, format, window);
     }

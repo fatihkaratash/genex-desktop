@@ -272,6 +272,9 @@ pub struct DesktopShot {
     pub state: Value,
     /// The offscreen window's size, in pixels.
     pub window: [u32; 2],
+    /// The size the last frame was rendered at: the window's letterbox in its own pixels, capped
+    /// by the class (renderer pass 2, P2-0.9 step B), not the world size.
+    pub output: [u32; 2],
     /// The window's pixels, BGRA, rows top to bottom, the world letterboxed with black bars.
     pub bgra: Vec<u8>,
     /// Frames the shell ran.
@@ -324,7 +327,8 @@ pub fn desktop_shot<W: Default + 'static>(
     let (mut game, exit) = shell.map_err(DesktopShotError::Shell)?;
     let capture = game.present_offscreen(window).map_err(DesktopShotError::Readback)?;
     let bgra = capture.bgra().to_vec();
-    Ok(DesktopShot { state: game.runtime.state(), window, bgra, frames: exit.frames, drawn: game.drawn })
+    let (width, height) = game.presenter.resilient.renderer().renderer().size();
+    Ok(DesktopShot { state: game.runtime.state(), window, output: [width, height], bgra, frames: exit.frames, drawn: game.drawn })
 }
 
 /// GPU rows: the shell's headless mode on the host GPU (Metal on the Mac). Run with

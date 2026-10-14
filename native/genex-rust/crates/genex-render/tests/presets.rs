@@ -1316,3 +1316,45 @@ fn a_class_override_sets_taas_knobs_on_its_class() {
     let other = profile(&facts, class("desktop-mid"), &game, None);
     assert_eq!(other.quality.taa, TaaQuality::DEFAULT, "only that class");
 }
+
+/// Renderer pass 2, P2-0.9 step B (F1/RC-03): a Live frame's window present holds a staged image
+/// at the letterbox's size (the HUD is painted over it) and, when the class's cap keeps the
+/// output below the letterbox, EASU's image too; the ledger counts both. A capture (no window)
+/// counts neither.
+#[test]
+fn the_ledger_counts_the_window_present_s_images_at_the_letterbox_size() {
+    let ultra = class("desktop-ultra");
+    let quality = preset_quality(QualityPreset::Ultra, ultra);
+    let base = input(&quality, ultra, DESKTOP_REFERENCE, false);
+    let capture = total(&quality, &base);
+    let native = total(&quality, &base.clone().with_window(Some(DESKTOP_REFERENCE)));
+    assert_eq!(native - capture, 2560 * 1440 * 4, "the staged image at the output's own size");
+    let upscaled = total(&quality, &base.with_window(Some((3840, 2160))));
+    assert_eq!(upscaled - capture, 3840 * 2160 * 4 * 2, "the staged image and EASU's at 4K");
+}
+
+/// The 4K/1440p plan's ledger rows (acceptance of P2-0.9): ultra drawn at 3840x2160 (a 4K
+/// capture) fits the Mac's 2 GiB budget without a degrade step, and so does Live on a 4K window
+/// (the output capped at the class's 2560x1440 reference, the window present's images at 4K);
+/// high at 1440p fits 1 GiB.
+#[test]
+fn ultra_at_4k_fits_two_gib_and_high_at_1440p_fits_one() {
+    const GIB: u64 = 1024 * MIB;
+    let ultra = class("desktop-ultra");
+    let quality = preset_quality(QualityPreset::Ultra, ultra);
+    let at_4k = input(&quality, ultra, (3840, 2160), false).with_environment_map(hdri_map_width(ultra));
+    let live_4k = input(&quality, ultra, DESKTOP_REFERENCE, false).with_environment_map(hdri_map_width(ultra)).with_window(Some((3840, 2160)));
+    for (row, at) in [("4K capture", &at_4k), ("Live on a 4K window", &live_4k)] {
+        let bytes = total(&quality, at);
+        eprintln!("ROW ultra {row}: {} MiB of {} MiB", bytes / MIB, 2 * GIB / MIB);
+        assert!(bytes <= 2 * GIB, "ultra {row}: {bytes} over 2 GiB");
+        let fitted = fit(&quality, at, 2 * GIB, DegradeMode::Boot);
+        assert!(fitted.steps.is_empty(), "ultra {row} steps down: {:?}", fitted.steps);
+    }
+    let high = class("desktop-high");
+    let quality = preset_quality(QualityPreset::High, high);
+    let at_1440p = input(&quality, high, (2560, 1440), false).with_environment_map(hdri_map_width(high)).with_window(Some((2560, 1440)));
+    let bytes = total(&quality, &at_1440p);
+    eprintln!("ROW high 1440p: {} MiB of {} MiB", bytes / MIB, GIB / MIB);
+    assert!(bytes <= GIB, "high 1440p: {bytes} over 1 GiB");
+}

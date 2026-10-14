@@ -1290,6 +1290,64 @@ describe("where a capture came from", () => {
     assert.equal((await shot(r, pixels)).provenance.camera, "default");
   });
 
+  // Renderer pass 2, P2-0.9 step B (the 4K/1440p capture plan): `capture --size` asks the game for
+  // its pinned capture at that size; the saved frame's `outputSize` is the size read back.
+  it("screenshotAt sends the size asked for and keeps the size read back as outputSize", async () => {
+    const r = await rig({ io: { runId: "0123456789ab", build } });
+    const pixels = bgra([4, 5, 6, 255], 64 * 64);
+    const taking = r.port.screenshotAt({ width: 64, height: 64 });
+    const request = await lastRequest(r);
+    assert.equal(request.op, NativeOp.Capture);
+    assert.deepEqual(request.arg, { size: { width: 64, height: 64 } });
+    await mkdir(path.join(r.stateDir, "captures"), { recursive: true });
+    await writeFile(path.join(r.stateDir, "captures", "7.bgra"), pixels);
+    r.game.send({
+      id: request.id,
+      ok: true,
+      op: "capture",
+      result: { seq: 7, width: 64, height: 64, format: "bgra8", digest: fnv1a64Hex(pixels) },
+    });
+    assert.deepEqual((await taking).provenance.outputSize, { width: 64, height: 64 });
+  });
+
+  it("a capture size outside whole pixels in 64..4096 is refused before anything is sent", async () => {
+    const hostile = [
+      { width: 63, height: 64 },
+      { width: 64, height: NATIVE_CAPTURE_MAX_PX + 1 },
+      { width: 64.5, height: 64 },
+      { width: -64, height: 64 },
+      { width: Number.NaN, height: 64 },
+      { width: Number.POSITIVE_INFINITY, height: 64 },
+      { width: 64 },
+      { width: "64", height: 64 },
+    ];
+    for (const size of hostile) {
+      const r = await rig();
+      // The hostile shapes are the point: a caller's size is not trusted to be the declared type.
+      const refusal = await refusalOf(r.port.screenshotAt(size as never));
+      assert.equal(refusal, NativeRefusal.Unsupported, JSON.stringify(size));
+      await r.clock.settle();
+      assert.equal(r.game.requests.length, 0, `${JSON.stringify(size)}: nothing sent`);
+    }
+  });
+
+  it("a game that draws another size than the one asked for is refused and nothing is encoded", async () => {
+    const r = await rig();
+    const pixels = bgra([4, 5, 6, 255], 4);
+    const taking = refusalOf(r.port.screenshotAt({ width: 128, height: 72 }));
+    const request = await lastRequest(r);
+    await mkdir(path.join(r.stateDir, "captures"), { recursive: true });
+    await writeFile(path.join(r.stateDir, "captures", "7.bgra"), pixels);
+    r.game.send({
+      id: request.id,
+      ok: true,
+      op: "capture",
+      result: { seq: 7, width: 2, height: 2, format: "bgra8", digest: fnv1a64Hex(pixels) },
+    });
+    assert.equal(await taking, NativeRefusal.Unsupported, "a C++ game draws its world size only");
+    assert.deepEqual(r.encoded, [], "nothing was encoded");
+  });
+
   it("captureSurface hands the port's provenance on unchanged, as the harness's screenshot saves it", async () => {
     const r = await rig({ io: { runId: "0123456789ab", build } });
     const pixels = bgra([4, 5, 6, 255], 4);
