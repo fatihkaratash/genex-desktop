@@ -261,7 +261,10 @@ registered for a moment and the facts it guards, reading typed fields only. `web
 needs to load, by `game.validate`'s `missing` names, in the words it always used (`loopRunRefusal`,
 which still refuses an engine export of any kind); a Godot, Unreal or plugin project is never refused
 for a missing `index.html`; a chat-launched web Loop's start asks `game.validate` itself, so a kept
-older launch that hands no `missing` is refused all the same. The web method is a skill for web
+older launch that hands no `missing` is refused all the same. A C++ · raylib or Rust · wgpu game has no
+page for `missing` to name: a chat-launched Loop on one is refused by `game.validate`'s typed `codes`
+instead (a missing `CMakeLists.txt`, `genex.toml` or entry, or a studio.json whose stack its files
+contradict), and any game a newer Genex made by `kind-unsupported` (`loopRunRefusal`'s `codes`). The web method is a skill for web
 games: a seed skill names the facts it serves (`facts: web-game`; one naming none, a copy kept from
 before, is the web method's), and a Loop's brief reads only those whose facts reach the folder
 (`loop/loop-skills.ts`): a web Loop's playbook is the same text as before, and an open Loop's brief

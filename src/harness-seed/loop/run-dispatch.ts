@@ -44,7 +44,7 @@ import {
   servesRust,
   stacksServed,
 } from "./native-contract.ts";
-import { type NativeDescriptor, nativeNightRefusal } from "./native-loop.ts";
+import { type NativeDescriptor, nativeNightRefusal, refusingProblems } from "./native-loop.ts";
 // The parts a C++ · raylib run runs (`NATIVE_PARTS`): each says it serves one (`SERVES_NATIVE`).
 import * as gauntletParts from "./gauntlet.ts";
 import * as autopilotParts from "./autopilot.ts";
@@ -77,7 +77,7 @@ import * as nativeEvidenceParts from "./native-evidence.ts";
 import * as nativeReviewParts from "./native-review.ts";
 import * as playScriptParts from "./play-script.ts";
 import type { AnyRecord, ForwardedCall, HarnessCtx, HarnessEvent, Host, HostCall, Run } from "../types/harness.d.ts";
-import type { EngineDescriptor, GameProject } from "../types/host-api.d.ts";
+import type { EngineDescriptor, GameProject, GameValidationCode } from "../types/host-api.d.ts";
 
 /**
  * This start reads a reopened run's inbox from its ask (`RunStart.reopen`), and closes a crashed
@@ -188,6 +188,8 @@ const MESSAGE = {
   engineExport: (name: string | undefined) =>
     `${name} was exported from a game engine, so the studio cannot edit or judge it — it can only open it, play it and take screenshots. Open the folder with the project's own scenes and scripts, and start the build there.`,
   stoppedBeforeStart: "Stopped before the build started — nothing was built.",
+  notReady: (name: string, problems: readonly string[]) =>
+    `${name} is not ready for a run: ${problems.join("; ")}. Fix that first (a chat build can), then start again.`,
   rustPartsMissing: (name: string, modules: readonly string[]) =>
     `${name} is a Rust game, and ${modules.length === 1 ? "a part" : "parts"} of the studio's own harness it would run ${modules.length === 1 ? "was" : "were"} kept from before Rust games (${modules.join(", ")}), so it cannot build or judge one. Re-take the seed copy of ${modules.length === 1 ? "that module" : "those modules"}, then start again.`,
 } as const;
@@ -885,6 +887,16 @@ export async function resumeRun(studio: Studio, threadId: string, runId: string)
 }
 
 /**
+ * The `game.validate` codes that refuse a run on any game, a three.js one included: a game a newer
+ * Genex made (read-only here), and a studio.json whose stack its files contradict.
+ */
+const FolderRefusalCode = {
+  KindUnsupported: "kind-unsupported",
+  StackContradictsKind: "stack-contradicts-kind",
+} as const satisfies Record<string, GameValidationCode>;
+const FOLDER_REFUSAL_CODES: readonly string[] = Object.values(FolderRefusalCode);
+
+/**
  * Why this folder cannot have a run spent on it — a sentence for the chat, or null to launch.
  *
  * Two refusals, and both are about the folder rather than the model. An engine export is already
@@ -899,18 +911,45 @@ export async function resumeRun(studio: Studio, threadId: string, runId: string)
  *
  * A C++ · raylib run is refused as well when a part it runs predates native support (`servesNative`
  * false), and a Rust · wgpu run when one predates Rust games (`servesRust` false); absent, the
- * caller checked nothing.
+ * caller checked nothing. A compiled game has no page whose files `missing` could name: its folder
+ * is read by `game.validate`'s typed `codes` instead (`codedRefusal`); a caller that hands none
+ * checked nothing.
  */
 export function loopRunRefusal(
   descriptor: (FactsOfDescriptor & NativeDescriptor) | null | undefined,
-  _problems: readonly string[] | null | undefined,
+  problems: readonly string[] | null | undefined,
   missing?: unknown,
-  { servesNative = true, servesRust = true }: { servesNative?: boolean; servesRust?: boolean } = {},
+  {
+    servesNative = true,
+    servesRust = true,
+    codes,
+  }: { servesNative?: boolean; servesRust?: boolean; codes?: readonly string[] | null } = {},
 ): string | null {
   if (descriptor?.shape?.kind === ProjectKind.EngineExport) return MESSAGE.engineExport(descriptor.name);
   const native = nativeNightRefusal(descriptor, servesNative) ?? rustNightRefusal(descriptor, servesRust);
   if (native) return native.message;
+  const coded = codedRefusal(descriptor, problems ?? [], codes);
+  if (coded) return coded;
   return fireGates(HookEvent.RunPrepare, { game: descriptor, missing }).blocked?.reason ?? null;
+}
+
+/**
+ * Why the folder leaves a run nothing to build on, read by `game.validate`'s typed `codes`
+ * (native-loop.ts `refusingProblems`), never by the problems' words: every refusing code for a
+ * C++ · raylib or Rust · wgpu game (a missing `CMakeLists.txt`, `genex.toml` or entry), and for a
+ * three.js game only `FOLDER_REFUSAL_CODES`, since its missing files are the `web.ready` gate's, by
+ * name. Null when nothing refuses, and for a caller that handed no codes.
+ */
+function codedRefusal(
+  descriptor: NativeDescriptor | null | undefined,
+  problems: readonly string[],
+  codes: readonly string[] | null | undefined,
+): string | null {
+  if (!Array.isArray(codes)) return null;
+  const compiled = stackOfKind(descriptor?.shape?.kind) !== GameStack.ThreeJs;
+  if (!compiled && !codes.some((code) => FOLDER_REFUSAL_CODES.includes(code))) return null;
+  const named = refusingProblems(problems, codes);
+  return named.length ? MESSAGE.notReady(descriptor?.name ?? "this game", named) : null;
 }
 
 /**

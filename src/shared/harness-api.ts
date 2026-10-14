@@ -641,8 +641,9 @@ export interface HarnessHostApi {
   "game.recents": { params: void; result: ProjectRecent[] };
   /**
    * Make a game's folder: Genex's bookkeeping only, or with the starter `kind` names (`"web"`, or
-   * an older caller's `"studio-template"`). `kind: "rust-wgpu"` with `targets` names the Rust · wgpu
-   * template, which only a development build scaffolds (`stack-gated` elsewhere); `"raylib-cpp"` is
+   * an older caller's `"studio-template"`). `kind: "rust-wgpu"` with `targets` scaffolds the Rust ·
+   * wgpu template for those destinations where Rust creation is open (every developer build, and a
+   * release build on a host the Rust lane runs on; `stack-gated` elsewhere); `"raylib-cpp"` is
    * refused `raylib-creation-retired`; any other kind is refused.
    */
   "game.scaffold": {

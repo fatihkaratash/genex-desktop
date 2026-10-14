@@ -62,7 +62,6 @@ import { diedEarly, OptimizationOutcome, StopCode, stopWith } from "./outcomes.t
 import { baseBrief, contractWiringAsk } from "./prompts-build.ts";
 import { integratorBrief } from "./autopilot-prompts.ts";
 import { HostMethod } from "./host-methods.ts";
-import { ProjectStarter } from "./folder-facts.ts";
 import {
   appendRun as appendRunEvent,
   EventKind,
@@ -78,7 +77,8 @@ import { clip, CLIP_DETAIL, CLIP_REASON } from "./text.ts";
 import { MINUTE_MS, SECOND_MS, sleep } from "./time.ts";
 import { isPlainRecord } from "./json.ts";
 import { acquireFor, GameStack } from "./native-contract.ts";
-import { nightStack, scaffoldFor, templateShapeFor, wiringFor } from "./native-loop.ts";
+import { nightStack, templateShapeFor, wiringFor } from "./native-loop.ts";
+import { runScaffoldAsk } from "./run-scaffold.ts";
 import { stackPlannerLines } from "./rust-briefs.ts";
 import { noteHudUpgrade } from "./held-hud.ts";
 import { keptContractWords } from "./contract-kept.ts";
@@ -1407,12 +1407,10 @@ async function prepareFolder(pipeline: Pipeline): Promise<void> {
   // A game the library already lists keeps its own folder and stack (a raylib run resumed after the
   // update); a new one is the compiled template its destinations ask for, else the web starter.
   const listed = await ctx.call(HostMethod.GameList, {}).catch(() => []);
-  const asked = listed.some((g: AnyRecord) => g.name === run.project) ? {} : scaffoldFor(run.targets);
   await ctx.call(HostMethod.GameScaffold, {
     name: run.project,
     title: run.project,
-    kind: ProjectStarter.Web,
-    ...asked,
+    ...runScaffoldAsk(listed, run.project, run.targets),
   });
   // A game scaffolded before the v2 contract gets the current studio.js (its old copy kept
   // beside it), so scene checks and eye cameras exist from the first iteration.

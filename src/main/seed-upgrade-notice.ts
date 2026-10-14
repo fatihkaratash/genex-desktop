@@ -76,7 +76,7 @@ const CALL_NOTES: Readonly<Record<string, string>> = {
   "loop/facet/phases/build.ts":
     "Your edited loop/facet/phases/build.ts was kept, but a builder delegates without its worker grant (worker: loop.options.worker), or reads a chat with no room for another writer as a broken build (withWorkerRoom, loop/workers/room.ts). Copy both from the shipped file.",
   "loop/director/setup.ts":
-    "Your edited loop/director/setup.ts was kept, but a web scaffold needs kind: ProjectStarter.Web, sessions Genex's identity (runIdentity), the start workerRecords: true, the run hookEvents and the capped clock (capClock), and a Loop in place starts there (prepareOpenLoopRun, SERVES_OPEN_LOOP).",
+    "Your edited loop/director/setup.ts was kept, but a web scaffold asks through runScaffoldAsk, sessions Genex's identity (runIdentity), the start workerRecords: true, the run hookEvents and the capped clock (capClock), and a Loop in place starts there (prepareOpenLoopRun, SERVES_OPEN_LOOP).",
   "loop/facet/phases/brief.ts":
     "Your edited loop/facet/phases/brief.ts was kept, but a director's facet worker does not open its brief with Genex's identity (withIdentity, loop/workers/identity.ts). Copy it from the shipped file.",
   "loop/director/wake.ts":
@@ -115,9 +115,14 @@ const SCAFFOLDS_WEB = new Set([
   "loop/gauntlet.ts",
 ]);
 
+/** The runners whose scaffold asks through `runScaffoldAsk` (loop/run-scaffold.ts) in the shipped copy. */
+const SCAFFOLDS_THROUGH_ASK = new Set(["loop/autopilot.ts", "loop/director/setup.ts", "loop/gauntlet.ts"]);
+
 /** The note for a kept file whose game.scaffold call names no kind: the host now makes that game empty. */
 const SCAFFOLD_KIND_NOTE = (file: string) =>
-  `Your edited ${file} was kept, but game.scaffold without kind now makes an empty folder with no kind. Send kind: ProjectStarter.Web (loop/folder-facts.ts) where a web game is meant, as the shipped copy does.`;
+  SCAFFOLDS_THROUGH_ASK.has(file)
+    ? `Your edited ${file} was kept, but game.scaffold without kind now makes an empty folder with no kind. Ask through runScaffoldAsk (loop/run-scaffold.ts), as the shipped copy does: a web game gets kind: ProjectStarter.Web.`
+    : `Your edited ${file} was kept, but game.scaffold without kind now makes an empty folder with no kind. Send kind: ProjectStarter.Web (loop/folder-facts.ts) where a web game is meant, as the shipped copy does.`;
 
 /** The notes the agent and the person read about kept files, and the error for a note about nothing. */
 const MESSAGE = {
@@ -127,7 +132,7 @@ const MESSAGE = {
     (SCAFFOLDS_WEB.has(file) ? SCAFFOLD_KIND_NOTE(file) : undefined) ??
     `Your edited ${file} was kept, but it calls the host the older way. Compare its host calls with the shipped copy and carry the new ones over.`,
   keptPreRust: (modules: readonly string[]) =>
-    `A Rust night will not run on harness modules edited before Rust games: ${modules.join(", ")}. Re-take the seed copy of each; the edit is kept as a patch to carry over.`,
+    `A Loop on a Rust game will not start on harness modules edited before Rust games: ${modules.join(", ")}. Re-take the seed copy of each; the edit is kept as a patch to carry over.`,
   retaken: (rel: string, patchFile: string) =>
     `The seed copy of ${rel} was re-taken for Rust games, so your edit there no longer runs. Carry over what you still need from its patch: ${patchFile}`,
   moveNote: (from: string, where: readonly string[]) =>

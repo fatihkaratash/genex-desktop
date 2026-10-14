@@ -876,10 +876,13 @@ export async function launchFromIntake(
   // among them) refuse it first, before a web game's checks could ask for web files in the folder.
   const openLoop = existing !== null && loopProfileOf(existing) === LoopProfile.Open;
   if (openLoop && !openLoopLaunches()) throw new Error(OPEN_LOOP_REFUSAL.openLoopNeedsUpdate);
-  // What the folder itself refuses (loopRunRefusal): a page that cannot load, a game that is
-  // already compiled. Said in chat now, instead of found out at 3am.
+  // What the folder itself refuses (loopRunRefusal): a page that cannot load, a compiled game with
+  // nothing to build on (by its codes), an engine export. Said in chat now, instead of found out at 3am.
   const readiness = await host.call(HostMethod.GameValidate, { project }).catch(() => null);
-  const refusal = loopRunRefusal(existing, readiness?.problems ?? [], readiness?.missing, { servesNative: served });
+  const refusal = loopRunRefusal(existing, readiness?.problems ?? [], readiness?.missing, {
+    servesNative: served,
+    codes: readiness?.codes,
+  });
   if (refusal) throw new Error(refusal);
   const run = intakeRun(spec, action, project, readiness, await userWordsSoFar(host, action), asked);
   // A promise the run cannot keep is worse than no promise: a second Loop for a game

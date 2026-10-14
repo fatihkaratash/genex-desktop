@@ -9,7 +9,7 @@ import { gatherEvidence } from "../evidence.ts";
 import { commitAll, GIT, gitAt, gitlinks, headOf, resetClean, shortSha } from "../git.ts";
 import { keptContractWords } from "../contract-kept.ts";
 import { HostMethod } from "../host-methods.ts";
-import { factsOfGame, LoopProfile, ProjectStarter } from "../folder-facts.ts";
+import { factsOfGame, LoopProfile } from "../folder-facts.ts";
 import { AttachedContract, StudioContract } from "../page-contract.ts";
 import { readDeclaredGame } from "../kinds.ts";
 import { appendLedger, ledgerFromEvents, loadGameLessons, readLedger } from "../ledger.ts";
@@ -23,7 +23,8 @@ import { EventKind, JournalPhase, RunEvent, RunMode } from "../run-events.ts";
 import { createRunInbox } from "../run-inbox.ts";
 import { isCommit } from "../shell.ts";
 import { MINUTE_MS } from "../time.ts";
-import { scaffoldFor, stackOfShape, templateShapeFor } from "../native-loop.ts";
+import { stackOfShape, templateShapeFor } from "../native-loop.ts";
+import { runScaffoldAsk } from "../run-scaffold.ts";
 import { bindLoopRun, BuildTarget, WindowLease } from "./loop-run.ts";
 import path from "node:path";
 import { preparationBudgetMs } from "./budgets.ts";
@@ -276,12 +277,10 @@ async function readyTheGame(loopRun: LoopRun): Promise<string> {
   // A game the library already lists keeps its own folder and stack (a raylib run resumed after the
   // update); a new one is the compiled template its destinations ask for, else the web starter.
   const listed = await ctx.call(HostMethod.GameList, {}).catch(() => []);
-  const asked = listed.some((g: AnyRecord) => g.name === run.project) ? {} : scaffoldFor(run.targets);
   await ctx.call(HostMethod.GameScaffold, {
     name: run.project,
     title: run.project,
-    kind: ProjectStarter.Web,
-    ...asked,
+    ...runScaffoldAsk(listed, run.project, run.targets),
   });
   const upgraded = await ctx.call(HostMethod.GameUpgradeContract, { project: run.project }).catch(() => null);
   if (upgraded?.upgraded)

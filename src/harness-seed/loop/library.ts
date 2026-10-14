@@ -43,8 +43,8 @@ import {
   fitWithin,
   RECIPE_INTENT_CHARS,
   REVIEW_VIOLATIONS_SHOWN,
-  sketchBlock,
 } from "./brief-budget.ts";
+import { sketchBlock } from "./recipe-sketch.ts";
 import { isRecord } from "./json.ts";
 import { lessonLine, MAX_CONTRACT_LESSONS, renderContractLessons } from "./contract-lessons.ts";
 import { RECIPE_ID_CHARS } from "./config.ts";

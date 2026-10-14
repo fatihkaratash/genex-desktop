@@ -327,9 +327,11 @@ export const SEED_CALL_CHANGES: readonly SeedCallChange[] = [
   { file: "tools/index.ts", marker: "HostMethod.PluginsTools, { project" },
   { file: "loop/chat-dispatch.ts", marker: "kind: ProjectStarter.Web" },
   { file: "loop/run-dispatch.ts", marker: "startWebIfPending(" },
-  { file: "loop/autopilot.ts", marker: "kind: ProjectStarter.Web" },
-  { file: "loop/director/setup.ts", marker: "kind: ProjectStarter.Web" },
-  { file: "loop/gauntlet.ts", marker: "kind: ProjectStarter.Web" },
+  // A run's own scaffold asks through `runScaffoldAsk` (loop/run-scaffold.ts): the web starter for a
+  // web game, a compiled template for a new compiled one, nothing for a compiled game it already has.
+  { file: "loop/autopilot.ts", marker: "runScaffoldAsk(" },
+  { file: "loop/director/setup.ts", marker: "runScaffoldAsk(" },
+  { file: "loop/gauntlet.ts", marker: "runScaffoldAsk(" },
   { file: "tools/game-tools.ts", marker: "HostMethod.GameStart" },
   // Not host calls: the web rules moved to their own file, which a kept local prompt never reads
   // and kept rules still repeat for every turn; and a kept brief tells an empty new game nothing of

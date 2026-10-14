@@ -21,14 +21,14 @@ import { Against, againstWords, observedFrom, VerdictPass, verdictRecord, Verdic
 import { StopCode, stopWith } from "./outcomes.ts";
 import { appendRun, EventKind, REFERENCE_MIN_STILLS, ReferenceKind, RunEvent, RunMode } from "./run-events.ts";
 import { HostMethod } from "./host-methods.ts";
-import { ProjectStarter } from "./folder-facts.ts";
 import { HOUR_MS, MINUTE_MS, SECOND_MS, sleepUnlessCancelled } from "./time.ts";
 import { BriefPhase, buildBrief } from "./gauntlet-prompts.ts";
 import { gatherEvidence, observationOnlyFailure, withLease, withObservationPatience } from "./evidence.ts";
 import { RoundFlow } from "./facet/flow.ts";
 import { PAGE_SEED } from "./config.ts";
 import { clip, CLIP_REASON } from "./text.ts";
-import { scaffoldFor, stackOfShape } from "./native-loop.ts";
+import { stackOfShape } from "./native-loop.ts";
+import { runScaffoldAsk } from "./run-scaffold.ts";
 import { GameStack } from "./native-contract.ts";
 import type { AnyRecord, HarnessCtx, Run } from "../types/harness.d.ts";
 import type { Evidence, Shot } from "./evidence.ts";
@@ -163,12 +163,10 @@ export async function runGauntlet(ctx: HarnessCtx, options: GauntletOptions): Pr
   // A game the library already lists keeps its own folder and stack (a raylib run resumed after the
   // update); a new one is the compiled template its destinations ask for, else the web starter.
   const listed = await ctx.call(HostMethod.GameList, {}).catch(() => []);
-  const known = listed.some((g: AnyRecord) => g.name === run.project);
   const game = await ctx.call(HostMethod.GameScaffold, {
     name: run.project as string,
     title: run.project,
-    kind: ProjectStarter.Web,
-    ...(known ? {} : scaffoldFor(run.targets)),
+    ...runScaffoldAsk(listed, run.project, run.targets),
   });
   // Every evidence pass copies it, so a C++ · raylib game is scored on what its page can measure.
   run.stack = stackOfShape(game?.shape);

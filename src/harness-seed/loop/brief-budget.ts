@@ -8,7 +8,8 @@
  * Its own module, so a workspace that kept an older `library.ts` still links the phases that read
  * these names; library.ts re-exports BRIEF_MAX_CHARS.
  */
-import { GameStack } from "./native-contract.ts";
+import type { GameStack } from "./native-contract.ts";
+import { sketchBlock } from "./recipe-sketch.ts";
 
 /** The whole brief, moved sections included: the inline brief a direct engine carries is the same size. */
 export const BRIEF_MAX_CHARS = 12_000;
@@ -88,20 +89,6 @@ function withCutNote(text: string, cuts: ReadonlySet<BriefCut>): string {
 interface RecipeForFile {
   recipe: { id: string; title: string; intent?: string; sketch?: string; port?: string; runtime?: GameStack };
   checkIds?: readonly string[];
-}
-
-/** The language a recipe's sketch is fenced as, by the stack it is written for. */
-const SKETCH_FENCE = {
-  [GameStack.ThreeJs]: "js",
-  [GameStack.RaylibCpp]: "cpp",
-  [GameStack.RustWgpu]: "rust",
-} as const satisfies Record<GameStack, string>;
-
-/** A recipe's sketch, fenced in the language of the stack it is written for. */
-export function sketchBlock(recipe: { sketch?: string; runtime?: GameStack }): string {
-  return ["```" + SKETCH_FENCE[recipe.runtime ?? GameStack.ThreeJs], String(recipe.sketch ?? "").trim(), "```"].join(
-    "\n",
-  );
 }
 
 /** What RECIPES.md says on a round that picked none, so an earlier round's recipes are not read again. */

@@ -1346,10 +1346,6 @@ export interface GameLibraryEntry {
   trustProjectSettings?: boolean;
   cover?: GameCover;
   primaryThreadId?: string;
-  /** The folder's content stamp as New game made it (`GameProject.scaffoldStamp`). */
-  scaffoldStamp?: string;
-  /** The title waits for the game's first idea; any title given since clears it. */
-  provisional?: boolean;
   /**
    * A C++ · raylib game's host facts: `lock`, the toolchain lock digest the last build of its own
    * folder used, `bundleId`, the Mac bundle identifier chosen once for it and kept ever after, and
@@ -1357,28 +1353,14 @@ export interface GameLibraryEntry {
    * Kept here, never in studio.json, which every agent process can write or link.
    */
   native?: { lock?: string; bundleId?: string; checks?: Partial<Record<BuildTarget, DestinationCheck>> };
+  /** The folder's content stamp as New game made it (`GameProject.scaffoldStamp`). */
+  scaffoldStamp?: string;
+  /** The title waits for the game's first idea; any title given since clears it. */
+  provisional?: boolean;
 }
 // ↑ src/shared/game-library.ts
 
-/**
- * What kind of game a folder holds, decided from the libraries and runtimes it actually loads —
- * never from the entry filename. `src/main.js` is Vite's stock layout as much as the studio's,
- * and reading it as "the template" is what served the user's own three.js game raw, with a bare
- * `three` import nothing could resolve.
- *
- * The kind says what the game *is*; `build` and `serve` say how it runs. A bundled Phaser game
- * is `phaser`, not `three-vite`.
- */
-export type ProjectKind =
-  | "studio-template"
-  | "three-vite"
-  | "three-modules"
-  | "canvas2d"
-  | "phaser"
-  | "engine-export"
-  | "own-script"
-  | "raylib-cpp"
-  | "rust-wgpu";
+export type ProjectKind = 'studio-template' | 'three-vite' | 'three-modules' | 'canvas2d' | 'phaser' | 'engine-export' | 'own-script' | 'raylib-cpp' | 'rust-wgpu';
 // ↑ src/shared/game-project.ts
 
 export type TargetRefusal = 'mac-builds-need-a-mac' | 'not-runnable-here' | 'no-game-box' | 'not-a-destination' | 'stack-is-fixed' | 'no-judging-target' | 'kind-unsupported' | 'stack-gated' | 'toolchain-offline';
@@ -1955,7 +1937,7 @@ export interface NativeAdmissionFacts {
 }
 // ↑ src/shared/native-contract.ts
 
-export type NativeRunState = 'ready' | 'building' | 'admitting' | 'starting' | 'paused' | 'stopping' | 'stopped' | 'crashed' | 'killed' | 'refused';
+export type NativeRunState = 'ready' | 'building' | 'killed' | 'crashed' | 'admitting' | 'starting' | 'paused' | 'stopping' | 'stopped' | 'refused';
 // ↑ src/shared/native-contract.ts
 
 export type NativeRunMode = 'window' | 'headless' | 'embedded';
@@ -2121,7 +2103,7 @@ export interface CrateRequestAnswer {
 export type JobRole = 'lead' | 'chat' | 'worker';
 // ↑ src/shared/jobs.ts
 
-export type JobState = 'failed' | 'running' | 'succeeded' | 'stopped' | 'timed_out' | 'interrupted';
+export type JobState = 'failed' | 'stopped' | 'running' | 'succeeded' | 'timed_out' | 'interrupted';
 // ↑ src/shared/jobs.ts
 
 export type JobStopper = 'agent' | 'person' | 'scope_ended' | 'quit';
@@ -2248,7 +2230,8 @@ export interface HarnessHostApi {
   };
   /**
    * The plugin tools and guidance for the game `project` names, by its facts (none named, or a
-   * game with no kind yet: a web game's), and the tools on offer that make a kind of project.
+   * game with no kind yet: a web game's) and its stack (a Rust game's listing leaves out
+   * three.js-only skills), and the tools on offer that make a kind of project.
    */
   "plugins.tools": {
     params: { project?: string | null };
@@ -2471,8 +2454,9 @@ export interface HarnessHostApi {
   /**
    * Make a game's folder: Genex's bookkeeping only, or with the starter `kind` names (`"web"`, or
    * an older caller's `"studio-template"`). `kind: "rust-wgpu"` with `targets` scaffolds the Rust ·
-   * wgpu template for those destinations; `kind: "raylib-cpp"` names the C++ · raylib template,
-   * whose creation is retired. Any other kind is refused.
+   * wgpu template for those destinations where Rust creation is open (every developer build, and a
+   * release build on a host the Rust lane runs on; `stack-gated` elsewhere); `"raylib-cpp"` is
+   * refused `raylib-creation-retired`; any other kind is refused.
    */
   "game.scaffold": {
     params: { name: string; title?: string; threadId?: string; kind?: string; targets?: BuildTarget[] };
@@ -2488,12 +2472,10 @@ export interface HarnessHostApi {
     params: { project: string; starter: ProjectStarter; threadId?: string };
     result: GameProject | StartHeldInPlan;
   };
+  /** `codes` are the typed reasons beside the sentences; older hosts send none. */
   "game.validate": {
     params: { project: string; candidateId?: string };
-    /**
-     * `missing`: the files a web page needs that are not there, by name (`problems` says it in
-     * sentences); `codes` are the typed reasons beside the sentences, and older hosts send none.
-     */
+    /** `missing`: the files a web page needs that are not there, by name (`problems` says it in sentences). */
     result: {
       ok: boolean;
       problems: string[];
@@ -2721,7 +2703,6 @@ export interface HarnessHostApi {
    * window. A refused request says why with a `CrateRefusal` code.
    */
   "crates.request": { params: CrateRequestParams; result: CrateRequestAnswer };
-
   // — jobs: the long processes the agents start, which the app owns —
   /**
    * A game's jobs, read-only: only those that ended after `endedAfter` (an end number) when it is
