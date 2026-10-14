@@ -510,6 +510,50 @@ fn metal_lakeside_spot_shadows_add_no_one_frame_pops_across_the_cabin_on_mobile_
     finish("lakeside-cabin-truck", &[record], &problem.into_iter().collect::<Vec<_>>());
 }
 
+/// P2-0.4 (RC-06): on mobile-high the far cascade was drawn every second frame and held whole on
+/// the others, so the Lakeside's moving casters (the animals, the boat, the fireflies) cast it at
+/// 30 Hz and doubled against the near cascade at the seam. A held cascade now keeps only what stood
+/// still (within half a texel), so with them in its view the far cascade is drawn on every frame:
+/// the frame's render passes stay the same instead of alternating. (A still or gently swaying far
+/// cascade keeps the cadence: `shadow_cascades.rs`'s CPU rows.)
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_lakeside_on_a_phone_moving_casters_redraw_the_far_cascade_on_every_frame() {
+    if gpu().is_none() {
+        return;
+    }
+    let Some(mut presenter) = Presenter::open(showcase_game::showcase::WORLD_SIZE, showcase_game::assets()).ok() else { return };
+    let mut runtime = lakeside_at(SHOT_TICK);
+    assert!(presenter.install_for(&mut runtime).is_empty(), "every pass installs");
+    let shot = SHOTS[0];
+    let pose = |runtime: &mut genex::Runtime<showcase_game::world::World>| {
+        let world = &mut runtime.sim_mut().world;
+        world.mode = CameraMode::Free;
+        world.hud_hidden = true;
+        world.free = FreeCam::looking(shot.eye(), shot.target());
+    };
+    pose(&mut runtime);
+    presenter.draw_view(&mut runtime, View::Game).expect("a view").expect("drawn");
+    let change = RenderChange {
+        preset: Some(Some(PresetChoice::Preset(QualityPreset::High))),
+        device_class: Some(Some(DeviceClass::new(FormFactor::Mobile, PerformanceTier::High))),
+        render_scale_lock: Some(Some(1.0)),
+        ..RenderChange::default()
+    };
+    presenter.render_settings().expect("the game's settings attached").borrow_mut().apply(&change);
+    let mut passes = Vec::new();
+    for k in 0..WARM_FRAMES + 12 {
+        runtime.step(FIXED_STEP_MS);
+        pose(&mut runtime);
+        presenter.draw_view(&mut runtime, View::Game).expect("a view").expect("drawn");
+        if k >= WARM_FRAMES {
+            passes.push(presenter.resilient.renderer().renderer().last_stats().render_passes);
+        }
+    }
+    std::fs::write(out_dir().join("lakeside-phone-cadence.json"), format!("{{\"renderPasses\": {passes:?}}}\n")).expect("record");
+    assert!(passes.windows(2).all(|pair| pair[0] == pair[1]), "the far cascade is drawn on every frame, never held at half rate: {passes:?}");
+}
+
 /// How far the open-ground row's camera creeps sideways a frame, metres: about a tenth of a pixel
 /// on the ground 10 m ahead (renderer pass 2, P2-0.3).
 const MEADOW_CREEP_M: f32 = 0.002;

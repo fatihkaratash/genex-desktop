@@ -29,7 +29,10 @@
 //!
 //! [`CascadeHistory`] applies the far-cascade cadence: a cascade that is not redrawn this frame
 //! keeps last frame's map and matrix, unless that map no longer covers its fresh slice or its
-//! receivers' light depth (a camera cut, a vertical jump). It holds Live frames' maps only: a
+//! receivers' light depth (a camera cut, a vertical jump), or a caster inside it moved by
+//! [`CASTER_HOLD_TEXELS`] of its texels, came, went, changed its mesh or is skinned (renderer pass
+//! 2, P2-0.4, RC-06: a held map keeps only what stood still, so a moving caster's shadow never
+//! steps at half rate or doubles at the seam). It holds Live frames' maps only: a
 //! settled capture's re-renders redraw every cascade, and the history starts over after them and
 //! on a history reset ([`CascadeHistory::reset`]). [`ShadowMaps`] holds the depth array the
 //! settings size.
@@ -40,8 +43,8 @@ use crate::compile::Compiled;
 use glam::{Mat4, Vec3, Vec4Swizzles};
 use wgpu::{Device, Features, RenderPipeline, ShaderModule, Texture, TextureFormat, TextureView};
 
-use crate::cull::frustum_planes;
-use crate::layout::{GpuFrame, MAX_CASCADES, SHADOW_CASCADES};
+use crate::cull::{frustum_planes, in_frustum};
+use crate::layout::{GpuBatch, GpuFrame, GpuInstance, MAX_CASCADES, SHADOW_CASCADES};
 use crate::scene::{CameraDesc, FramePlan};
 use crate::settings::{DEFAULT_SHADOW_SPLIT_LAMBDA, ShadowFilter, ShadowFormat, ShadowSettings};
 
@@ -500,44 +503,84 @@ struct MapKey {
     format: ShadowFormat,
 }
 
+/// How far, in its cascade's texels, a caster may have moved since a held map was drawn: a held
+/// map is redrawn once any caster inside it moved farther (RC-06). Half a texel is below what the
+/// map resolves, so a swaying tree (a few millimetres a frame) keeps the cadence while a walking
+/// character redraws it.
+pub const CASTER_HOLD_TEXELS: f32 = 0.5;
+
+/// One opaque caster as a cascade's map drew it ([`Casters::inside`]).
+#[derive(Clone, Debug, PartialEq)]
+struct CasterRow {
+    /// Its material row and mesh (its index range and base vertex).
+    key: [u32; 4],
+    /// Its model matrix, column-major.
+    model: [f32; 16],
+    /// How far its mesh reaches from its origin in object units (world reach over the smallest
+    /// axis scale), so a change of the matrix's linear part moves no point farther than its norm
+    /// times this.
+    reach: f32,
+}
+
+/// What stood in a cascade's cull view when its map was drawn, row for row: `None` when a skinned
+/// caster did (its vertices move under a still model), so the map is never held.
+type CasterSet = Option<Vec<CasterRow>>;
+
 /// The far-cascade cadence across frames: what each cascade's map holds, so a cascade that is not
-/// redrawn keeps last frame's matrix with its map ([`ShadowSettings::cascade_redrawn`]).
+/// redrawn keeps last frame's matrix with its map ([`ShadowSettings::cascade_redrawn`]) while
+/// nothing inside it moved since it was drawn.
 #[derive(Clone, Debug, Default)]
 pub struct CascadeHistory {
-    held: Option<(MapKey, Cascades)>,
+    held: Option<(MapKey, Cascades, [CasterSet; MAX_CASCADES])>,
 }
 
 impl CascadeHistory {
     /// Plan frame `frame_index`'s cascade draws on `plan`: the cascades its settings redraw (every
     /// one when `settled`, on the first frame and after the count, size or format changed) keep
     /// the plan's fresh fit, and so does a cascade whose held map no longer covers its fresh slice
-    /// (a camera cut or a jump); every other one is given back the matrix, texel and normal offset
-    /// its map was drawn with, in the plan's cascades and frame uniforms. Without shadows the
-    /// history resets.
+    /// (a camera cut or a jump) or whose casters changed since its map was drawn (one moved, swapped
+    /// its mesh or is skinned: RC-06); every other one is given back the matrix, texel and normal
+    /// offset its map was drawn with, in the plan's cascades and frame uniforms. Without shadows
+    /// the history resets.
     pub fn advance(&mut self, plan: &mut FramePlan, frame_index: u64, settled: bool) -> CascadeDraws {
-        let (Some(fresh), Some(settings)) = (plan.cascades.as_mut(), plan.shadows.as_ref()) else {
+        let FramePlan { cascades, shadows, frame, instances, batches, static_batches, .. } = plan;
+        let (Some(fresh), Some(settings)) = (cascades.as_mut(), shadows.as_ref()) else {
             self.held = None;
             return CascadeDraws::default();
         };
+        let casters = Casters { instances, batches, static_batches: *static_batches };
+        // Only a cadence holds a map, so only a cadence needs to know what stood in it.
+        let cadence = settings.far_cadence > 1;
         let key = MapKey { count: fresh.count(), map_px: fresh.map_px, asked: (settings.cascades, settings.map_px), format: settings.format };
-        let held = self.held.take().filter(|(was, _)| *was == key);
+        let mut held = self.held.take().filter(|(was, _, _)| *was == key);
         let mut draws = CascadeDraws::default();
+        let mut drawn: [CasterSet; MAX_CASCADES] = std::array::from_fn(|_| None);
         for c in 0..key.count {
             let margin = DEPTH_MARGIN_TEXELS * fresh.texel_world[c];
-            let redraw = settings.cascade_redrawn(c as u8, frame_index, settled)
-                || !held.as_ref().is_some_and(|(_, old)| covers(&old.view_proj[c], &fresh.view_proj[c], &fresh.slice_corners[c], margin));
-            draws.redraw[c] = redraw;
-            if let (false, Some((_, old))) = (redraw, held.as_ref()) {
-                fresh.view_proj[c] = old.view_proj[c];
-                fresh.planes[c] = old.planes[c];
-                fresh.texel_world[c] = old.texel_world[c];
-                fresh.depth_range[c] = old.depth_range[c];
-                fresh.bias[c] = old.bias[c];
-                hold_frame(&mut plan.frame, c, old);
-            }
+            let hold = match held.as_mut() {
+                Some((_, old, sets)) if !settings.cascade_redrawn(c as u8, frame_index, settled) => {
+                    let covered = covers(&old.view_proj[c], &fresh.view_proj[c], &fresh.slice_corners[c], margin);
+                    let tolerance = CASTER_HOLD_TEXELS * old.texel_world[c];
+                    let still = covered && sets[c].as_ref().is_some_and(|set| casters.still(set, &old.planes[c], tolerance));
+                    still.then_some((&*old, &mut sets[c]))
+                }
+                _ => None,
+            };
+            draws.redraw[c] = hold.is_none();
+            let Some((old, set)) = hold else {
+                drawn[c] = if cadence && c > 0 { casters.inside(&fresh.planes[c]) } else { None };
+                continue;
+            };
+            drawn[c] = set.take();
+            fresh.view_proj[c] = old.view_proj[c];
+            fresh.planes[c] = old.planes[c];
+            fresh.texel_world[c] = old.texel_world[c];
+            fresh.depth_range[c] = old.depth_range[c];
+            fresh.bias[c] = old.bias[c];
+            hold_frame(frame, c, old);
         }
         // A settled capture's maps are the capture's: Live starts over after it.
-        self.held = (!settled).then(|| (key, fresh.clone()));
+        self.held = (!settled).then(|| (key, fresh.clone(), drawn));
         draws
     }
 
@@ -546,6 +589,70 @@ impl CascadeHistory {
     pub fn reset(&mut self) {
         self.held = None;
     }
+}
+
+/// A frame's opaque casters: its instance rows by batch, the skinned batches after the library's.
+struct Casters<'a> {
+    instances: &'a [GpuInstance],
+    batches: &'a [GpuBatch],
+    static_batches: u32,
+}
+
+impl Casters<'_> {
+    /// The opaque casters inside the cull view `planes` (the rows whose bounds it holds), in row
+    /// order; `None` when a skinned row is among them.
+    fn inside(&self, planes: &[[f32; 4]; 6]) -> CasterSet {
+        let mut set = Vec::new();
+        for (b, batch) in self.batches.iter().enumerate() {
+            let first = batch.first_instance as usize;
+            let rows = self.instances.get(first..first + batch.instance_count as usize).unwrap_or(&[]);
+            for row in rows.iter().filter(|row| in_frustum(planes, row.bounds)) {
+                if b as u32 >= self.static_batches {
+                    return None;
+                }
+                let key = [row.material, batch.first_index, batch.index_count, batch.base_vertex as u32];
+                set.push(CasterRow { key, model: row.model, reach: object_reach(row) });
+            }
+        }
+        Some(set)
+    }
+
+    /// Whether the casters inside `planes` are `drawn`'s, row for row, each moved by at most
+    /// `tolerance` world units (no caster came, went, changed its mesh or material, or is skinned).
+    fn still(&self, drawn: &[CasterRow], planes: &[[f32; 4]; 6], tolerance: f32) -> bool {
+        let Some(now) = self.inside(planes) else { return false };
+        now.len() == drawn.len() && now.iter().zip(drawn).all(|(now, was)| now.key == was.key && moved(was, now) <= tolerance)
+    }
+}
+
+/// How far any point of `row`'s mesh lies from its origin, in object units: its world bounding
+/// sphere's reach from the model's translation over the smallest axis scale of its linear part.
+fn object_reach(row: &GpuInstance) -> f32 {
+    let m = Mat4::from_cols_array(&row.model);
+    let origin = m.w_axis.xyz();
+    let scale = m.x_axis.xyz().length().min(m.y_axis.xyz().length()).min(m.z_axis.xyz().length());
+    (Vec3::from_slice(&row.bounds[..3]).distance(origin) + row.bounds[3]) / scale.max(f32::MIN_POSITIVE)
+}
+
+/// The farthest any point of a caster moved between `was` and `now`: its translation's change plus
+/// its linear part's change (Frobenius norm, which bounds the spectral one) times its reach.
+fn moved(was: &CasterRow, now: &CasterRow) -> f32 {
+    // The Euclidean norm of the change of `columns`' xyz (the translation, or the linear part's
+    // Frobenius norm).
+    let change = |columns: &[usize]| {
+        let squared: f32 = columns
+            .iter()
+            .flat_map(|column| column * 4..column * 4 + 3)
+            .map(|i| {
+                let delta = now.model[i] - was.model[i];
+                delta * delta
+            })
+            .sum();
+        squared.sqrt()
+    };
+    let moved = change(&[3]) + change(&[0, 1, 2]) * now.reach.max(was.reach);
+    // A matrix that is not a number moved as far as can be.
+    if moved.is_nan() { f32::INFINITY } else { moved }
 }
 
 /// Whether the map drawn through `held` still shades the cascade `fresh` fits: every corner of

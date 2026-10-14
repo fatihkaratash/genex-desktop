@@ -1121,3 +1121,90 @@ fn metal_four_2048_cascades_fit_their_share_of_the_shadow_budget_at_1080p() {
     }
     panic!("every one of {COST_ATTEMPTS} measurements missed a budget; the last: {missed:#?}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Renderer pass 2, P2-0.4 (RC-06): a held far cascade keeps only what stood still
+
+/// The sun shadows of the phone class at high (two Depth16 cascades, the far one every 2nd frame).
+fn phone_shadows() -> ShadowSettings {
+    use genex_render::device_class::{DeviceClass, FormFactor, PerformanceTier};
+    use genex_render::presets::preset_quality;
+    use genex_render::settings::QualityPreset;
+    let quality = preset_quality(QualityPreset::High, DeviceClass::new(FormFactor::Mobile, PerformanceTier::High));
+    ShadowSettings::from_quality(&quality.shadows, DISTANCE, SkyParams::default().sun_angular_radius)
+}
+
+/// How the RC-06 caster moves from frame to frame.
+#[derive(Clone, Copy, Debug)]
+enum Motion {
+    /// It stands still.
+    Still,
+    /// It walks 0.3 m a frame sideways (a character).
+    Walks,
+    /// It sways a third of a milliradian a frame about its base (a tree in the wind: a few
+    /// millimetres at its top).
+    Sways,
+}
+
+/// The cadence scene with its camera still and one opaque 0.8 m cube in the far cascade (28 m out)
+/// moving as `motion` says by frame `frame`, drawn as `mesh`.
+fn moving_plan(frame: u64, shadows: ShadowSettings, motion: Motion, mesh: MeshId) -> FramePlan {
+    let mut scene = cadence_scene(0.0);
+    let (x, lean) = match motion {
+        Motion::Still => (0.0, 0.0),
+        Motion::Walks => (frame as f32 * 0.3, 0.0),
+        Motion::Sways => (0.0, frame as f32 * 3.3e-4),
+    };
+    let model = Mat4::from_translation(Vec3::new(x - 1.0, 0.4, -28.0)) * Mat4::from_rotation_x(lean) * Mat4::from_scale(Vec3::splat(0.8));
+    // Opaque, so it casts (the cadence scene's own rows are translucent and draw no shadow).
+    scene.draw(mesh, model.to_cols_array(), Material::color([200, 200, 200, 255]));
+    let options = PlanOptions { shadows: Some(shadows), depth_reversed: false, sun: None };
+    FramePlan::build_with(&scene, &MeshLibrary::new(), ASPECT, &options).expect("plan")
+}
+
+/// Whether the RC-06 caster (the plan's one opaque row) is inside cascade `c`'s cull view.
+fn caster_in(plan: &FramePlan, c: usize) -> bool {
+    assert_eq!(plan.opaque_instances, 1, "the caster is the one opaque row");
+    in_frustum(&plan.cascades.as_ref().expect("cascades").planes[c], plan.instances[0].bounds)
+}
+
+/// RC-06: on a phone class the far cascade is drawn every 2nd frame; a character walking inside it
+/// was held with the rest of the map, so its shadow moved at 30 Hz and doubled against the near
+/// cascade's at the seam. A held cascade now redraws on every frame something inside it moved by
+/// half a texel.
+#[test]
+fn on_a_phone_a_far_cascade_redraws_every_frame_a_caster_inside_it_moves() {
+    let shadows = phone_shadows();
+    assert_eq!((shadows.cascades, shadows.far_cadence), (2, 2), "the phone class holds its far cascade");
+    let mut history = CascadeHistory::default();
+    for frame in 0..8u64 {
+        let mut plan = moving_plan(frame, shadows, Motion::Walks, MeshId::CUBE);
+        assert!(caster_in(&plan, 1) && !caster_in(&plan, 0), "frame {frame}: the caster stands in the far cascade only");
+        let draws = history.advance(&mut plan, frame, false);
+        assert!(draws.draws(0) && draws.draws(1), "frame {frame}: the far cascade redraws while its caster moves (no 30 Hz shadow)");
+    }
+}
+
+/// RC-06's other half: a far cascade whose casters stand still, or sway by far less than a texel a
+/// frame, keeps its cadence; one whose caster changes its mesh in place (a level of detail
+/// switching) redraws once.
+#[test]
+fn a_far_cascade_keeps_its_cadence_while_nothing_inside_it_moves() {
+    let shadows = phone_shadows();
+    for motion in [Motion::Still, Motion::Sways] {
+        let mut history = CascadeHistory::default();
+        for frame in 0..8u64 {
+            let mut plan = moving_plan(frame, shadows, motion, MeshId::CUBE);
+            let draws = history.advance(&mut plan, frame, false);
+            assert_eq!(draws.draws(1), frame % 2 == 0, "{motion:?}, frame {frame}: the far cascade keeps its cadence");
+        }
+    }
+    let mut history = CascadeHistory::default();
+    for frame in 0..8u64 {
+        let mesh = if frame < 3 { MeshId::CUBE } else { MeshId::SPHERE };
+        let mut plan = moving_plan(frame, shadows, Motion::Still, mesh);
+        let draws = history.advance(&mut plan, frame, false);
+        let swapped = frame == 3;
+        assert_eq!(draws.draws(1), frame % 2 == 0 || swapped, "frame {frame}: a mesh swapped in the far cascade redraws it once");
+    }
+}

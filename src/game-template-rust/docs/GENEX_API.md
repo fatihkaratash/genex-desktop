@@ -155,8 +155,10 @@ defaults (a white sun at 2.5 from `(0.4, 1, 0.3)`, white ambient at 0.08). For a
 shadow map, `frame.spot_light_with(&SpotLight::new(position, direction, range, color, intensity)
 .with_cone_degrees(25.0, 40.0).with_shadow(true))` (`use genex::render::SpotLight;`); the
 device's quality decides how many spots get a shadow map (none on `low` and `medium`, two on
-`high`, four on `ultra`, at most one on a phone), given each frame to the asking spots on screen
-nearest the camera, and the rest light unshadowed. Point and spot lights fade smoothly to nothing
+`high`, four on `ultra`, at most one on a phone), given to the asking spots on screen nearest the
+camera, and the rest light unshadowed. A spot keeps its map until another stays clearly nearer
+for a quarter of a second; the two shadows then cross-fade over a quarter of a second, so none pops
+as the camera moves (a capture gives the maps to the nearest spots). Point and spot lights fade smoothly to nothing
 at their range, so give each the range it needs, not more: a lantern 3 to 4 units, a street lamp
 8. Every preset bins them by screen tile and depth, on the HDR and the LDR scene alike, so a scene
 may hold hundreds; the preset caps how many a frame lights (phones at most 256), nearest first,
@@ -214,9 +216,9 @@ out before the shadow distance instead of stopping on a line. Shadows hold still
 moves: the band lerps both cascades on every frame, PCSS finds the same blockers on every frame,
 and the depth bias is one world-space distance per cascade, so a contact gap never changes size as
 other objects come into view. Phones are held to 2 cascades of at
-most 1536 px, no PCSS, 16-bit depth and 40 units, and the far cascade redraws every second frame;
-the weakest phone class draws 512 px cascades. The low desktop tier also draws 16-bit depth with
-the far cascade every second frame. A request never passes a class's caps, so one config is right
+most 1536 px, no PCSS, 16-bit depth and 40 units, and the far cascade redraws every second frame
+(and on every frame something in it moves, so a walking character's shadow never steps at half
+rate); the weakest phone class draws 512 px cascades. The low desktop tier also draws 16-bit depth with the far cascade every second frame. A request never passes a class's caps, so one config is right
 on every device. To ask for more at one preset, from code:
 `RenderConfig::new().shadows_at(QualityPreset::High, ShadowConfig::new().cascades(4))`
 (`genex::render::ShadowConfig`: `.cascades(1..=4)`, `.map_size(512..=4096)`,

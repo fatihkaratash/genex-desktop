@@ -775,6 +775,8 @@ pub struct Renderer {
     shadow_desc: ShadowMapDesc,
     /// What each cascade's map holds across frames (the far-cascade cadence).
     shadow_history: CascadeHistory,
+    /// Live's spot shadow slots across frames (P2-0.4, SH-07: sticky slots, faded hand-overs).
+    spot_slots: crate::spot_shadow::SpotSlots,
     /// The cascades this frame redraws.
     shadow_draws: CascadeDraws,
     /// The shadowed spots' caster pipelines, made on the first frame that draws a spot map.
@@ -2419,6 +2421,7 @@ impl Renderer {
             shadow_maps: ShadowMaps::new(&device),
             shadow_desc: ShadowMapDesc::PLACEHOLDER,
             shadow_history: CascadeHistory::default(),
+            spot_slots: crate::spot_shadow::SpotSlots::default(),
             shadow_draws: CascadeDraws::default(),
             spot_shadow: None,
             shadow_sampler,
@@ -4150,6 +4153,7 @@ impl Renderer {
     /// to Live ([`CascadeHistory`]).
     pub fn reset_shadow_history(&mut self) {
         self.shadow_history.reset();
+        self.spot_slots.reset();
     }
 
     /// Forget the meshlet visibility history: the next frame's cull pass 1 draws nothing and pass
@@ -4467,7 +4471,8 @@ impl Renderer {
     }
 
     /// Grant the frame's shadowed spots (RQ6.5) on the binned path: while the quality draws shadows,
-    /// each slotted spot's map, matrix and cull view after the cascades' (`spot_shadow::grant`);
+    /// each slotted spot's map, matrix and cull view after the cascades', its slot held across Live's
+    /// frames and faded as it changes hands (`spot_shadow::SpotSlots`; a settled capture picks afresh);
     /// otherwise every slot is cleared, so the forward pass reads no map that was not drawn. Makes
     /// the casters' pipelines on the first frame that draws a spot map.
     fn plan_spot_shadows(&mut self, plan: &mut FramePlan) -> Result<(), RenderError> {
@@ -4475,7 +4480,8 @@ impl Renderer {
         let Some(binned) = plan.binned.as_mut() else { return Ok(()) };
         let tile = crate::spot_shadow::tile_side(self.quality.shadows.map_size.max(1));
         let slots = usize::from(self.quality.lights.shadowed_spots);
-        let spots = crate::spot_shadow::grant(binned, self.draws_spot_maps().then_some(tile), slots, eye);
+        let tile = self.draws_spot_maps().then_some(tile);
+        let spots = self.spot_slots.grant(binned, tile, slots, eye, self.frame_index, self.environment_settle);
         if spots.is_empty() {
             return Ok(());
         }

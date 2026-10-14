@@ -149,9 +149,10 @@ fn gx_binned_local_lights(color: vec3<f32>, s: Surface) -> vec3<f32> {
             let ext = LightExt(light_ext[i * GX_LIGHT_EXT_VEC4S], light_ext[i * GX_LIGHT_EXT_VEC4S + 1u]);
             var light = gx_local_light(s, lights[i], ext);
             // A spot holding a shadow slot, where it reaches: through its map (the BRDF is linear
-            // in the light's radiance).
+            // in the light's radiance), faded out by `params.w` while the slot changes hands
+            // (`spot_shadow::SpotSlots`; 0, whole, leaves the map's value bit for bit).
             if ext.params.z >= 0.0 && any(light > vec3<f32>(0.0)) {
-                light *= gx_spot_shadow(s, lights[i], u32(ext.params.z));
+                light *= mix(gx_spot_shadow(s, lights[i], u32(ext.params.z)), 1.0, ext.params.w);
             }
             lit += light;
         }
