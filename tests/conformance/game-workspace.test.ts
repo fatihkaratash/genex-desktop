@@ -20,6 +20,7 @@ import {
 } from "../../src/shared/game-project.ts";
 import { DestinationBadge, TargetRefusal } from "../../src/shared/game-targets.ts";
 import type { DestinationCheck } from "../../src/shared/native-contract.ts";
+import { ProjectStarter } from "../../src/shared/project-facts.ts";
 import {
   DestinationError,
   detectProjectShape,
@@ -170,7 +171,9 @@ async function ownBrowserFolder(dir: string): Promise<void> {
 describe("the pre-M1 characterization", () => {
   it("a Three.js game is scaffolded and exported exactly as before", async () => {
     const { games, base } = await library();
-    const game = await games.create(AWKWARD_TITLE);
+    // A new game is empty until its first message picks its kind; the web starter is the Three.js game.
+    const made = await games.create(AWKWARD_TITLE);
+    const game = await games.start(made.name, ProjectStarter.Web);
     assert.equal(game.shape.kind, ProjectKind.StudioTemplate);
     const out = path.join(base, "out-three");
     await games.export(game.name, out);

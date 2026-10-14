@@ -24,6 +24,8 @@ import type { AdmittedMacBundle, MacAngle, RunDirRequest } from "../../src/subst
 import type { CrossAdmission, CrossAdmissionRequest } from "../../src/substrate/native-cross-admission.ts";
 import type { CrossRunDirRequest } from "../../src/substrate/native-rundir-cross.ts";
 import { raylibLanes } from "../helpers/game-lanes.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const ROOT = "/runs";
 const GAME_DIR = "/games/pong";
@@ -43,6 +45,7 @@ function raylibGame(targets: BuildTarget[] = [BuildTarget.Web, BuildTarget.Mac])
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/pong",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     shape: {
       entry: "index.html",
       main: "src/main.cpp",

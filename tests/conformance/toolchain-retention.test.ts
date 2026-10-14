@@ -45,7 +45,7 @@ import { tmpDir } from "../helpers/tmp.ts";
 
 const POSIX_ONLY = process.platform === "win32" ? { skip: "symlink rows need POSIX links" } : {};
 
-/** The component ids a v1 Studio (`0faa9b3f`) knows: what it reads from a store. */
+/** The component ids a v1 Studio (before Rust games) knows: what it reads from a store. */
 const V1_IDS: readonly string[] = [
   "cmake",
   "ninja",

@@ -18,8 +18,13 @@ import { handleUserMessage, launchFromIntake } from "../../src/harness-seed/loop
 import { runDelegatedTurn } from "../../src/harness-seed/loop/delegated-turn.ts";
 import { runDirector } from "../../src/harness-seed/loop/director.ts";
 import { acquireWindow, withLease } from "../../src/harness-seed/loop/evidence.ts";
-import { type Night, WindowLease, withLease as nightWithLease } from "../../src/harness-seed/loop/director/night.ts";
+import {
+  type LoopRun,
+  WindowLease,
+  withLease as loopRunWithLease,
+} from "../../src/harness-seed/loop/director/loop-run.ts";
 import { acquireWorkerWindow } from "../../src/harness-seed/loop/director/workers.ts";
+import { ProjectStarter } from "../../src/harness-seed/loop/folder-facts.ts";
 import { takeIntegration } from "../../src/harness-seed/loop/facet/phases/gate.ts";
 import { runGauntlet } from "../../src/harness-seed/loop/gauntlet.ts";
 import { shortFailure } from "../../src/harness-seed/loop/git.ts";
@@ -34,6 +39,8 @@ import {
   TargetRefusal,
 } from "../../src/harness-seed/loop/native-contract.ts";
 import { HOUR_MS } from "../../src/harness-seed/loop/time.ts";
+import { loopRunRefusal } from "../../src/harness-seed/loop/run-dispatch.ts";
+import { GameValidationCode } from "../../src/shared/game-project.ts";
 import { tools as gameTools } from "../../src/harness-seed/tools/game-tools.ts";
 import { createToolRegistry } from "../../src/harness-seed/tools/index.ts";
 import { templateShapeFor } from "../../src/harness-seed/loop/native-loop.ts";
@@ -108,6 +115,22 @@ async function scaffoldsOf(recorder: CtxRecorder, work: () => Promise<unknown>):
     if ((error as Error)?.message !== STOP_AFTER_SCAFFOLD) throw error;
   });
   return recorder.paramsOf(HostMethod.GameScaffold);
+}
+
+/**
+ * The callers that name the web starter for a new browser game, as the seed's runs and chat launch
+ * always have (a new project is otherwise empty); a chat turn and `new_game` name no kind.
+ */
+const NAMES_WEB_STARTER: ReadonlySet<string> = new Set([
+  "gauntlet.ts runGauntlet",
+  "autopilot.ts runAutopilot",
+  "director/setup.ts (runDirector)",
+  "chat-dispatch.ts launchFromIntake",
+]);
+
+/** The kind `caller` asks a new browser game's scaffold for: the web starter, or none. */
+function browserKindOf(caller: string): ProjectStarter | undefined {
+  return NAMES_WEB_STARTER.has(caller) ? ProjectStarter.Web : undefined;
 }
 
 /** The six callers that make a game folder, each driven to its scaffold with an intake's destinations. */
@@ -208,7 +231,7 @@ describe("scaffold callers on a desktop intake (Rust · wgpu since raylib creati
       for (const targets of [BROWSER, undefined]) {
         const [params] = await scaffold(targets);
         assert.ok(params, "it scaffolded");
-        assert.equal("kind" in params, false, JSON.stringify(params));
+        assert.equal(params.kind, browserKindOf(caller), JSON.stringify(params));
         assert.equal("targets" in params, false, JSON.stringify(params));
       }
     });
@@ -305,8 +328,13 @@ async function twoWirings() {
   return { dir, git, integrationHead, facetHead };
 }
 
-/** The facet loop as the round's integration step reads it, on a game of `shape`. */
-function facetLoop(repo: Awaited<ReturnType<typeof twoWirings>>, shape: Record<string, unknown>, ownShape: boolean) {
+/** The facet loop as the round's integration step reads it, on a game of `shape`; `ownsMain` when the part owns its entry. */
+function facetLoop(
+  repo: Awaited<ReturnType<typeof twoWirings>>,
+  shape: Record<string, unknown>,
+  ownShape: boolean,
+  ownsMain = false,
+) {
   const ctx = localCtx();
   const events: Array<Record<string, unknown>> = [];
   const loop = {
@@ -324,6 +352,7 @@ function facetLoop(repo: Awaited<ReturnType<typeof twoWirings>>, shape: Record<s
     git: async (command: string) =>
       String((await ctx.call(HostMethod.RunExec, { command, cwd: repo.dir }))?.stdout ?? "").trim(),
     ownShape,
+    ownsMain,
     shape,
   };
   return { loop, events };
@@ -351,7 +380,7 @@ describe("union merge of the FACET WIRING block in src/main.cpp", () => {
     });
   }
 
-  it("a browser game the user brought still leaves its entry's conflict to a person", async () => {
+  it("a browser game the user brought never union-merges its entry: a conflict in the part's own entry is left to its builder", async () => {
     const repo = await twoWirings();
     const ownGame = {
       entry: "index.html",
@@ -361,9 +390,12 @@ describe("union merge of the FACET WIRING block in src/main.cpp", () => {
       kind: "three-vite",
       serve: "dist",
     };
-    const { loop } = facetLoop(repo, ownGame, true);
+    // The part owns the entry: since merges settle by ownership, a conflict in another part's file
+    // takes the integration side, so only one of its own is left to its builder.
+    const { loop } = facetLoop(repo, ownGame, true, true);
     await takeIntegration(loop as never, {} as never);
     assert.match(String(loop.integrationNote), /could not merge it automatically/);
+    assert.match(String(loop.integrationNote), /src\/main\.cpp/);
   });
 });
 
@@ -404,14 +436,14 @@ describe("evidence windows for a raylib game name the build they judge", () => {
     // target, which the host refuses for a raylib game. A Mac-only game's target is its Mac build
     // (FLIPPED back from wave 2's judging-only web build).
     const recorder = leaseRecorder();
-    const night = {
+    const loopRun = {
       ctx: recorder.ctx,
       pooledWindows: true,
       capacity: MAC_HOST,
       leaseGame: raylibGame([BuildTarget.Mac]),
-    } as unknown as Night;
-    assert.equal(await nightWithLease(night, WindowLease.Judge, async (handle) => handle), "h1");
-    assert.equal(await acquireWorkerWindow(night, "dash"), "h1");
+    } as unknown as LoopRun;
+    assert.equal(await loopRunWithLease(loopRun, WindowLease.Judge, async (handle) => handle), "h1");
+    assert.equal(await acquireWorkerWindow(loopRun, "dash"), "h1");
     assert.deepEqual(
       recorder.paramsOf(HostMethod.PreviewAcquire).map((p) => [p.target, p.label]),
       [
@@ -626,5 +658,91 @@ describe("a desktop destination for a game that already exists", () => {
     const blocked = log.find((entry) => entry.event_type === "run_start_blocked");
     assert.equal(blocked?.payload?.code, TargetRefusal.StackIsFixed, JSON.stringify(log));
     assert.equal(studio.activeRuns.size, 0, "no night was started");
+  });
+});
+
+/** A compiled or web game as the library lists it: served at its root, of the given kind. */
+function listedGame(name: string, kind: string, main: string) {
+  return {
+    name,
+    dir: `/games/${name}`,
+    facts: [{ id: "web-game", path: "." }],
+    shape: { kind, main, entry: "index.html", build: null },
+  };
+}
+
+const RUST_GAME = listedGame("ferris", ProjectKind.RustWgpu, "src/main.rs");
+const RAYLIB_GAME = listedGame("pong", ProjectKind.RaylibCpp, "src/main.cpp");
+const WEB_GAME = listedGame("orbit", ProjectKind.StudioTemplate, "src/main.js");
+
+/** A chat launch of `game`, whose `game.validate` answers `readiness`. */
+function launchListed(game: ReturnType<typeof listedGame>, readiness: Record<string, unknown>): Promise<void> {
+  const recorder = ctxRecorder({
+    unknown: { value: null },
+    handlers: {
+      [HostMethod.GameList]: () => [game],
+      [HostMethod.EventsList]: () => [],
+      [HostMethod.EventsMessages]: () => [],
+      [HostMethod.EngineDescribe]: () => [],
+      [HostMethod.GameValidate]: () => readiness,
+    },
+  });
+  const studio = {
+    host: recorder.ctx.host,
+    cancels: new Set(),
+    moodBoards: new Map(),
+    activeRuns: new Map(),
+    startingRuns: new Map(),
+    orphanRuns: new Map(),
+  };
+  return launchFromIntake(
+    studio as never,
+    recorder.ctx as unknown as HarnessCtx,
+    { threadId: "t1", text: "go" },
+    { goal: "make it better", project: game.name },
+  );
+}
+
+describe("a compiled folder with nothing to build on is refused at launch, by its codes", () => {
+  it("a Rust game whose genex.toml is missing", async () => {
+    const readiness = {
+      ok: false,
+      problems: ["genex.toml is missing"],
+      codes: [GameValidationCode.MissingFile],
+      missing: [],
+      shape: RUST_GAME.shape,
+    };
+    await assert.rejects(launchListed(RUST_GAME, readiness), /ferris is not ready for a run: genex\.toml is missing/);
+  });
+
+  it("a raylib game whose CMakeLists.txt is not a plain file", () => {
+    const refused = loopRunRefusal(RAYLIB_GAME, ["CMakeLists.txt is not a plain file"], [], {
+      codes: [GameValidationCode.NativeMissingCMake],
+    });
+    assert.match(String(refused), /CMakeLists\.txt is not a plain file/);
+  });
+
+  it("a Rust game's own Cargo.toml is the lane's refusal, not the launch's", () => {
+    const refused = loopRunRefusal(RUST_GAME, ["Cargo.toml is the studio's"], [], {
+      codes: [GameValidationCode.RustOwnBuildInput],
+    });
+    assert.equal(refused, null);
+  });
+
+  it("a web game is still decided by its missing names alone, never by codes or words", () => {
+    const codes = [GameValidationCode.MissingFile];
+    assert.equal(loopRunRefusal(WEB_GAME, ["index.html is missing"], [], { codes }), null);
+    assert.match(String(loopRunRefusal(WEB_GAME, [], ["index.html"], { codes })), /index\.html is missing/);
+  });
+
+  it("an older caller that hands no codes checks nothing", () => {
+    assert.equal(loopRunRefusal(RUST_GAME, ["genex.toml is missing"], []), null);
+  });
+
+  it("a game a newer Genex made is refused by kind-unsupported, whatever its stack reads as", () => {
+    const own = { name: "future", shape: { kind: "own-script", main: "index.html" } };
+    const words = "a newer version of Genex made this game, so it opens read-only";
+    const refused = loopRunRefusal(own, [words], [], { codes: [GameValidationCode.KindUnsupported] });
+    assert.match(String(refused), /future is not ready for a run: a newer version/);
   });
 });

@@ -33,6 +33,8 @@ import { readProjectShape, ScaffoldCaller } from "../../src/substrate/game-works
 import type { PreviewPort } from "../../src/substrate/preview-port.ts";
 import { type CoreApi, coreLite } from "../helpers/core-lite.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 /** One harness method by name, called with params the way the harness sends them. */
 function harness(api: CoreApi) {
@@ -135,6 +137,7 @@ async function studio(t: TestContext) {
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/ferris",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     shape,
     built: false,
     destinations: { stack: GameStack.RustWgpu, targets: [BuildTarget.Web, BuildTarget.Mac] },

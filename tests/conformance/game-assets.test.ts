@@ -716,6 +716,8 @@ it("main and the substrate read pictures and sounds from the one format table", 
 const NOT_RAYLIB = [
   "aac",
   "avif",
+  // Authoring files neither compiled runtime loads (Blender's, Unreal's): their export is the asset.
+  "blend",
   "exr",
   "fbx",
   "flac",
@@ -730,6 +732,8 @@ const NOT_RAYLIB = [
   "ply",
   "stl",
   "svg",
+  "uasset",
+  "umap",
   "webm",
   "webp",
 ];
@@ -754,7 +758,7 @@ it("a C++ · raylib game refuses the formats raylib cannot load, by the same tab
     "the refusals are rows of the one format table",
   );
   // A file the table does not know is not refused for either stack: it stays metadata.
-  for (const file of ["assets/tree.blend", "notes", "", "a.__proto__"])
+  for (const file of ["assets/tree.xyz", "notes", "", "a.__proto__"])
     for (const stack of [GameStack.ThreeJs, GameStack.RaylibCpp]) assert.equal(stackAcceptsAsset(stack, file), null);
 });
 
@@ -781,7 +785,24 @@ it("raylib's own formats are rows of the table, shown by no viewer", () => {
 
 /** What a Rust · wgpu game takes (plan "Game services"): loaded as is, converted at import, or refused. */
 const RUST_CONVERTS = ["aac", "m4a", "mtl", "obj", "opus", "ply", "stl"];
-const RUST_REFUSES = ["avif", "fbx", "iqm", "m3d", "mod", "mov", "mp4", "ogv", "qoa", "svg", "vox", "webm", "xm"];
+const RUST_REFUSES = [
+  "avif",
+  "blend",
+  "fbx",
+  "iqm",
+  "m3d",
+  "mod",
+  "mov",
+  "mp4",
+  "ogv",
+  "qoa",
+  "svg",
+  "uasset",
+  "umap",
+  "vox",
+  "webm",
+  "xm",
+];
 
 it("a Rust · wgpu game has its own row in the one table: webp, hdr and ktx2 load, OBJ and Opus convert, FBX is refused", () => {
   // The red-first row: webp is refused for raylib and loads for Rust; FBX is refused for both.
@@ -819,7 +840,7 @@ it("every format row says how each compiled stack takes it, and Three.js loads e
     );
   }
   for (const stack of Object.values(GameStack))
-    for (const file of ["assets/tree.blend", "notes", "", "a.__proto__", "a.constructor"]) {
+    for (const file of ["assets/tree.xyz", "notes", "", "a.__proto__", "a.constructor"]) {
       assert.equal(stackAssetSupport(stack, file), null, `${stack} ${file}`);
       assert.equal(stackAcceptsAsset(stack, file), null, `${stack} ${file}`);
     }

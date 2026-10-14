@@ -203,10 +203,11 @@ async function briefWithFix(stack: GameStack): Promise<string> {
 }
 
 /**
- * The three.js BRIEF.md `briefWithFix(GameStack.ThreeJs)` writes, as origin/dev c942346d's seed
- * writes it with no C++ rules of their own in it. A change here must be deliberate.
+ * The three.js BRIEF.md `briefWithFix(GameStack.ThreeJs)` writes, as origin/dev cf4b2c56's seed
+ * (before the compiled stacks were ported to it) writes it over a library holding only the
+ * three.js recipe. A change here must be deliberate.
  */
-const THREE_JS_BRIEF = "4a6c22d05ace18af";
+const THREE_JS_BRIEF = "2442dfe0523c30e1";
 
 describe("a C++ · raylib facet's BRIEF.md speaks C++", () => {
   it("its rules, seam, entry, demo, FIX and recipe are C++ ones, with no three.js word", async () => {
@@ -295,10 +296,11 @@ function digest(text: string): string {
 }
 
 /**
- * The three.js planner ask of `autopilotNight([BuildTarget.Web])` before this change: an empty
- * workspace, so no catalogue, skill or recipe varies it. A change here must be deliberate.
+ * The three.js planner ask of `autopilotNight([BuildTarget.Web])` as origin/dev cf4b2c56's seed
+ * asks it, before the compiled stacks were ported to it: an empty workspace, so no catalogue,
+ * skill or recipe varies it. A change here must be deliberate.
  */
-const THREE_JS_PLANNER_ASK = "3208b5bd652c6ac1";
+const THREE_JS_PLANNER_ASK = "97e7deda89585e3c";
 
 describe("the planner is told the game is C++", () => {
   it("a raylib night's planner ask carries the C++ rules as their own section", async () => {

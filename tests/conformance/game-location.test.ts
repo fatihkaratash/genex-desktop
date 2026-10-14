@@ -239,15 +239,14 @@ describe("creating a C++ · raylib game", () => {
       assert.equal(game.shape.kind, ProjectKind.RaylibCpp, game.dir);
       assert.deepEqual(game.destinations, destinations, game.dir);
     }
-    // Made without destinations, a game is what every game was before: Three.js for the browser.
+    // Made without destinations, a game records no stack or destinations, and lists as the browser
+    // game it becomes. FLIPPED for empty new projects: its folder holds no page until its first
+    // message picks its kind, where it used to get the Three.js starter.
     const plain = await games.create("Plain", { parent });
-    assert.ok(await readFile(path.join(plain.dir, "index.html"), "utf8"));
-    assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(plain.dir, "studio.json"), "utf8"))).sort(), [
-      "contractVersion",
-      "createdAt",
-      "name",
-      "title",
-    ]);
+    assert.ok(!(await readdir(plain.dir)).includes("index.html"), "no page before the first message");
+    const plainMeta = JSON.parse(await readFile(path.join(plain.dir, "studio.json"), "utf8"));
+    assert.equal("stack" in plainMeta, false);
+    assert.equal("targets" in plainMeta, false);
     assert.deepEqual(plain.destinations, { stack: GameStack.ThreeJs, targets: [BuildTarget.Web] });
   });
 

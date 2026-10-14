@@ -25,6 +25,8 @@ import { CppBuildPurpose, CppBuilds, type CppBuildInput } from "../../src/main/c
 import { coreLite, type CoreLite } from "../helpers/core-lite.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 import { isInside } from "../../src/substrate/paths.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const LOCK: ToolchainLock = { version: 1, entries: {}, digest: "fedcba9876543210".repeat(4) };
 
@@ -180,6 +182,7 @@ async function raylibGame(lite: CoreLite, destinations: GameDestinations): Promi
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/pong",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     shape: {
       entry: "index.html",
       main: "src/main.cpp",

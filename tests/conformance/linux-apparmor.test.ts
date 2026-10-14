@@ -466,11 +466,13 @@ describe("packaging wiring", () => {
     }
   });
 
-  it("the deb and rpm read each maintainer script where the make step writes it", () => {
+  it("the deb ships its checked-in maintainer scripts, and the rpm reads each one where the make step writes it", () => {
     const files = linuxPackageScriptFiles(path.join(REPO, "out", "linux-package-scripts"));
+    // FLIPPED: the deb keeps build/linux/postinst and postrm (linux-deb-scripts.test.ts holds their
+    // text), which install the same `genex` profile; only the rpm's scriptlets are generated.
     assert.deepEqual(maker("@electron-forge/maker-deb").config.options.scripts, {
-      [LinuxPackageScript.DebPostinst]: files[LinuxPackageScript.DebPostinst],
-      [LinuxPackageScript.DebPostrm]: files[LinuxPackageScript.DebPostrm],
+      postinst: path.join(REPO, "build", "linux", "postinst"),
+      postrm: path.join(REPO, "build", "linux", "postrm"),
     });
     assert.deepEqual(maker("@electron-forge/maker-rpm").config.options.scripts, {
       [LinuxPackageScript.RpmPost]: files[LinuxPackageScript.RpmPost],

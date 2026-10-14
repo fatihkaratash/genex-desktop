@@ -195,12 +195,13 @@ describe("the pages a builder is handed", () => {
 
   it("leaves the Three.js template's prompt pages byte for byte as they were before C++ games", () => {
     // A C++ game reads the pages of its own template (src/game-template-cpp); a C++ rule that
-    // leaked into these would reach every Three.js game. sha256 at origin/dev c942346d.
+    // leaked into these would reach every Three.js game. sha256 at origin/dev cf4b2c56, before the
+    // compiled stacks were ported to it.
     const PRE_NATIVE = {
-      "CLAUDE.md": "ef7a4d9b99b7166540de2c257fff5e6a74d2eeb1f9e911c9090509ecdb1c9396",
-      "CLAUDE.own.md": "f925a551fea7bb60e927843a2dcc0175aed06f1ba5f288be83daadca93b66637",
-      "docs/CONTRACT.md": "0c96fd2c06a1a96edb6c900135915bd90dbbee65cd0712eadca7d496cd7eb89a",
-      "NOTES.md": "b2a918a95f6e08f035ec9f3f7bb701a9c66e3f111f0c4ddb5a8a2bd401f30391",
+      "CLAUDE.md": "1b6849a0ca188babbcea75b52fb1c71dcd457c9683b5755721fb706998539fd8",
+      "CLAUDE.own.md": "23299e919408e4149e17f8a8d8cac45ed125078a868691526f51e597154b7d98",
+      "docs/CONTRACT.md": "50f69a4e8a16e3e2f658aa01f3cbd573a31a4de02e0f768ea17bf404ccf07f18",
+      "NOTES.md": "d29179017b5a5a5b3093fa7888a3a489063a4c1865267cec85f91362293fd167",
       "NOTES.own.md": "03bfcddcca36dad3c106dce717a19af8ecd6ec13de96afe3145b5060876be3fa",
     };
     for (const [rel, digest] of Object.entries(PRE_NATIVE))

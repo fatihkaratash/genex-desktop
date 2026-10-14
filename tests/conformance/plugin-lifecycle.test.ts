@@ -559,11 +559,11 @@ describe("plugins across the stacks union", () => {
   test("Local Blender briefs a Rust game on the genex facade and keeps its card for the pre-Rust stacks", async () => {
     const { registry } = await bundledEchoRegistry();
     const blenderSkills = (stack: GameStack) =>
-      registry.snapshot(stack).applied.skills.filter((s) => s.startsWith("blender/"));
+      registry.snapshot([], undefined, stack).applied.skills.filter((s) => s.startsWith("blender/"));
     assert.deepEqual(blenderSkills(GameStack.ThreeJs), ["blender/local-modeling"]);
     assert.deepEqual(blenderSkills(GameStack.RaylibCpp), ["blender/local-modeling"]);
     assert.deepEqual(blenderSkills(GameStack.RustWgpu), ["blender/local-modeling-rust"]);
-    const rustBrief = registry.snapshot(GameStack.RustWgpu).guidance;
+    const rustBrief = registry.snapshot([], undefined, GameStack.RustWgpu).guidance;
     assert.match(rustBrief, /gfx\.assets\(\)\.model/);
     assert.doesNotMatch(rustBrief, /GLTFLoader/);
   });

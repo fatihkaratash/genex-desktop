@@ -862,7 +862,7 @@ describe("the picture a card shows", () => {
 
   it("shows nothing for an undone try whose build showed no frame, never an older builder capture", () => {
     // The night up to the mountain's first try, whose verdict carried no frame: its build failed.
-    const events = night({ finished: false }).slice(0, -2);
+    const events = loopRun({ finished: false }).slice(0, -2);
     events.push(judged("land", 4, "incumbent", { shots: [] }));
     const mountain = must(rowOf(rowsOf(events).rows, "land").steps.at(-1), "the mountain step");
     assert.equal(mountain.shown?.iteration, 4);
@@ -871,7 +871,7 @@ describe("the picture a card shows", () => {
 
   it("keeps a kept try's own builder capture when its pass saved no frame", () => {
     // Kept on its checks, while the evidence pass had no window free: no frame, but a build.
-    const events = night({ finished: false }).slice(0, -2);
+    const events = loopRun({ finished: false }).slice(0, -2);
     events.push(judged("land", 4, "challenger", { shots: [] }));
     const mountain = must(rowOf(rowsOf(events).rows, "land").steps.at(-1), "the mountain step");
     assert.equal(mountain.shown?.iteration, 4);
@@ -880,7 +880,7 @@ describe("the picture a card shows", () => {
 
   it("gives every try of a step its own picture: the judged frame, nothing for a failed build, else its builder's capture", () => {
     // The mountain's first try was judged without a frame (its build failed); its second is in hand.
-    const events = night({ finished: false }).slice(0, -2);
+    const events = loopRun({ finished: false }).slice(0, -2);
     events.push(judged("land", 4, "incumbent", { shots: [] }));
     events.push(move("land", 5, "Tall mountain: a blue-grey mass behind the sword", "mountain"));
     const land = rowOf(rowsOf(events).rows, "land");
@@ -918,7 +918,7 @@ describe("the picture a card shows", () => {
   });
 
   it("keeps a graph without a recorded outcome on each part's own folder, as before", () => {
-    const graph = must(buildRunGraph(night({ finished: false })), "the graph");
+    const graph = must(buildRunGraph(loopRun({ finished: false })), "the graph");
     const rows = partRows(graph, null);
     const sword = must(rowOf(rows, "sword").steps[0], "the session step");
     assert.deepEqual(sword.picture, {

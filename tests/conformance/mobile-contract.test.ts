@@ -45,6 +45,8 @@ import {
   xcodeStatusOf,
 } from "../../src/shared/toolchain.ts";
 import { RELEASE_URL_PREFIXES } from "../../src/substrate/toolchain-store/manifest.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 describe("the mobile toolchain components", () => {
   it("are appended after every older id, in their wire spellings", () => {
@@ -204,6 +206,7 @@ function rustGame(): GameProject {
     createdAt: "2026-10-07T00:00:00.000Z",
     pathLabel: "~/AI Games/pond",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     shape: { kind: ProjectKind.RustWgpu } as ProjectShape,
     built: false,
     destinations: { stack: GameStack.RustWgpu, targets: [BuildTarget.Web, BuildTarget.Ios, BuildTarget.Android] },

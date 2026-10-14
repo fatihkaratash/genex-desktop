@@ -25,6 +25,8 @@ import { BuildTarget, type GameProject, GameStack, ProjectKind } from "../../src
 import type { ToolchainLock } from "../../src/shared/toolchain.ts";
 import { admittedReport } from "./rust-admitted.ts";
 import { metalRequired } from "./gpu-games.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const execFileAsync = promisify(execFile);
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
@@ -91,6 +93,7 @@ export function pondGame(dir: string): GameProject {
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/pond",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     built: false,
     shape: {
       entry: "index.html",

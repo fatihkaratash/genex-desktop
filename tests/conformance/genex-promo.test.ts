@@ -120,6 +120,9 @@ describe("Native game visibility", () => {
       showEmpty: false,
       liveLoading: false,
       toolbarOpen: false,
+      cardOnStage: false,
+      stillsOnStage: false,
+      stopped: false,
       watching: true,
       native: false,
     };

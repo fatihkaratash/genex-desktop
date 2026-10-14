@@ -26,6 +26,7 @@ import {
   ProjectKind,
 } from "../../src/shared/game-project.ts";
 import type { GameProject } from "../../src/shared/game-project.ts";
+import { ProjectStarter } from "../../src/shared/project-facts.ts";
 import { type GamesIpcDeps, registerGamesIpc } from "../../src/main/ipc/games.ts";
 import type { IpcHandle } from "../../src/main/ipc/registrar.ts";
 import { CreationError, ScaffoldCaller } from "../../src/substrate/game-workspace.ts";
@@ -296,17 +297,25 @@ describe("raylib-cpp creation is retired on the host (M6.3)", () => {
 });
 
 describe("the harness checks a C++ · raylib game", () => {
-  it("game.scaffold without a kind, or with the studio template, makes the browser game it always made", async () => {
+  it("game.scaffold with the web starter, by either name, makes the browser game it always made", async () => {
     const { call, gamesRoot } = await studio();
     for (const [name, params] of [
-      ["plain", {}],
+      ["starter", { kind: ProjectStarter.Web }],
       ["template", { kind: ProjectKind.StudioTemplate }],
-      ["nulled", { kind: null }],
     ] as const) {
       const project = (await call("game.scaffold", { name, ...params })) as GameProject;
       assert.ok(await readFile(path.join(gamesRoot, name, "index.html"), "utf8"), name);
       assert.equal(project.shape.kind, ProjectKind.StudioTemplate, name);
       assert.deepEqual(project.destinations, { stack: GameStack.ThreeJs, targets: [BuildTarget.Web] }, name);
+    }
+    // FLIPPED for empty new projects: without a kind the folder is empty and its first message
+    // picks its kind (new-project-empty's rows), where it used to get the browser game.
+    for (const [name, params] of [
+      ["plain", {}],
+      ["nulled", { kind: null }],
+    ] as const) {
+      await call("game.scaffold", { name, ...params });
+      assert.ok(!(await readdir(path.join(gamesRoot, name))).includes("index.html"), `${name}: no starter`);
     }
   });
 
@@ -523,7 +532,7 @@ describe("a new game's title in its window and its page", () => {
 
     it(`${label}: a Three.js scaffold is as it always was`, async () => {
       const { call, gamesRoot } = await studio();
-      await call("game.scaffold", { name: "browser", title });
+      await call("game.scaffold", { name: "browser", title, kind: ProjectStarter.Web });
       for (const file of ["index.html", "NOTES.md"]) {
         const template = await readFile(path.join(TEMPLATES, "game-template", file), "utf8");
         assert.equal(

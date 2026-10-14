@@ -1279,9 +1279,9 @@ describe("a C++ game's capture on codex", () => {
       bridgeTools(request).find((tool) => tool.name === "capture")?.parameters.properties as Record<string, unknown>;
     assert.deepEqual(Object.keys(capture({ prompt: "x", cwd: "/ws", onCapture, cpp })).sort(), ["cameras", "target"]);
     assert.deepEqual(
-      Object.keys(capture({ prompt: "x", cwd: "/ws", onCapture })),
-      ["cameras"],
-      "a Three.js page has one",
+      Object.keys(capture({ prompt: "x", cwd: "/ws", onCapture })).sort(),
+      ["cameras", "page"],
+      "a Three.js game's capture names its cameras and page, never a destination",
     );
   });
 });

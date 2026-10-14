@@ -19,6 +19,8 @@ import { StudioPlatform } from "../../src/shared/boot.ts";
 import { gpuQualificationOf } from "../../src/shared/game-export-contract.ts";
 import { BuildTarget, type ExportResult, GameStack, ProjectKind } from "../../src/shared/game-project.ts";
 import { fakeStudioApi } from "../helpers/fake-studio-api.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const NAME = "pond";
 const POND: GameProject = {
@@ -28,6 +30,7 @@ const POND: GameProject = {
   createdAt: "2026-10-07T00:00:00.000Z",
   pathLabel: `~/AI Games/${NAME}`,
   library: true,
+  facts: factsOfEngine(GameEngine.Web),
   shape: {
     entry: "index.html",
     main: "src/main",

@@ -317,8 +317,8 @@ describe("the code reviewer of a C++ · raylib game", () => {
   });
 
   it("asks the Three.js reviewer exactly what it asked before C++ games", async () => {
-    // The first 16 hex of sha256 over every request, in origin/dev 6cdf89dd's seed (the merge base
-    // since wave 3, which added the gaming flag): the Three.js words, unchanged by C++ games.
+    // The first 16 hex of sha256 over every request, in origin/dev cf4b2c56's seed (the one the
+    // compiled stacks were ported onto): the Three.js words, unchanged by C++ games.
     const { ctx, asked } = reviewer();
     const js = { ...spec, owns: ["src/plaza.js"] };
     await reviewDiff(ctx, { run, diff: "+x", spec: js });

@@ -51,6 +51,8 @@ import type { XcodeExec } from "../../src/substrate/toolchain-store/locate.ts";
 import { ApplePlatform, buildVersion } from "../fixtures/rust-bundles/binaries.ts";
 import { LoadCommand, loadCommand, machO } from "../helpers/macho.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const PROJECT = "ferris";
 const RUN_ID = "0123456789abcdef";
@@ -295,6 +297,7 @@ function rustProject(dir: string): GameProject {
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/ferris",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     built: false,
     shape: {
       entry: "index.html",

@@ -50,6 +50,8 @@ import { DEV_TOOLCHAINS, devStoreLock, devTool, needsPrewarmed, needsTools } fro
 import { running } from "../helpers/processes.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 import { raylibLanes } from "../helpers/game-lanes.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const execFileAsync = promisify(execFile);
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
@@ -314,6 +316,7 @@ async function templateRig(statuses: NativeRunStatus[], evidence: string[]) {
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/pong",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     built: false,
     shape: {
       entry: "index.html",

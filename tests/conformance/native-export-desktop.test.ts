@@ -75,6 +75,8 @@ import {
   type DesktopExportGameDeps,
 } from "../../src/main/core/native-export-run.ts";
 import { raylibLanes } from "../helpers/game-lanes.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const run = promisify(execFile);
 const POSIX = process.platform !== "win32";
@@ -1138,6 +1140,7 @@ async function service(target: typeof BuildTarget.Windows | typeof BuildTarget.L
     createdAt: "",
     pathLabel: "",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     built: true,
     shape: {
       kind: ProjectKind.RaylibCpp,

@@ -750,6 +750,13 @@ async function gamesIpc() {
   return { invoke, asked, root };
 }
 
+/** Whether a game's folder holds a page at its root. */
+const hasPage = (dir: string) =>
+  readFile(path.join(dir, "index.html")).then(
+    () => true,
+    () => false,
+  );
+
 describe("Create game carries where people play", () => {
   it("studio:game.create forwards stack and targets, and a game made without them stays a browser game", async () => {
     const { invoke, asked } = await gamesIpc();
@@ -767,13 +774,15 @@ describe("Create game carries where people play", () => {
       "Pong",
       { stack: GameStack.ThreeJs, targets: [BuildTarget.Web], caller: ScaffoldCaller.Person },
     ]);
-    assert.ok(await readFile(path.join(pong.dir, "index.html"), "utf8"));
+    // FLIPPED for empty new projects: the folder holds no page until its first message picks its
+    // kind, where it used to get the Three.js starter.
+    assert.equal(await hasPage(pong.dir), false);
 
     const madePlain = await invoke("studio:game.create", { title: "Plain" });
     assert.ok(madePlain.ok, JSON.stringify(madePlain));
     const plain = madePlain.value as { dir: string };
     assert.deepEqual(asked.at(-1), ["Plain", { caller: ScaffoldCaller.Person }]);
-    assert.ok(await readFile(path.join(plain.dir, "index.html"), "utf8"));
+    assert.equal(await hasPage(plain.dir), false);
   });
 
   it("refuses a stack or destinations it does not know before any folder is made", async () => {

@@ -21,6 +21,7 @@ import { launchFromIntake } from "../../src/harness-seed/loop/chat-dispatch.ts";
 import { runDelegatedTurn } from "../../src/harness-seed/loop/delegated-turn.ts";
 import { runDirector } from "../../src/harness-seed/loop/director.ts";
 import { runGauntlet } from "../../src/harness-seed/loop/gauntlet.ts";
+import { ProjectStarter } from "../../src/harness-seed/loop/folder-facts.ts";
 import { HostMethod } from "../../src/harness-seed/loop/host-methods.ts";
 import { EngineId } from "../../src/harness-seed/loop/model-roles.ts";
 import { BuildTarget, NativeNightRefusal, ProjectKind } from "../../src/harness-seed/loop/native-contract.ts";
@@ -29,7 +30,6 @@ import { HOUR_MS } from "../../src/harness-seed/loop/time.ts";
 import { tools as gameTools } from "../../src/harness-seed/tools/game-tools.ts";
 import type { HarnessCtx, HarnessTool, Run, ToolCtx } from "../../src/harness-seed/types/harness.d.ts";
 import { CreationRefusal, GameStack } from "../../src/shared/game-project.ts";
-import { NativeRefusal } from "../../src/shared/native-contract.ts";
 import { coreLite } from "../helpers/core-lite.ts";
 import { type CtxRecorder, ctxRecorder } from "../helpers/ctx-recorder.ts";
 import { gitFile } from "../helpers/git.ts";
@@ -37,8 +37,11 @@ import { tmpDir } from "../helpers/tmp.ts";
 
 /** The seed the app ships, as the tests read it. */
 const SEED = path.resolve(import.meta.dirname, "../../src/harness-seed");
-/** The seed the Rust work started from (seed-exports-pre-rust.json's checkout): its modules lack `SERVES_RUST`. */
-const PRE_RUST_SEED = "0faa9b3f";
+/**
+ * The seed a harness workspace kept modules from before Rust games: origin/dev at cf4b2c56, the
+ * public seed the compiled stacks were ported onto. Its modules lack `SERVES_RUST`.
+ */
+const PRE_RUST_SEED = "cf4b2c56";
 /** Why the rows that read the pre-Rust seed from Git do not run: that commit is not in every clone. */
 const preRustMissing = commitInClone(PRE_RUST_SEED) ? false : `not run: ${PRE_RUST_SEED} is not in this clone`;
 /** The sentinel a recording ctx throws right after the scaffold, so the caller goes no further. */
@@ -198,7 +201,11 @@ describe("the current seed's intake makes a desktop game in Rust · wgpu", () =>
     it(`${caller} still asks nothing new for a browser intake`, async () => {
       const [params] = await scaffold([BuildTarget.Web]);
       assert.ok(params, "it scaffolded");
-      assert.equal("kind" in params, false, JSON.stringify(params));
+      // The runs and the chat launch name the web starter, as before Rust games; new_game and a
+      // chat turn name no kind.
+      const namesNoKind = caller === "tools/game-tools.ts new_game" || caller.startsWith("delegated-turn.ts");
+      assert.equal(params.kind, namesNoKind ? undefined : ProjectStarter.Web, JSON.stringify(params));
+      assert.equal("targets" in params, false, JSON.stringify(params));
     });
   }
 
@@ -304,17 +311,9 @@ async function refusedWithRetake(work: Promise<unknown>, code: string, module: s
 }
 
 describe("the host refuses a kept pre-Rust intake before any folder exists", () => {
-  it("a kept pre-Rust game-tools.ts and native-loop.ts asking for raylib get raylib-creation-retired and the re-take", {
-    skip: preRustMissing,
-  }, async (t) => {
-    const host = await hostKeeping(["tools/game-tools.ts", "loop/native-loop.ts"]);
-    t.after(host.close);
-    const asked = Promise.resolve(host.newGame.execute({ name: "pong", targets: [BuildTarget.Mac] }, host.ctx));
-    await refusedWithRetake(asked, CreationRefusal.RaylibCreationRetired, "tools/game-tools.ts");
-    assert.deepEqual(await host.folders(), [], "no folder was made");
-  });
-
-  it("game.scaffold from that workspace by raylib kind or by bare desktop destinations is refused the same way", {
+  // A raylib request from a workspace that kept a pre-Rust game-tools.ts: no seed before Rust asked
+  // for raylib itself, so the request is the one an older harness would send.
+  it("game.scaffold from a workspace keeping a pre-Rust game-tools.ts, by raylib kind or bare desktop destinations, is refused with the re-take", {
     skip: preRustMissing,
   }, async (t) => {
     const host = await hostKeeping(["tools/game-tools.ts"]);
@@ -336,9 +335,12 @@ describe("the host refuses a kept pre-Rust intake before any folder exists", () 
   }, async (t) => {
     const host = await hostKeeping(["tools/game-tools.ts"]);
     t.after(host.close);
-    const asked = Promise.resolve(host.newGame.execute({ name: "pong", targets: [BuildTarget.Mac] }, host.ctx));
-    await refusedWithRetake(asked, NativeRefusal.HarnessPredatesNative, "tools/game-tools.ts");
-    assert.deepEqual(await host.folders(), [], "no folder was made");
+    // The pre-Rust new_game names no destination, so a desktop ask reaches the host as no stack at all.
+    await host.newGame.execute({ name: "pong", targets: [BuildTarget.Mac] }, host.ctx);
+    for (const name of await host.folders()) {
+      const meta = JSON.parse(await readFile(path.join(host.gamesRoot, name, "studio.json"), "utf8"));
+      assert.notEqual(meta.stack, GameStack.RustWgpu, `${name} is no Rust folder`);
+    }
   });
 
   it("the current seed's new_game makes a desktop game a Rust · wgpu folder", async (t) => {

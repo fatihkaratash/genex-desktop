@@ -300,7 +300,7 @@ describe("the core's Rust stage: the genex release the shipped lock line pins", 
     // Flipped (pass-1 gate): the template ships a [render] section with its look since RX wave 0, so
     // the fragment is that section; it still has no [[wgsl]] rows (an empty set, still compiled in).
     // Flipped (pass-1 fix, platform cheap): the expected fragment is read from the template's own
-    // genex.toml, so a change to its look (ev_compensation 0.5 to 1.5 at c3d6013f) moves both sides.
+    // genex.toml, so a change to its look (ev_compensation 0.5 to 1.5) moves both sides.
     assert.deepEqual(staged, {
       ok: true,
       dependencies: ["genex"],

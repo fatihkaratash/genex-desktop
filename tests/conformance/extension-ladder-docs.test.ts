@@ -49,6 +49,8 @@ import { ApplePlatform, buildVersion } from "../fixtures/rust-bundles/binaries.t
 import { LoadCommand, loadCommand, machO } from "../helpers/macho.ts";
 import { admittedReport } from "../helpers/rust-admitted.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
 const SEED = path.join(REPO, "src", "harness-seed");
@@ -172,6 +174,7 @@ function rustGame(dir: string): GameProject {
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/forked",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     built: false,
     shape: {
       entry: "index.html",

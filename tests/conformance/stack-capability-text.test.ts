@@ -18,6 +18,8 @@ import { PluginAccountState } from "../../src/shared/plugins.ts";
 import { readProjectShape } from "../../src/substrate/game-workspace.ts";
 import { coreLite } from "../helpers/core-lite.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 /** The three.js template's words: a compiled game never reads them. */
 const THREE_WORDS = [/\/vendor\//, /Three\.js/, /import map/, /CDN/];
@@ -128,6 +130,7 @@ async function rustLibrary(t: TestContext) {
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/ferris",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     shape,
     built: false,
     destinations: { stack: GameStack.RustWgpu, targets: [BuildTarget.Web, BuildTarget.Mac] },

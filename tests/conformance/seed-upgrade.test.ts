@@ -55,6 +55,8 @@ import { SEED_GENERATED } from "../../scripts/gen-harness-types.ts";
 import { OPEN_LOOP_REFUSAL } from "../../src/harness-seed/loop/open-loop-prompts.ts";
 import { gameRepo, loopHost } from "../helpers/loop-host.ts";
 import { copyProject, Project } from "../helpers/project-fixtures.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 /** Where an upgrade keeps the agent's copy of `rel`: a renamed module's new path (seed-renames.ts). */
 const keptAt = (rel: string): string => RENAMED_SEED_FILES[rel] ?? rel;
@@ -1239,9 +1241,10 @@ describe("seed upgrade across the harness step flag", () => {
     // The older shapes: a scaffold that names no kind, a run start that starts nothing, no start tool.
     const older: ReadonlyArray<readonly [string, string, string]> = [
       ["loop/chat-dispatch.ts", "kind: ProjectStarter.Web", ""],
-      ["loop/autopilot.ts", "kind: ProjectStarter.Web", ""],
-      ["loop/director/setup.ts", "kind: ProjectStarter.Web", ""],
-      ["loop/gauntlet.ts", "kind: ProjectStarter.Web,", ""],
+      // A run's own scaffold asks through runScaffoldAsk: the older copies named no kind at all.
+      ["loop/autopilot.ts", "...runScaffoldAsk(listed, run.project, run.targets),", ""],
+      ["loop/director/setup.ts", "...runScaffoldAsk(listed, run.project, run.targets),", ""],
+      ["loop/gauntlet.ts", "...runScaffoldAsk(listed, run.project, run.targets),", ""],
       ["loop/run-dispatch.ts", "await startWebIfPending(host, run.project, games);", ""],
       ["tools/game-tools.ts", "HostMethod.GameStart", "HostMethod.GameValidate"],
     ];
@@ -2615,13 +2618,13 @@ describe("seed upgrade across the review fixes", () => {
 
 /**
  * The native contract (C++ · raylib) joins a seed whose every module an installed harness may keep
- * from before it. The vintage is every module's exports at the merge base the native work started
- * from. New names live in new modules (`loop/native-contract.ts`); a raylib night refuses to run
+ * from before it. The vintage is every module's exports at origin/dev cf4b2c56, the public seed the
+ * native work was ported onto. New names live in new modules (`loop/native-contract.ts`); a raylib night refuses to run
  * on a part kept from before (no `SERVES_NATIVE`), and the host refuses a raylib preview to a
  * lease that names no target, which only a harness from before native support acquires.
  */
 describe("seed upgrade across native", () => {
-  const VINTAGE_COMMIT = "6cdf89dd";
+  const VINTAGE_COMMIT = "cf4b2c56";
   const vintage = JSON.parse(
     readFileSync(fileURLToPath(new URL("../fixtures/seed-exports-pre-native.json", import.meta.url)), "utf8"),
   ) as { about: string; modules: Record<string, string[]> };
@@ -2899,6 +2902,7 @@ describe("seed upgrade across native", () => {
       createdAt: new Date(0).toISOString(),
       pathLabel: "~/AI Games/pong",
       library: true,
+      facts: factsOfEngine(GameEngine.Web),
       shape: {
         entry: "index.html",
         main: "src/main.cpp",
@@ -2934,12 +2938,13 @@ describe("seed upgrade across native", () => {
  * Rust games (M1.6). A seed upgrade keeps every module the in-app agent edited, so a part a Rust
  * night runs may be the agent's copy of a module from before Rust: it lacks `SERVES_RUST` and
  * routes by the binary raylib checks it was written with, which would send a Rust game down the
- * three.js path without a word. The vintage is every module's exports at `0faa9b3f`,
- * the baseline the Rust work starts from; the host refuses such a night by module name and offers
- * to re-take the seed copy, keeping the agent's edit as a patch.
+ * three.js path without a word. The vintage is every module's exports at origin/dev cf4b2c56 (the
+ * public seed the Rust work was ported onto) and the native modules as they were before Rust; the
+ * host refuses such a night by module name and offers to re-take the seed copy, keeping the
+ * agent's edit as a patch.
  */
 describe("seed upgrade across Rust", () => {
-  const VINTAGE_COMMIT = "0faa9b3f";
+  const VINTAGE_COMMIT = "cf4b2c56";
   const vintage = JSON.parse(
     readFileSync(fileURLToPath(new URL("../fixtures/seed-exports-pre-rust.json", import.meta.url)), "utf8"),
   ) as { about: string; modules: Record<string, string[]> };
@@ -2958,14 +2963,18 @@ describe("seed upgrade across Rust", () => {
       : false;
   const AGENT_EDIT = "\n// the agent's own change\n";
 
-  it("the vintage is every seed module at the Rust baseline", { skip: vintageMissing }, () => {
-    assert.match(vintage.about, new RegExp(`at ${VINTAGE_COMMIT}`));
+  it("the vintage is every seed module at the Rust baseline, and the native modules it ran", {
+    skip: vintageMissing,
+  }, () => {
+    assert.match(vintage.about, new RegExp(`at origin/dev ${VINTAGE_COMMIT}`));
     const listed = (atVintage(["ls-tree", "-r", "--name-only", VINTAGE_COMMIT, "--", "src/harness-seed"]) ?? "")
       .split("\n")
       .map((file) => file.replace(/^src\/harness-seed\//, ""))
       .filter((rel) => rel.endsWith(".ts") && !rel.endsWith(".d.ts") && !rel.startsWith("types/"));
     assert.ok(listed.length > 100, "the seed had over a hundred modules");
-    assert.deepEqual(Object.keys(vintage.modules).sort(), listed.sort());
+    const native = Object.keys(vintage.modules).filter((rel) => !listed.includes(rel));
+    assert.deepEqual(Object.keys(vintage.modules).sort(), [...listed, ...native].sort());
+    for (const rel of native) assert.ok(vintage.about.includes(rel), `${rel} is named as a native module`);
   });
 
   it("every part a Rust night runs is a seed module the vintage already had", async () => {

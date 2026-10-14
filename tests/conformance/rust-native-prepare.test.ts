@@ -26,6 +26,8 @@ import { CPU_X86_64, fat, LoadCommand, loadCommand, MachOFile, machO } from "../
 import { ApplePlatform, buildVersion } from "../fixtures/rust-bundles/binaries.ts";
 import { admittedReport } from "../helpers/rust-admitted.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const PROJECT = "ferris";
 const RUN_ID = "0123456789abcdef";
@@ -61,6 +63,7 @@ function rustGame(dir: string, targets: BuildTarget[] = [BuildTarget.Web, BuildT
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/ferris",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     built: false,
     shape: {
       entry: "index.html",

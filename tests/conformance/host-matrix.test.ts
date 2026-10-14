@@ -21,6 +21,8 @@ import type { NativePrepareRequest } from "../../src/main/core/native-runs.ts";
 import { type GameBoxSeams, type GameSpawnRequest, ProcessSandbox } from "../../src/substrate/spawn.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 import { raylibLanes } from "../helpers/game-lanes.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const HOSTS = [StudioPlatform.Windows, StudioPlatform.Linux] as const;
 type CrossHost = (typeof HOSTS)[number];
@@ -53,6 +55,7 @@ function game(targets: BuildTarget[]): GameProject {
     createdAt: new Date(0).toISOString(),
     pathLabel: "~/AI Games/pong",
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     shape: {
       entry: "index.html",
       main: "src/main.cpp",

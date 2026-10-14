@@ -67,6 +67,8 @@ import { signerPasswordFile } from "../../src/substrate/mobile-sign.ts";
 import { coreLite } from "../helpers/core-lite.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 import { ScaffoldCaller } from "../../src/substrate/game-workspace.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const POSIX = process.platform === "win32" && "POSIX paths";
 
@@ -344,6 +346,7 @@ function gameOf(stack: GameStack, targets: BuildTarget[], name = "pond"): GamePr
     createdAt: "2026-10-07T00:00:00.000Z",
     pathLabel: `~/AI Games/${name}`,
     library: true,
+    facts: factsOfEngine(GameEngine.Web),
     shape: { kind } as ProjectShape,
     built: false,
     destinations: { stack, targets },

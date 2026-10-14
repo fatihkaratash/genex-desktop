@@ -17,7 +17,7 @@ import { EventStore } from "../../src/substrate/event-store.ts";
 import { GameWorkspaces, ScaffoldCaller } from "../../src/substrate/game-workspace.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 import { coreLite, type CoreLite } from "../helpers/core-lite.ts";
-import { EXAMPLE_PLUGIN, PLUGIN_SDK_BACKEND } from "../helpers/plugins.ts";
+import { EXAMPLE_PLUGIN, installLocalOn, PLUGIN_SDK_BACKEND, personAllowsLocalTools } from "../helpers/plugins.ts";
 import { PluginRegistry } from "../../src/substrate/plugins/registry.ts";
 import { validateManifest } from "../../src/substrate/plugins/manifest.ts";
 import type { PluginInfo } from "../../src/shared/plugins.ts";
@@ -184,8 +184,8 @@ async function stackedRegistry(): Promise<{ registry: PluginRegistry; game: stri
 
 test("the registry hands a skill only to the stacks it names, and one that names none to every stack", async () => {
   const { registry, game } = await stackedRegistry();
-  const cpp = registry.snapshot(GameStack.RaylibCpp);
-  const three = registry.snapshot(GameStack.ThreeJs);
+  const cpp = registry.snapshot([], undefined, GameStack.RaylibCpp);
+  const three = registry.snapshot([], undefined, GameStack.ThreeJs);
   const unknown = registry.snapshot();
   const skillTool = (snapshot: typeof cpp) => snapshot.tools.find((t) => t.name === "cards__skill")?.description ?? "";
   assert.doesNotMatch(cpp.guidance, THREE_ONLY_SKILL, "a C++ game's brief");
@@ -356,7 +356,10 @@ async function realRootCore(): Promise<CoreLite> {
 test("a plugin's backend is told the bound game's stack on a builder's call", async () => {
   const { core } = await realRootCore();
   await twoStacks(core.games);
-  await core.plugins.installLocal(await stackEchoPlugin(), "local", []);
+  // A plugin loaded from a folder starts off and asks before each tool runs: the person turns it
+  // on and allows each call.
+  await installLocalOn(core.plugins, await stackEchoPlugin(), []);
+  personAllowsLocalTools(core.plugins);
   // The echo's backend is a child process of its own: it ends with the test, not with the core.
   after(() => core.plugins.cancel());
   const heard: Array<{ project: string; answer: unknown }> = [];

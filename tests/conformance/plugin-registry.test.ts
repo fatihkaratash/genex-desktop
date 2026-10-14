@@ -81,7 +81,7 @@ describe("the stack a backend receives", () => {
 describe("the skills a Rust game is handed", () => {
   test("an API 3 card naming every pre-Rust stack reaches a Rust game's brief and skill tool", async () => {
     const { registry, binding } = await echoRegistry(3, PRE_RUST);
-    const snapshot = registry.snapshot(GameStack.RustWgpu);
+    const snapshot = registry.snapshot([], undefined, GameStack.RustWgpu);
     assert.deepEqual(snapshot.applied.skills, ["echo/card"]);
     const page = (await registry.tool("echo__skill", { name: "card" }, { ...binding, stack: GameStack.RustWgpu })) as {
       text: string;
@@ -91,8 +91,8 @@ describe("the skills a Rust game is handed", () => {
 
   test("an API 3 card for one pre-Rust stack is withheld from a Rust game, and refused by name", async () => {
     const { registry, binding } = await echoRegistry(3, [GameStack.RaylibCpp]);
-    assert.deepEqual(registry.snapshot(GameStack.RustWgpu).applied.skills, []);
-    assert.deepEqual(registry.snapshot(GameStack.RaylibCpp).applied.skills, ["echo/card"]);
+    assert.deepEqual(registry.snapshot([], undefined, GameStack.RustWgpu).applied.skills, []);
+    assert.deepEqual(registry.snapshot([], undefined, GameStack.RaylibCpp).applied.skills, ["echo/card"]);
     await assert.rejects(
       registry.tool("echo__skill", { name: "card" }, { ...binding, stack: GameStack.RustWgpu }),
       /not for this game's stack/,
@@ -101,9 +101,9 @@ describe("the skills a Rust game is handed", () => {
 
   test("a Rust-only card on the Rust-aware API reaches only a Rust game", async () => {
     const { registry } = await echoRegistry(RUST_SKILL_STACKS_API, [GameStack.RustWgpu]);
-    assert.deepEqual(registry.snapshot(GameStack.RustWgpu).applied.skills, ["echo/card"]);
-    assert.deepEqual(registry.snapshot(GameStack.ThreeJs).applied.skills, []);
-    assert.deepEqual(registry.snapshot(GameStack.RaylibCpp).applied.skills, []);
+    assert.deepEqual(registry.snapshot([], undefined, GameStack.RustWgpu).applied.skills, ["echo/card"]);
+    assert.deepEqual(registry.snapshot([], undefined, GameStack.ThreeJs).applied.skills, []);
+    assert.deepEqual(registry.snapshot([], undefined, GameStack.RaylibCpp).applied.skills, []);
   });
 
   test("an API 3 package naming rust-wgpu is refused, typed, and serves nothing", async () => {
@@ -120,7 +120,7 @@ describe("the skills a Rust game is handed", () => {
       (error: unknown) =>
         error instanceof PluginManifestError && error.code === PluginManifestRefusal.RustSkillStackNeedsApi,
     );
-    const tools = registry.snapshot(GameStack.RustWgpu).tools.map((t) => t.name);
+    const tools = registry.snapshot([], undefined, GameStack.RustWgpu).tools.map((t) => t.name);
     assert.equal(
       tools.some((name) => name.startsWith("rusty__")),
       false,

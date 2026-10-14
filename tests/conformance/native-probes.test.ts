@@ -45,6 +45,8 @@ import { gameCommands, LoadCommand, machO } from "../helpers/macho.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 import { raylibLanes } from "../helpers/game-lanes.ts";
 import { ScaffoldCaller } from "../../src/substrate/game-workspace.ts";
+import { GameEngine } from "../../src/shared/game-engine.ts";
+import { factsOfEngine } from "../../src/shared/project-facts.ts";
 
 const OPENGL = "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL";
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
@@ -334,6 +336,7 @@ describe("the probes against a real headless run of the starter", {
       createdAt: new Date(0).toISOString(),
       pathLabel: "~/AI Games/pong",
       library: true,
+      facts: factsOfEngine(GameEngine.Web),
       built: false,
       shape: {
         entry: "index.html",

@@ -1302,7 +1302,7 @@ describe("the parts a Rust night runs (loop/run-dispatch.ts RUST_PARTS ↔ subst
     assert.ok(seedNative.servedStacks().includes(seedNative.GameStack.RustWgpu), "a lease declares rust-wgpu");
     const rust = { name: "ferris", shape: { kind: ProjectKind.RustWgpu } };
     assert.equal(
-      seedRunDispatch.nightRefusal(rust, [], {
+      seedRunDispatch.loopRunRefusal(rust, [], undefined, {
         servesRust: seedNative.servesRust(Object.values(seedRunDispatch.RUST_PARTS)),
       }),
       null,
@@ -1327,9 +1327,9 @@ describe("the parts a Rust night runs (loop/run-dispatch.ts RUST_PARTS ↔ subst
     assert.equal(seedRunDispatch.rustNightRefusal(rust, true), null);
     for (const kind of [ProjectKind.RaylibCpp, ProjectKind.ThreeVite, ProjectKind.StudioTemplate])
       assert.equal(seedRunDispatch.rustNightRefusal({ name: "pong", shape: { kind } }, false), null, kind);
-    assert.equal(seedRunDispatch.nightRefusal(rust, [], { servesRust: false }), refused?.message);
-    assert.equal(seedRunDispatch.nightRefusal(rust, [], { servesRust: true }), null);
-    assert.equal(seedRunDispatch.nightRefusal(rust, []), null, "absent, the caller checked nothing");
+    assert.equal(seedRunDispatch.loopRunRefusal(rust, [], undefined, { servesRust: false }), refused?.message);
+    assert.equal(seedRunDispatch.loopRunRefusal(rust, [], undefined, { servesRust: true }), null);
+    assert.equal(seedRunDispatch.loopRunRefusal(rust, []), null, "absent, the caller checked nothing");
   });
 
   it("a lease declares the stacks the harness serves: Rust only once every part a Rust night runs says so", async () => {

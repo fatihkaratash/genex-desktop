@@ -35,7 +35,7 @@ import {
   settleVision,
   toScoreboard,
 } from "../../src/harness-seed/loop/checks.ts";
-import { handleRunStart, nightRefusal } from "../../src/harness-seed/loop/run-dispatch.ts";
+import { handleRunStart, loopRunRefusal } from "../../src/harness-seed/loop/run-dispatch.ts";
 import {
   BuildTarget,
   CheckSupport,
@@ -73,6 +73,7 @@ import {
 } from "../../src/harness-seed/loop/judge.ts";
 import { EngineId } from "../../src/shared/providers.ts";
 import { GameEngine } from "../../src/shared/game-engine.ts";
+import { GameValidationCode } from "../../src/shared/game-project.ts";
 import { LEAD_WINDOWS, MAX_BUILDERS } from "../../src/shared/builders.ts";
 import { unionMergeMain, verifyWiringMerge } from "../../src/harness-seed/loop/merge.ts";
 import {
@@ -8906,25 +8907,28 @@ describe("C++ · raylib on the web lane (M3a)", () => {
     assert.deepEqual(watched(GameStack.ThreeJs), [], "a three.js shader keeps its #version line");
   });
 
-  it("RAYLIB-NIGHT. nightRefusal never matches 'is missing' when the host sends codes", () => {
+  it("RAYLIB-NIGHT. loopRunRefusal reads what is missing by name, never a problem's words", () => {
     const browser = { name: "pong", shape: { kind: "three-modules" } };
-    assert.equal(nightRefusal(browser, ["index.html is missing"], { codes: ["no-contract"] }), null);
+    assert.equal(loopRunRefusal(browser, ["index.html is missing"], []), null, "the words decide nothing");
+    assert.match(String(loopRunRefusal(browser, [], ["index.html"])), /index\.html is missing/);
+    // FLIPPED for the open Loop: an older launch that hands no `missing` meets no missing-file
+    // refusal (its base builder still owes the page), where it used to be refused by the words.
+    assert.equal(loopRunRefusal(browser, ["index.html is missing"]), null, "an older launch: no names");
+  });
+
+  it("RAYLIB-NIGHT. a raylib game is refused by game.validate's typed codes, in the problem's words", () => {
     const raylib = { name: "pong", shape: { kind: ProjectKind.RaylibCpp } };
-    const refused = nightRefusal(raylib, ["CMakeLists.txt is not a plain file"], { codes: ["native-missing-cmake"] });
-    assert.match(String(refused), /CMakeLists\.txt is not a plain file/);
-    assert.match(
-      String(nightRefusal(browser, ["index.html is missing"])),
-      /index\.html is missing/,
-      "an older host: the words",
-    );
+    const problem = "CMakeLists.txt is not a plain file";
+    const codes = [GameValidationCode.NativeMissingCMake];
+    assert.match(String(loopRunRefusal(raylib, [problem], [], { codes })), /CMakeLists\.txt is not a plain file/);
   });
 
   it("RAYLIB-NIGHT. a raylib night refuses when a part it runs is not marked; any other game does not", () => {
     const raylib = { name: "pong", shape: { kind: ProjectKind.RaylibCpp } };
     const browser = { name: "pong", shape: { kind: "three-modules" } };
-    assert.ok(nightRefusal(raylib, [], { servesNative: false }));
-    assert.equal(nightRefusal(raylib, [], { servesNative: true }), null);
-    assert.equal(nightRefusal(browser, [], { servesNative: false }), null);
+    assert.ok(loopRunRefusal(raylib, [], [], { servesNative: false }));
+    assert.equal(loopRunRefusal(raylib, [], [], { servesNative: true }), null);
+    assert.equal(loopRunRefusal(browser, [], [], { servesNative: false }), null);
   });
 
   it("RAYLIB-NIGHT. a browser game the host codes sparsely is refused for its missing file alone", async () => {
@@ -8937,7 +8941,7 @@ describe("C++ · raylib on the web lane (M3a)", () => {
     const readiness = await validateGameDir(dir);
     assert.ok(readiness.codes.length < readiness.problems.length, JSON.stringify(readiness));
     const refused = String(
-      nightRefusal({ name: "moth", shape: readiness.shape }, readiness.problems, { codes: readiness.codes }),
+      loopRunRefusal({ name: "moth", shape: readiness.shape }, readiness.problems, readiness.missing),
     );
     const [missing, ...rest] = readiness.problems;
     assert.ok(missing && refused.includes(missing), refused);

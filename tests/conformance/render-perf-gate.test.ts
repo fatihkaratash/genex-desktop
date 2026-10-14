@@ -151,7 +151,7 @@ describe("render perf comparator", () => {
 describe("render perf informational scenes", () => {
   it("reports the remastered Lakeside scenes' off rows as information that never fails the gate", async () => {
     // Owner decision 2026-10-12: the features-off rule covers the bench and stress scenes, whose
-    // content is unchanged since the baseline; the Lakeside's content was remastered at bf0920e1.
+    // content is unchanged since the baseline; the Lakeside's content was remastered after it.
     const base = await fixture("baseline.json");
     const lakeside = (record: PerfRecord, factor: number) => {
       const copy = structuredClone(record);
