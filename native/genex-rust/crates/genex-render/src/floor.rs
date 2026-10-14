@@ -48,6 +48,10 @@ pub const RENDERER_FEATURES: &[(Features, &str)] = &[
     (Features::TIMESTAMP_QUERY, "timestamp-query"),
     (Features::RG11B10UFLOAT_RENDERABLE, "rg11b10ufloat-renderable"),
     (Features::DEPTH_CLIP_CONTROL, "depth-clip-control"),
+    // Compressed material textures (renderer pass 2, A6.4): `texture::TextureFamily`.
+    (Features::TEXTURE_COMPRESSION_BC, "texture-compression-bc"),
+    (Features::TEXTURE_COMPRESSION_ASTC, "texture-compression-astc"),
+    (Features::TEXTURE_COMPRESSION_ETC2, "texture-compression-etc2"),
 ];
 
 /// The renderer-owned features among `offered` (what the device is opened with besides the

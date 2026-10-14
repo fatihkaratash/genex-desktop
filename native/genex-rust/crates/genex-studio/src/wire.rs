@@ -370,6 +370,12 @@ vocabulary! {
         Rg11b10UfloatRenderable => "rg11b10ufloat-renderable",
         /// `DEPTH_CLIP_CONTROL`: shadow casters drawn with unclipped depth (exact pancaking).
         DepthClipControl => "depth-clip-control",
+        /// `TEXTURE_COMPRESSION_BC`: BC7 material textures.
+        TextureCompressionBc => "texture-compression-bc",
+        /// `TEXTURE_COMPRESSION_ASTC`: ASTC 4x4 material textures.
+        TextureCompressionAstc => "texture-compression-astc",
+        /// `TEXTURE_COMPRESSION_ETC2`: ETC2 RGBA8 material textures.
+        TextureCompressionEtc2 => "texture-compression-etc2",
     }
 }
 

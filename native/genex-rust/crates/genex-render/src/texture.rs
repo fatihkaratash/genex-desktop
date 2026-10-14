@@ -21,7 +21,12 @@
 //! (`layout::texture_ref`) and the forward pass samples the class arrays while any texture lives
 //! past class 0. Level-2 v2 materials and immediate quads sample class 0 only.
 
-use wgpu::{Device, Queue, Texture, TextureFormat, TextureView};
+use wgpu::{Device, Queue, Texture, TextureView};
+
+// KTX2 and the compressed families (A6.4) live beside the arrays they fill.
+#[path = "texture_ktx2.rs"]
+mod texture_ktx2;
+pub use texture_ktx2::{CompressedTexture, TextureFamily, read_ktx2};
 
 use crate::budget::MaterialClass;
 use crate::caps::check_texture;
@@ -49,13 +54,6 @@ pub enum TextureKind {
 }
 
 impl TextureKind {
-    fn format(self) -> TextureFormat {
-        match self {
-            TextureKind::Color => TextureFormat::Rgba8UnormSrgb,
-            TextureKind::Data | TextureKind::Normal => TextureFormat::Rgba8Unorm,
-        }
-    }
-
     /// The array the texture lives in: [`TextureKind::Color`] or [`TextureKind::Data`] (normal
     /// maps are data).
     pub const fn array(self) -> TextureKind {
@@ -441,9 +439,11 @@ fn class_of_side(side: u32) -> TextureClass {
 
 /// One kind's texture array of one size class on the GPU. Today's arrays (`growing`) start at
 /// one layer and grow by copy to a power of two, keeping the mip chains to refill; a pre-sized
-/// size-class array is a 1 × 1 placeholder until its first texture, then allocated at its cap.
+/// size-class array is a 1 × 1 placeholder until its first texture, then allocated at its cap. A
+/// compressed family's array (A6.4) is always pre-sized.
 pub(crate) struct TextureArray {
     kind: TextureKind,
+    family: TextureFamily,
     side: u32,
     cap: u32,
     growing: bool,
@@ -457,15 +457,17 @@ impl TextureArray {
     /// Today's array: 256 layers growing to [`MAX_TEXTURE_LAYERS`], one blank layer so the bind
     /// group is valid before any texture is added.
     pub(crate) fn new(device: &Device, kind: TextureKind) -> TextureArray {
-        let (texture, view) = array_texture(device, kind, TEXTURE_LAYER_PX, 1);
-        TextureArray { kind, side: TEXTURE_LAYER_PX, cap: MAX_TEXTURE_LAYERS, growing: true, layers: 0, chains: Vec::new(), texture, view }
+        let family = TextureFamily::Rgba8;
+        let (texture, view) = array_texture(device, kind, family, TEXTURE_LAYER_PX, 1);
+        TextureArray { kind, family, side: TEXTURE_LAYER_PX, cap: MAX_TEXTURE_LAYERS, growing: true, layers: 0, chains: Vec::new(), texture, view }
     }
 
     /// A size-class array of `side` texels holding at most `cap` layers, allocated on its first
     /// texture.
-    fn presized(device: &Device, kind: TextureKind, side: u32, cap: u32) -> TextureArray {
-        let (texture, view) = array_texture(device, kind, 1, 1);
-        TextureArray { kind, side, cap, growing: false, layers: 0, chains: Vec::new(), texture, view }
+    fn presized(device: &Device, kind: TextureKind, family: TextureFamily, side: u32, cap: u32) -> TextureArray {
+        let placeholder = family.block_side();
+        let (texture, view) = array_texture(device, kind, family, placeholder, 1);
+        TextureArray { kind, family, side, cap, growing: false, layers: 0, chains: Vec::new(), texture, view }
     }
 
     /// The view the shaders sample.
@@ -489,7 +491,10 @@ impl TextureArray {
             return 0;
         }
         let (side, layers) = self.extent();
-        MaterialClass { size_px: side, layers }.bytes()
+        match self.family {
+            TextureFamily::Rgba8 => MaterialClass { size_px: side, layers }.bytes(),
+            family => family.chain_bytes(side) * u64::from(layers),
+        }
     }
 
     /// The refusal of a texture past the cap.
@@ -507,7 +512,7 @@ impl TextureArray {
         self.layers += 1;
         if !self.growing {
             if layer == 0 {
-                (self.texture, self.view) = array_texture(device, self.kind, self.side, self.cap);
+                (self.texture, self.view) = array_texture(device, self.kind, self.family, self.side, self.cap);
             }
             upload(queue, &self.texture, layer, &chain);
             return Ok(TextureId::in_class(kind, class_of_side(self.side), layer));
@@ -515,13 +520,28 @@ impl TextureArray {
         self.chains.push(chain);
         if layer >= self.texture.depth_or_array_layers() {
             let layers = (layer + 1).next_power_of_two().min(self.cap);
-            (self.texture, self.view) = array_texture(device, self.kind, self.side, layers);
+            (self.texture, self.view) = array_texture(device, self.kind, self.family, self.side, layers);
             for (at, chain) in self.chains.iter().enumerate() {
                 upload(queue, &self.texture, at as u32, chain);
             }
         } else if let Some(chain) = self.chains.last() {
             upload(queue, &self.texture, layer, chain);
         }
+        Ok(TextureId::in_class(kind, class_of_side(self.side), layer))
+    }
+
+    /// Add a compressed chain of this array's side (its family's blocks, level 0 first) as the
+    /// next layer, named as `kind`; the array is pre-sized, so it is allocated on its first layer.
+    fn add_blocks(&mut self, device: &Device, queue: &Queue, levels: &[Vec<u8>], kind: TextureKind) -> Result<TextureId, RenderError> {
+        let layer = self.layers;
+        if !self.has_room() {
+            return Err(self.full());
+        }
+        self.layers += 1;
+        if layer == 0 {
+            (self.texture, self.view) = array_texture(device, self.kind, self.family, self.side, self.cap);
+        }
+        upload_blocks(queue, &self.texture, self.family, layer, levels);
         Ok(TextureId::in_class(kind, class_of_side(self.side), layer))
     }
 
@@ -537,6 +557,7 @@ impl TextureArray {
 pub struct ClassArrays {
     class: DeviceClass,
     quality: TextureQuality,
+    family: TextureFamily,
     arrays: Vec<[TextureArray; 2]>,
 }
 
@@ -544,21 +565,36 @@ impl ClassArrays {
     /// The arrays `class` holds at `quality`; nothing is allocated before a class's first texture
     /// but today's one-layer 256 arrays when `quality` is off.
     pub fn new(device: &Device, class: DeviceClass, quality: TextureQuality) -> ClassArrays {
+        ClassArrays::with_family(device, class, quality, TextureFamily::Rgba8)
+    }
+
+    /// The arrays `class` holds at `quality`, stored in `family` (A6.4): a compressed family's
+    /// arrays take only [`CompressedTexture`]s of that family ([`ClassArrays::add_compressed`]) and
+    /// are always pre-sized; [`TextureFamily::Rgba8`] is [`ClassArrays::new`].
+    pub fn with_family(device: &Device, class: DeviceClass, quality: TextureQuality, family: TextureFamily) -> ClassArrays {
         let caps = class_layer_caps(class, quality);
+        let growing = |texture_class: TextureClass| {
+            family == TextureFamily::Rgba8 && quality == TextureQuality::OFF && texture_class == TextureClass::S256
+        };
         let arrays = TextureClass::ALL
             .into_iter()
             .map(|texture_class| {
                 let (side, cap) = (texture_class.side(), caps[texture_class.index() as usize]);
                 [TextureKind::Color, TextureKind::Data].map(|kind| {
-                    if quality == TextureQuality::OFF && texture_class == TextureClass::S256 {
+                    if growing(texture_class) {
                         TextureArray::new(device, kind)
                     } else {
-                        TextureArray::presized(device, kind, side, cap)
+                        TextureArray::presized(device, kind, family, side, cap)
                     }
                 })
             })
             .collect();
-        ClassArrays { class, quality, arrays }
+        ClassArrays { class, quality, family, arrays }
+    }
+
+    /// The family the arrays are stored in.
+    pub fn family(&self) -> TextureFamily {
+        self.family
     }
 
     /// The texture quality the arrays were made for.
@@ -586,6 +622,7 @@ impl ClassArrays {
     /// `texture-too-large` only when every class is full. A [`TextureKind::Normal`] texture goes
     /// through [`ClassArrays::add_normal_map`].
     pub fn add(&mut self, device: &Device, queue: &Queue, data: &TextureData, kind: TextureKind) -> Result<TextureId, RenderError> {
+        self.check_rgba8()?;
         if kind == TextureKind::Normal {
             return self.add_normal_map(device, queue, data);
         }
@@ -595,6 +632,7 @@ impl ClassArrays {
     /// Add a tangent-space normal map (a [`TextureKind::Normal`] texture in the data arrays) with
     /// Toksvig mips when the quality says so ([`normal_mip_chain`]).
     pub fn add_normal_map(&mut self, device: &Device, queue: &Queue, data: &TextureData) -> Result<TextureId, RenderError> {
+        self.check_rgba8()?;
         let toksvig = self.quality.toksvig;
         self.place(device, queue, data, TextureKind::Normal, |side| normal_mip_chain(data, side, toksvig))
     }
@@ -623,9 +661,47 @@ impl ClassArrays {
         array.add_chain(device, queue, chain(side), kind)
     }
 
+    /// Refused `texture-invalid` unless the arrays hold RGBA8 (an RGBA8 image is never encoded here).
+    fn check_rgba8(&self) -> Result<(), RenderError> {
+        if self.family == TextureFamily::Rgba8 {
+            return Ok(());
+        }
+        Err(RenderError::refused(RenderCode::TextureInvalid, format!("the arrays hold {:?}, not RGBA8 images", self.family)))
+    }
+
+    /// Add a compressed texture of the arrays' family as `kind` (A6.4): its chain is never
+    /// resampled, so it goes in the largest class with room that its own size, the quality and the
+    /// caps allow, its top levels dropped to that class's side. Refused `texture-invalid` for
+    /// another family or a texture under the smallest class, `texture-too-large` when every class
+    /// it fits is full.
+    pub fn add_compressed(&mut self, device: &Device, queue: &Queue, texture: &CompressedTexture, kind: TextureKind) -> Result<TextureId, RenderError> {
+        if texture.family() != self.family {
+            return Err(RenderError::refused(RenderCode::TextureInvalid, format!("a {:?} texture in {:?} arrays", texture.family(), self.family)));
+        }
+        let at = usize::from(kind.is_data());
+        let largest = TextureClass::ALL.into_iter().rev().find(|class| self.arrays[class.index() as usize][at].cap > 0).unwrap_or(TextureClass::S256);
+        let wanted = class_for_source(texture.side(), texture.side(), largest.min(self.quality.max_class));
+        let fits = |class: &TextureClass| *class <= wanted && class.side() <= texture.side();
+        if !TextureClass::ALL.iter().any(fits) {
+            return Err(RenderError::refused(RenderCode::TextureInvalid, format!("{} texels is under the smallest size class", texture.side())));
+        }
+        let room = |class: &TextureClass| fits(class) && self.arrays[class.index() as usize][at].has_room();
+        let Some(chosen) = TextureClass::ALL.into_iter().rev().find(room) else {
+            return Err(RenderError::refused(RenderCode::TextureTooLarge, format!("every {kind:?} size class it fits is full")));
+        };
+        let array = &mut self.arrays[chosen.index() as usize][at];
+        let levels = texture.chain_from(array.side).ok_or_else(|| RenderError::refused(RenderCode::TextureInvalid, "no level of the class's side"))?;
+        array.add_blocks(device, queue, levels, kind)
+    }
+
     /// The view the shaders sample for `class`'s `kind` array.
     pub fn view(&self, class: TextureClass, kind: TextureKind) -> &TextureView {
         self.array(class, kind).view()
+    }
+
+    /// The GPU texture behind `class`'s `kind` array (captures and readback tests).
+    pub fn texture(&self, class: TextureClass, kind: TextureKind) -> &Texture {
+        &self.array(class, kind).texture
     }
 
     /// `class`'s `kind` array as allocated: its side and layers (1 × 1 before its first texture).
@@ -644,15 +720,22 @@ impl ClassArrays {
     }
 }
 
-fn array_texture(device: &Device, kind: TextureKind, side: u32, layers: u32) -> (Texture, TextureView) {
+/// A material array is sampled and written; a compressed one is also copied out, so its stored
+/// blocks can be read back (RGBA8 arrays keep today's usage).
+fn array_usage(family: TextureFamily) -> wgpu::TextureUsages {
+    let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+    if family == TextureFamily::Rgba8 { usage } else { usage | wgpu::TextureUsages::COPY_SRC }
+}
+
+fn array_texture(device: &Device, kind: TextureKind, family: TextureFamily, side: u32, layers: u32) -> (Texture, TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("texture array"),
         size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: layers },
         mip_level_count: mip_level_count(side),
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: kind.format(),
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        format: family.format(kind),
+        usage: array_usage(family),
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -674,6 +757,22 @@ fn upload(queue: &Queue, texture: &Texture, layer: u32, chain: &[TextureData]) {
             &mip.rgba,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(mip.width * 4), rows_per_image: Some(mip.height) },
             wgpu::Extent3d { width: mip.width, height: mip.height, depth_or_array_layers: 1 },
+        );
+    }
+}
+
+/// Write a compressed chain (level 0 first) into `layer`: whole blocks, a mip under one block
+/// written as its one block (WebGPU copies compressed levels at their block-rounded size).
+fn upload_blocks(queue: &Queue, texture: &Texture, family: TextureFamily, layer: u32, levels: &[Vec<u8>]) {
+    let side = family.block_side();
+    for (level, data) in levels.iter().enumerate() {
+        let px = (texture.width() >> level).max(1);
+        let blocks = px.div_ceil(side);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture, mip_level: level as u32, origin: wgpu::Origin3d { x: 0, y: 0, z: layer }, aspect: wgpu::TextureAspect::All },
+            data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(blocks * family.block_bytes()), rows_per_image: Some(blocks) },
+            wgpu::Extent3d { width: blocks * side, height: blocks * side, depth_or_array_layers: 1 },
         );
     }
 }

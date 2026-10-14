@@ -68,6 +68,19 @@ A part also carries its material's `KHR_materials_*` extensions (`GlbPart::mater
 defaults and clamped into range, textures named by their image on TEXCOORD_0. They are read, not
 yet shaded: no GPU row carries them.
 
+### Compressed material textures
+
+`src/texture_ktx2.rs` reads a KTX2 file in one fixed GPU format with the `ktx2` crate:
+BC7, ASTC 4x4 or ETC2 RGBA8 (sRGB or linear), or RGBA8, one square power-of-two 2D image whose
+levels are stored plain down to 1 x 1. A Basis Universal or supercompressed file is refused: the
+Studio's export writes each family's levels plain, so the runtime carries no transcoder. Size-class
+arrays made for a family (`ClassArrays::with_family`) take only that family's textures
+(`add_compressed`); a chain is never resampled, so a larger texture drops its top levels into a
+smaller class. The three compression features are renderer-owned (`floor::RENDERER_FEATURES`),
+requested whenever the adapter offers them. A compressed layer takes a quarter of RGBA8's bytes.
+The renderer itself still makes RGBA8 arrays: choosing a family per device and loading a game's
+KTX2 files through it is the follow-up that wires them in.
+
 ## Extension layouts
 
 Level-2 materials and post passes declare `[[wgsl]] api = 1 | 2`. API 2 reads the v2 group map

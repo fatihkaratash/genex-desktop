@@ -1978,7 +1978,7 @@ export type NativeWgpuBackend = 'metal' | 'vulkan' | 'd3d12' | 'webgpu';
 export type NativeEnhancedFeature = 'shader-int64-atomic-min-max' | 'shader-int64-atomic-all-ops' | 'subgroup' | 'ray-query' | 'mesh-shader' | 'texture-binding-array' | 'multi-draw-indirect-count';
 // ↑ src/shared/native-contract.ts
 
-export type RendererFeature = 'timestamp-query' | 'rg11b10ufloat-renderable' | 'depth-clip-control';
+export type RendererFeature = 'timestamp-query' | 'rg11b10ufloat-renderable' | 'depth-clip-control' | 'texture-compression-bc' | 'texture-compression-astc' | 'texture-compression-etc2';
 // ↑ src/shared/render-quality.ts
 
 export type RenderInput = 'depth' | 'normals' | 'motion' | 'environment' | 'hdr-scene';

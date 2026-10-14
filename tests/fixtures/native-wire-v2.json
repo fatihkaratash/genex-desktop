@@ -170,7 +170,14 @@
     "shadowBlendBandMax": 0.5,
     "settingsSources": ["toml", "reference-class", "verb"],
     "captureExposure": ["instant"],
-    "rendererFeatures": ["timestamp-query", "rg11b10ufloat-renderable", "depth-clip-control"],
+    "rendererFeatures": [
+      "timestamp-query",
+      "rg11b10ufloat-renderable",
+      "depth-clip-control",
+      "texture-compression-bc",
+      "texture-compression-astc",
+      "texture-compression-etc2"
+    ],
     "renderInputs": ["depth", "normals", "motion", "environment", "hdr-scene"],
     "postPassStages": ["ldr", "hdr"],
     "settingsRefusals": [
