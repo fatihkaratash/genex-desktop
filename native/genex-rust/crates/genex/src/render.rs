@@ -1908,7 +1908,7 @@ mod tests {
 
     /// One GiB.
     const GIB: u64 = 1024 * 1024 * 1024;
-    /// What Metal recommends on the owner's 36 GB M-series Mac (about three quarters of it).
+    /// What Metal recommends on a 36 GB M-series Mac (about three quarters of it).
     const LARGE_MAC_MEMORY: u64 = 27 * GIB;
     /// What Metal recommends on an 8 GB MacBook Air (two thirds of it).
     const SMALL_MAC_MEMORY: u64 = 8 * GIB / 3 * 2;
@@ -1920,7 +1920,7 @@ mod tests {
     fn a_large_memory_mac_keeps_ao_at_high_on_its_retina_full_screen_and_is_offered_all_four_presets() {
         // Pass-1 gate (perf-platform 4, owner decision 2026-10-12 (2)): desktop-high's fixed 512 MB
         // dropped AO at high and ultra on a 3024 x 1964 output, so the panel offered only low and
-        // medium on the owner's 36 GB Mac. Its budget now scales with the GPU-visible memory.
+        // medium on a 36 GB Mac. Its budget now scales with the GPU-visible memory.
         let mut mac = mac_with_memory((3024, 1964), Some(LARGE_MAC_MEMORY));
         assert_eq!(mac.detected_class().wire(), "desktop-high");
         for preset in [QualityPreset::High, QualityPreset::Ultra] {

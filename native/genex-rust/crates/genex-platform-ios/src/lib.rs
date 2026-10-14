@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn a_refused_gpu_shows_the_designed_refusal_screen_on_ios_instead_of_exiting_to_a_black_window() {
         // Below WebGPU core (the Simulator's Metal), `None` made the shell exit after the record and
-        // left the window black (rust-mobile run 37771005986).
+        // left the window black (seen in a rust-mobile CI run).
         assert!(IOS_HOOKS.refusal_screen.is_some(), "iOS draws the refusal screen, as Android does");
     }
 

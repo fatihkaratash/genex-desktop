@@ -3,7 +3,7 @@
 //! the shell re-reads the safe area, re-presents and keeps mapping fingers through the same
 //! [`Presentation`], so the game never sees its world change size. [`RotationWatch`] notices
 //! the orientation flip for the lifecycle log, and [`world_fill`] records how much of the safe
-//! rectangle the world covers in each orientation, the evidence the owner's iPhone run (M5.7)
+//! rectangle the world covers in each orientation, the evidence an iPhone run
 //! needs to tell whether per-orientation sizes are worth offering later.
 
 use crate::mobile::present::Presentation;

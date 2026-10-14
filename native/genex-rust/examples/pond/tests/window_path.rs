@@ -1,8 +1,8 @@
 //! The pond's window path, headless (FIX-WINDOW): `genex::desktop_shot` runs the desktop shell's
 //! own frames (the loop a window gets, with no window) and letterboxes the world into an
 //! offscreen window the way the shell presents onto a real one. The pond in a window must show
-//! the pond (ground, water, the GLB rim, floaters, the rod), never the lone magenta checker the
-//! owner's screenshot showed; the control row with an empty asset table shows exactly that checker
+//! the pond (ground, water, the GLB rim, floaters, the rod), never the lone magenta checker a
+//! screenshot once showed; the control row with an empty asset table shows exactly that checker
 //! and names the models it could not load in `state().__render.missingModels`.
 //!
 //! GPU rows: they skip when the host has no WebGPU-core adapter, and `GENEX_REQUIRE_METAL=1` turns

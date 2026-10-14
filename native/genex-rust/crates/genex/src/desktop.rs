@@ -324,7 +324,7 @@ pub fn desktop_shot<W: Default + 'static>(
 
 /// GPU rows: the shell's headless mode on the host GPU (Metal on the Mac). Run with
 /// `cargo test -p genex -- --ignored metal` (`GENEX_REQUIRE_METAL=1` makes a missing adapter a
-/// failure). The windowed half needs a display and a person: the owner's M2.4 gate row.
+/// failure). The windowed half needs a display and a person: a manual gate row.
 #[cfg(test)]
 mod tests {
     use super::*;

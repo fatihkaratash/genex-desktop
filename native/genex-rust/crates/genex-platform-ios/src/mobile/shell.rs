@@ -234,8 +234,8 @@ pub fn refusal_screen_event(code: RenderCode, shown: bool, window: (u32, u32)) -
 }
 
 /// The lifecycle log's record of the first frame presented on a surface: the world frames rendered
-/// so far and the window it went to. An admitted adapter is not a drawn frame (pass-1 fix, CI run
-/// 38311853073: the emulator's capture came before any frame), so a smoke captures after this one.
+/// so far and the window it went to. An admitted adapter is not a drawn frame (in a CI run the
+/// emulator's capture came before any frame), so a smoke captures after this one.
 pub fn frame_presented_event(rendered: u64, window: (u32, u32)) -> serde_json::Value {
     json!({ "event": "frame-presented", "rendered": rendered, "window": [window.0, window.1] })
 }
