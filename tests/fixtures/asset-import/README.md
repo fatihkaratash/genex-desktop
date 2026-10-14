@@ -26,3 +26,6 @@ texture inputs are the shared samples in `../asset-previews/`.
   `basis-uastc-64.{bc,astc,etc2,rgba8}.ktx2` are what the import step writes from the UASTC one
   (`transcodeKtx2Families`, through the pinned transcoder); the runtime's `texture_compressed`
   rows read them.
+- `lods-sphere.glb`: a 16 x 32 UV sphere in two primitives (the test's own `sphereGlb`), as the
+  import step writes it: `extras.genex_lods` simplified by meshoptimizer's simplifier
+  (`rust-assets-lods.test.ts` holds it to `convertAsset`); genex-render's `glb_lods` rows load it.

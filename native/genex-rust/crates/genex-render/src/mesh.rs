@@ -21,6 +21,13 @@ pub use glb_material::{GlbEmission, GlbMaterial, GlbModel, GlbPart, decode_image
 #[path = "glb_material_ext.rs"]
 mod glb_material_ext;
 pub use glb_material_ext::{DEFAULT_IOR, GlbAnisotropy, GlbClearcoat, GlbMaterialExt, GlbSheen, GlbSpecular, GlbTexture, GlbVolume};
+// Import-time LODs (A6.9) are read beside the meshlet extras they sit next to.
+#[path = "mesh_lod.rs"]
+mod mesh_lod;
+pub use mesh_lod::{
+    LOD_MAX_LEVELS, LOD_MIN_TRIANGLES, LOD_SCHEMA_VERSION, LOD_SELECT_WGSL, LODS_EXTRAS_KEY, LodChain, LodExtrasKey, LodFault, LodLevel, LodLevelKey,
+    LodWarning, select_lod,
+};
 
 /// One vertex as the vertex buffer holds it (`MeshVertex` in the skinning shader).
 #[repr(C)]

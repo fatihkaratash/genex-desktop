@@ -16,7 +16,8 @@
 use crate::caps::check_texture;
 use crate::error::{RenderCode, RenderError};
 use crate::mesh::glb_material_ext::read_material_ext;
-use crate::mesh::{GlbMaterialExt, MeshData, MeshletMerge, MeshletWarning, for_each_primitive, invalid, open_glb};
+use crate::mesh::mesh_lod::{LodMerge, read_lod_extras};
+use crate::mesh::{GlbMaterialExt, LodChain, LodWarning, MeshData, MeshletMerge, MeshletWarning, for_each_primitive, invalid, open_glb};
 use crate::meshlet::MeshletSet;
 use crate::pbr::Material;
 use crate::texture::{TextureData, TextureId, TextureKind, linear_to_srgb, srgb_to_linear};
@@ -149,6 +150,11 @@ pub struct GlbPart {
     /// among this part's primitives and the [`crate::meshlet::MeshletFault`]): the mesh then
     /// clusters at runtime, and a loader reports them with the asset's load warnings.
     pub meshlet_warnings: Vec<MeshletWarning>,
+    /// The simplified levels its primitives carried (`extras.genex_lods`, A6.9), merged level by
+    /// level; `None` when any primitive had none or one was refused (the mesh then draws whole).
+    pub lods: Option<LodChain>,
+    /// The typed warnings of the primitives whose `genex_lods` were refused.
+    pub lod_warnings: Vec<LodWarning>,
 }
 
 /// A GLB as one mesh per material, and the images its materials sample.
@@ -167,28 +173,33 @@ impl GlbModel {
     pub fn from_glb(bytes: &[u8]) -> Result<GlbModel, RenderError> {
         let gltf = open_glb(bytes)?;
         let blob = gltf.blob.as_deref();
-        let mut groups: Vec<(Option<usize>, MeshData, MeshletMerge)> = Vec::new();
+        let mut groups: Vec<(Option<usize>, MeshData, MeshletMerge, LodMerge)> = Vec::new();
         for_each_primitive(&gltf, &mut |primitive, world| {
             let key = primitive.material().index();
-            let at = match groups.iter().position(|(known, _, _)| *known == key) {
+            let at = match groups.iter().position(|(known, ..)| *known == key) {
                 Some(at) => at,
                 None => {
-                    groups.push((key, MeshData::default(), MeshletMerge::default()));
+                    groups.push((key, MeshData::default(), MeshletMerge::default(), LodMerge::default()));
                     groups.len() - 1
                 }
             };
-            let (_, mesh, merge) = &mut groups[at];
-            mesh.append_with_meshlets(&gltf, primitive, world, blob, merge)
+            let (_, mesh, merge, lods) = &mut groups[at];
+            let base = mesh.vertices.len() as u32;
+            mesh.append_with_meshlets(&gltf, primitive, world, blob, merge)?;
+            let vertex_count = mesh.vertices.len() as u32 - base;
+            lods.visit(read_lod_extras(&gltf, primitive, blob, vertex_count), world, base);
+            Ok(())
         })?;
-        groups.retain(|(_, mesh, _)| !mesh.indices.is_empty());
+        groups.retain(|(_, mesh, ..)| !mesh.indices.is_empty());
         if groups.is_empty() {
             return Err(invalid("the GLB has no triangles"));
         }
         let parts: Vec<GlbPart> = groups
             .into_iter()
-            .map(|(key, mesh, merge)| {
+            .map(|(key, mesh, merge, lods)| {
                 let material = key.and_then(|index| gltf.materials().nth(index));
                 let merged = merge.finish();
+                let (lods, lod_warnings) = lods.finish();
                 GlbPart {
                     mesh,
                     material: material.as_ref().map(read_material),
@@ -196,6 +207,8 @@ impl GlbModel {
                     material_ext: material.as_ref().and_then(|material| read_material_ext(material, &gltf.document)),
                     meshlets: merged.set,
                     meshlet_warnings: merged.warnings,
+                    lods,
+                    lod_warnings,
                 }
             })
             .collect();

@@ -18,6 +18,7 @@ import {
   transcodeKtx2,
   transcodeKtx2Families,
 } from "./ktx2.ts";
+import { addLodExtras } from "./lods.ts";
 import { addMeshletExtras } from "./meshlets.ts";
 import { MeshFormatError, objToMesh } from "./obj.ts";
 import { plyToMesh, stlToMesh } from "./stl-ply.ts";
@@ -81,10 +82,14 @@ function checkHdr(input: ConvertInput): ConvertResult {
   return { ok: true, bytes: input.bytes };
 }
 
-/** A GLB the runtime loads, with import-time meshlets when it is big enough (R2.3); never a refusal. */
+/**
+ * A GLB the runtime loads, with import-time meshlets (R2.3) and LODs (A6.9) when it is big enough
+ * for each; never a refusal.
+ */
 async function withMeshlets(glb: Uint8Array, input: ConvertInput): Promise<ConvertResult> {
   const minTriangles = input.meshletMinTriangles;
-  const { bytes } = await addMeshletExtras(glb, minTriangles === undefined ? {} : { minTriangles });
+  const { bytes: clustered } = await addMeshletExtras(glb, minTriangles === undefined ? {} : { minTriangles });
+  const { bytes } = await addLodExtras(clustered);
   return { ok: true, bytes };
 }
 

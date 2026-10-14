@@ -81,6 +81,28 @@ requested whenever the adapter offers them. A compressed layer takes a quarter o
 The renderer itself still makes RGBA8 arrays: choosing a family per device and loading a game's
 KTX2 files through it is the follow-up that wires them in.
 
+### `genex_lods` in glTF
+
+The Studio's import step simplifies a GLB of at least 512 triangles with meshoptimizer and stores
+each primitive's levels in its `extras`, never as an extension:
+
+```json
+"extras": { "genex_lods": {
+  "version": 1, "indices": 12,
+  "levels": [ { "first": 0, "count": 1536, "error": 0.006 }, { "first": 1536, "count": 768, "error": 0.009 } ]
+} }
+```
+
+`indices` is a bufferView of little-endian `u32` primitive vertex indices, level after level;
+each level is whole triangles, no finer than the one before, with an object-space error never
+smaller than the one before, at most four levels. `src/mesh_lod.rs` validates them (a typed
+`LodFault` otherwise, and the mesh draws whole) and merges a part's primitives level by level
+(`GlbPart::lods`: level k is every primitive's level k, its error the largest, scaled by each
+node). `select_lod` picks the coarsest level whose error projects to at most a pixel threshold,
+compared as `error * pixels_per_unit <= threshold_px * distance` so `gx_lod_select`
+(`shaders/geometry/lod_select.wgsl`) picks the same level on every GPU. Uploading the levels'
+indices and letting the cull write each instance's index range is the follow-up that draws them.
+
 ## Extension layouts
 
 Level-2 materials and post passes declare `[[wgsl]] api = 1 | 2`. API 2 reads the v2 group map

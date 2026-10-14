@@ -358,8 +358,8 @@ not shipped.
 
 ## Asset importer decoders
 
-The Rust · wgpu asset import step (`src/substrate/asset-import/`) runs four WebAssembly modules
-in its own sandbox: three decoders and meshoptimizer's meshlet clusterizer. They are the builds
+The Rust · wgpu asset import step (`src/substrate/asset-import/`) runs five WebAssembly modules
+in its own sandbox: three decoders, meshoptimizer's meshlet clusterizer and its simplifier. They are the builds
 three.js 0.185.1 ships in `examples/jsm/libs`, read from the pinned `three` package (paths below
 are under it). Their licence and notice texts are in the three.js add-on library sections below. The packaged app does not carry the importer yet; when it does,
 this page ships beside the decoders.
@@ -370,6 +370,7 @@ this page ships beside the decoders.
 | `examples/jsm/libs/draco/gltf/` | [Draco](https://github.com/google/draco) 1.5.6 glTF decoder | Apache-2.0 |
 | `examples/jsm/libs/meshopt_decoder.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) 1.1.1 decoder | MIT |
 | `examples/jsm/libs/meshopt_clusterizer.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) meshlet clusterizer (a development build between 1.1.1 and 1.2.0); the importer stores its meshlets in glTF `extras` | MIT |
+| `examples/jsm/libs/meshopt_simplifier.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) simplifier (a development build between 1.1.1 and 1.2.0); the importer stores its levels of detail in glTF `extras` | MIT |
 
 ## Asset importer ports
 

@@ -363,6 +363,42 @@ export const MeshletFault = {
 } as const;
 export type MeshletFault = (typeof MeshletFault)[keyof typeof MeshletFault];
 
+// ── LODs (renderer pass 2, A6.9): the `genex_lods` glTF extras the importer writes and the renderer reads ──
+
+/** The member of a glTF primitive's `extras` holding its simplified levels: never an extension. */
+export const LODS_EXTRAS_KEY = "genex_lods";
+/** The `genex_lods` schema version the renderer reads; another version is ignored (the mesh draws whole). */
+export const LOD_SCHEMA_VERSION = 1;
+/** Most levels past the primitive's own triangles. */
+export const LOD_MAX_LEVELS = 4;
+/** The fewest triangles a GLB needs to get import-time levels. */
+export const LOD_MIN_TRIANGLES = 512;
+
+/**
+ * The members of the `genex_lods` extras object: the schema version, the bufferView of every
+ * level's triangle list (little-endian `u32` primitive vertex indices, level after level) and the
+ * levels, coarser and coarser. Wire values.
+ */
+export const LodExtrasKey = { Version: "version", Indices: "indices", Levels: "levels" } as const;
+export type LodExtrasKey = (typeof LodExtrasKey)[keyof typeof LodExtrasKey];
+
+/**
+ * The members of one level: its first index in the view, its index count, and its simplification
+ * error, an object-space distance (meshoptimizer's relative error times the mesh's extent). Wire values.
+ */
+export const LodLevelKey = { First: "first", Count: "count", Error: "error" } as const;
+export type LodLevelKey = (typeof LodLevelKey)[keyof typeof LodLevelKey];
+
+/** Why the renderer drops a primitive's `genex_lods` (the mesh then draws whole): the typed warning. Wire values. */
+export const LodFault = {
+  UnknownVersion: "lods-unknown-version",
+  OverLimit: "lods-over-limit",
+  RangeOutOfBounds: "lods-range-out-of-bounds",
+  VertexOutOfMesh: "lods-vertex-out-of-mesh",
+  NotCoarser: "lods-not-coarser",
+} as const;
+export type LodFault = (typeof LodFault)[keyof typeof LodFault];
+
 // ── genex.toml's [render] ───────────────────────────────────────────────────────────────────────
 
 /** A game's look from `[render.look]`; a key left out keeps the facade's default. */
