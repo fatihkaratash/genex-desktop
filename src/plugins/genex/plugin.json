@@ -116,7 +116,7 @@
     },
     {
       "name": "package",
-      "description": "Add Genex's multiplayer package (@genex-ai/multiplayer) or player-identity package (@genex-ai/embed-sdk) to this game, at the version Studio pins, with the game's own package manager. A multiplayer request installs both multiplayer and player identity in one approved command. In a game made from Studio's template (no package.json) player identity maps Studio's copy in the page's import map instead of installing, and Studio connects the game; multiplayer cannot be added there yet. Any other game without package.json cannot add them, and neither can a compiled game (Rust · wgpu, or a C++ · raylib game made before Rust), whose stack refuses JavaScript packages.",
+      "description": "Add Genex's multiplayer package (@genex-ai/multiplayer) or player-identity package (@genex-ai/embed-sdk) to this game, at the version Studio pins, with the game's own package manager. A multiplayer request installs both multiplayer and player identity in one approved command. In a game made from Studio's template (no package.json) player identity uses Studio's own copy instead of installing, and Studio connects the game; multiplayer cannot be added there yet. Any other game without package.json cannot add them, and neither can a compiled game (Rust · wgpu, or a C++ · raylib game made before Rust), whose stack refuses JavaScript packages.",
       "parameters": {
         "type": "object",
         "properties": {

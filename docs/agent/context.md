@@ -10,9 +10,8 @@ games are Three.js or Rust · wgpu; C++ · raylib games keep working.
 
 The sidebar opens games, Plugins, Studio and Settings. Each game pairs one conversation with a
 stage that switches between **Live** (the playable game), **Builds** (work and results) and
-**Assets** (files and generated media). The prompt bar chooses the model, permissions, Auto or
-Loop mode, optional planning, references and tools; chat shows replies, real questions, compact
-work status and results, with details on demand.
+**Assets** (files and generated media). The prompt bar chooses the model, mode and
+tools; chat shows replies, questions, work status and results.
 
 Studio pairs an assistant with Activity, for reviewing runs and instruction improvements.
 Plugins add tools, assets and integrations. Settings owns the games folder, appearance,

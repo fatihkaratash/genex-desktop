@@ -82,17 +82,21 @@ const ENGINEERING_SKILLS = [
   "verify-ui-via-dev-control",
 ] as const;
 
+// Design skills this repository wrote itself, named in SOURCES.md beside the engineering list.
+const LOCAL_DESIGN_SKILLS = ["wire-art"] as const;
+
 test("SOURCES.md names every engineering skill and every skill directory is engineering or upstream", () => {
   const sources = fs.readFileSync(path.join(codex, "SOURCES.md"), "utf8");
   const upstream = [...sources.matchAll(/^- `([a-z-]+)`$/gm)].map((m) => m[1] ?? "").sort();
   assert.deepEqual(
     skills(codex),
-    [...upstream, ...ENGINEERING_SKILLS].sort(),
-    "a skill directory is neither upstream (SOURCES.md list) nor in ENGINEERING_SKILLS",
+    [...upstream, ...ENGINEERING_SKILLS, ...LOCAL_DESIGN_SKILLS].sort(),
+    "a skill directory is neither upstream (SOURCES.md list) nor a local engineering or design skill",
   );
   const engineeringLine = /The engineering skills\s*\(([^)]*)\)/.exec(sources)?.[1] ?? "";
   const named = [...engineeringLine.matchAll(/`([a-z-]+)`/g)].map((m) => m[1] ?? "").sort();
   assert.deepEqual(named, [...ENGINEERING_SKILLS].sort(), "SOURCES.md's engineering list is out of date");
+  for (const name of LOCAL_DESIGN_SKILLS) assert.match(sources, new RegExp(`design skill \`${name}\``), name);
 });
 
 test("every repository path an engineering skill names exists", () => {
