@@ -15,7 +15,8 @@
 
 use crate::caps::check_texture;
 use crate::error::{RenderCode, RenderError};
-use crate::mesh::{MeshData, MeshletMerge, MeshletWarning, for_each_primitive, invalid, open_glb};
+use crate::mesh::glb_material_ext::read_material_ext;
+use crate::mesh::{GlbMaterialExt, MeshData, MeshletMerge, MeshletWarning, for_each_primitive, invalid, open_glb};
 use crate::meshlet::MeshletSet;
 use crate::pbr::Material;
 use crate::texture::{TextureData, TextureId, TextureKind, linear_to_srgb, srgb_to_linear};
@@ -136,6 +137,9 @@ pub struct GlbPart {
     /// That material's emission; `None` when it emits nothing (a black emissive factor, a zero
     /// strength, or no material).
     pub emission: Option<GlbEmission>,
+    /// That material's `KHR_materials_*` extensions (A6.1); `None` when it carries none of them
+    /// or there is no material. Read, not yet shaded.
+    pub material_ext: Option<GlbMaterialExt>,
     /// The meshlets its primitives carried (`extras.genex_meshlets`, R2.3), merged and validated
     /// against this part's mesh; `None` when any primitive had none or one was refused (the mesh
     /// is then clustered at runtime). The renderer takes them with
@@ -189,6 +193,7 @@ impl GlbModel {
                     mesh,
                     material: material.as_ref().map(read_material),
                     emission: material.as_ref().and_then(read_emission),
+                    material_ext: material.as_ref().and_then(|material| read_material_ext(material, &gltf.document)),
                     meshlets: merged.set,
                     meshlet_warnings: merged.warnings,
                 }

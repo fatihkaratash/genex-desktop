@@ -17,6 +17,10 @@ use crate::meshlet::{
 #[path = "glb_material.rs"]
 mod glb_material;
 pub use glb_material::{GlbEmission, GlbMaterial, GlbModel, GlbPart, decode_image};
+// The material extensions (A6.1) live beside the material loader that reads them.
+#[path = "glb_material_ext.rs"]
+mod glb_material_ext;
+pub use glb_material_ext::{DEFAULT_IOR, GlbAnisotropy, GlbClearcoat, GlbMaterialExt, GlbSheen, GlbSpecular, GlbTexture, GlbVolume};
 
 /// One vertex as the vertex buffer holds it (`MeshVertex` in the skinning shader).
 #[repr(C)]

@@ -54,6 +54,20 @@ renderer enables it. In-pass nodes draw inside one world pass.
 The HDR path draws camera views reverse-Z (`Greater`, cleared to 0) on `Depth32Float`; the
 legacy path keeps standard Z. `GxFrameV2` and `GxPostV2` expose `depth_reversed`.
 
+## glTF models
+
+`src/mesh.rs` reads a GLB's triangles, `src/glb_material.rs` its materials, one part per
+material. Each attribute is read only in a layout core glTF gives it (float positions, normals and
+tangents; float or normalized 8/16-bit uvs and weights; 8/16-bit joints; unsigned indices); any
+other layout, such as a `KHR_mesh_quantization` one the Studio's import step did not dequantize,
+is refused `mesh-invalid` before the `gltf` reader would misread it or panic.
+
+A part also carries its material's `KHR_materials_*` extensions (`GlbPart::material_ext`, from
+`src/glb_material_ext.rs`): `ior`, `specular`, `clearcoat`, `sheen`, `transmission` (factor),
+`volume` (factors) and `anisotropy`, read from the raw extension JSON with the specification's
+defaults and clamped into range, textures named by their image on TEXCOORD_0. They are read, not
+yet shaded: no GPU row carries them.
+
 ## Extension layouts
 
 Level-2 materials and post passes declare `[[wgsl]] api = 1 | 2`. API 2 reads the v2 group map
