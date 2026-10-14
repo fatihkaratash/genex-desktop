@@ -1,0 +1,16 @@
+{
+  "Apple M4 Max (fetched)": {
+    "street-wide": "7e903a71894715bd",
+    "puddle": "6a3fcf64d57835f2",
+    "neon-alley": "7fa37d2d407631fe",
+    "cafe": "04dd9ac4f203d043",
+    "window-shafts": "beabe262ec645df9"
+  },
+  "Apple M4 Max (procedural)": {
+    "street-wide": "f715c941bcf6d39a",
+    "puddle": "dcea759136550d43",
+    "neon-alley": "1997576243a8ef39",
+    "cafe": "f7d276bffb6c3ef2",
+    "window-shafts": "c7b2cdb9bce32a43"
+  }
+}
