@@ -3921,6 +3921,9 @@ impl Renderer {
         let (device, queue) = (self.device.clone(), self.queue.clone());
         self.upload_meshlets(&device, &queue)?;
         let render = self.render_size();
+        // A frame at another render size than the last keeps the targets it replaces as spares
+        // (RC-10: a dynamic-resolution step going back swaps them in instead of allocating).
+        self.pool.note_render_size(render);
         let scene_path = self.scene_path(render, stage_reason);
         let temporal = self.frame_temporal(&scene_path, stage.demand, render);
         self.temporal = temporal;

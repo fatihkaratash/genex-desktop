@@ -97,7 +97,7 @@ use crate::runtime::{FIXED_STEP_MS, Runtime, View};
 use genex_hud::egui::epaint::textures::TexturesDelta;
 use genex_hud::{HudPaint, HudPainter};
 use genex_render::custom_pass::{CUSTOM_TAG, CustomPass, CustomPasses, NoCustom, PassStage, PipelineFacts};
-use genex_render::device_loss::{GpuOpener, Resilient};
+use genex_render::device_loss::{GpuOpener, ModelParts, PartsSource, Resilient, TextureSource};
 use genex_render::extension::{CustomMaterialId, PostPassId, PostStage};
 use genex_render::hdri::{HdriImage, PreparedMap};
 use genex_render::settings::{Environment, Quality};
@@ -152,11 +152,22 @@ pub struct Drawn {
 pub trait ModelSource {
     /// The bytes of `path`, or None when the game has no such asset.
     fn model_bytes(&self, path: &str) -> Option<Vec<u8>>;
+
+    /// The bytes of `path` when the program holds them for its whole life (the table a game
+    /// compiled in), so a renderer replays the upload by decoding them again instead of keeping a
+    /// decoded copy (review F6). None, the default: the upload's data is kept.
+    fn static_bytes(&self, _path: &str) -> Option<&'static [u8]> {
+        None
+    }
 }
 
 impl ModelSource for AssetTable {
     fn model_bytes(&self, path: &str) -> Option<Vec<u8>> {
-        self.iter().find(|(known, _)| *known == path).map(|(_, bytes)| bytes.to_vec())
+        self.static_bytes(path).map(<[u8]>::to_vec)
+    }
+
+    fn static_bytes(&self, path: &str) -> Option<&'static [u8]> {
+        self.iter().find(|(known, _)| *known == path).map(|(_, bytes)| *bytes)
     }
 }
 
@@ -199,6 +210,16 @@ pub trait Uploads {
     }
     /// Add a texture as the next layer of its kind's array.
     fn add_texture(&mut self, data: &TextureData, kind: TextureKind) -> Result<TextureId, RenderError>;
+    /// [`Uploads::add_meshes_with_meshlets`] for parts `source` decodes again from bytes the
+    /// program holds for its whole life: a renderer that replays uploads keeps the source, not the
+    /// parts (the default adds them as any other).
+    fn add_meshes_from(&mut self, parts: ModelParts, _source: PartsSource) -> Result<Vec<MeshId>, RenderError> {
+        self.add_meshes_with_meshlets(parts)
+    }
+    /// [`Uploads::add_texture`] for a texture `source` decodes again, as [`Uploads::add_meshes_from`].
+    fn add_texture_from(&mut self, data: &TextureData, kind: TextureKind, _source: TextureSource) -> Result<TextureId, RenderError> {
+        self.add_texture(data, kind)
+    }
     /// The widest HDR environment map the device keeps (a decoded map is box-filtered down to it
     /// before it is cached, `genex_render::hdri::prepare_map`); 0, the default, keeps it whole.
     fn environment_map_width(&self) -> u32 {
@@ -221,6 +242,14 @@ impl Uploads for Resilient {
 
     fn add_texture(&mut self, data: &TextureData, kind: TextureKind) -> Result<TextureId, RenderError> {
         Resilient::add_texture(self, data, kind)
+    }
+
+    fn add_meshes_from(&mut self, parts: ModelParts, source: PartsSource) -> Result<Vec<MeshId>, RenderError> {
+        Resilient::add_meshes_from(self, parts, source)
+    }
+
+    fn add_texture_from(&mut self, data: &TextureData, kind: TextureKind, source: TextureSource) -> Result<TextureId, RenderError> {
+        Resilient::add_texture_from(self, data, kind, source)
     }
 
     fn environment_map_width(&self) -> u32 {
@@ -309,8 +338,9 @@ impl AssetCache {
                     read.len() - 1
                 }
             };
+            let again = source.static_bytes(path).map(|bytes| -> TextureSource { Arc::new(move || decode_image(bytes)) });
             let id = match &read[at].1 {
-                Some(data) => upload_texture(uploads, data, kind, &format!("texture {path:?}"), log)?,
+                Some(data) => upload_texture(uploads, (data, kind, again), &format!("texture {path:?}"), log)?,
                 None => None,
             };
             self.textures.push((path.to_owned(), kind, id));
@@ -399,15 +429,18 @@ fn read_texture(path: &str, source: &dyn ModelSource, log: &mut dyn FnMut(&str))
     decode_image(&bytes).map_err(|error| log(&format!("texture {path:?} refused: {error}"))).ok()
 }
 
+/// One texture to upload: its data, the array it goes to and, for bytes the program holds for its
+/// whole life, how a replay decodes it again.
+type TextureUpload<'a> = (&'a TextureData, TextureKind, Option<TextureSource>);
+
 /// Upload one texture: its id, `None` (logged as `what`) when refused, `device-lost` passed on.
-fn upload_texture(
-    uploads: &mut dyn Uploads,
-    data: &TextureData,
-    kind: TextureKind,
-    what: &str,
-    log: &mut dyn FnMut(&str),
-) -> Result<Option<TextureId>, RenderError> {
-    match uploads.add_texture(data, kind) {
+fn upload_texture(uploads: &mut dyn Uploads, texture: TextureUpload<'_>, what: &str, log: &mut dyn FnMut(&str)) -> Result<Option<TextureId>, RenderError> {
+    let (data, kind, again) = texture;
+    let added = match again {
+        Some(source) => uploads.add_texture_from(data, kind, source),
+        None => uploads.add_texture(data, kind),
+    };
+    match added {
         Ok(id) => Ok(Some(id)),
         Err(error) if error.code() == RenderCode::DeviceLost => Err(error),
         Err(error) => {
@@ -436,7 +469,13 @@ fn load_model(path: &str, source: &dyn ModelSource, uploads: &mut dyn Uploads, l
     let mut triangles = 0u32;
     // Every part in one upload: the renderer copies its whole library once, not once a material.
     // Each part brings the clusters the importer wrote (R2.3); a part without them clusters at runtime.
-    let meshes = match uploads.add_meshes_with_meshlets(glb.parts().iter().map(|part| (part.mesh.clone(), part.meshlets.clone())).collect()) {
+    let model_parts: ModelParts = glb.parts().iter().map(|part| (part.mesh.clone(), part.meshlets.clone())).collect();
+    let still = source.static_bytes(path);
+    let added = match still {
+        Some(bytes) => uploads.add_meshes_from(model_parts, Arc::new(move || GlbModel::parts_from_glb(bytes))),
+        None => uploads.add_meshes_with_meshlets(model_parts),
+    };
+    let meshes = match added {
         Ok(meshes) => meshes,
         Err(error) if error.code() == RenderCode::DeviceLost => return Err(error),
         Err(error) => {
@@ -451,7 +490,7 @@ fn load_model(path: &str, source: &dyn ModelSource, uploads: &mut dyn Uploads, l
         }
         triangles = triangles.saturating_add(triangles_of(&part.mesh));
         let material = match part.material {
-            Some(material) => Some(glb_textures(path, &glb, &material, &mut images, uploads, log)?),
+            Some(material) => Some(glb_textures((path, still), &glb, &material, &mut images, uploads, log)?),
             None => None,
         };
         parts.push(ModelPart { mesh, material });
@@ -460,9 +499,11 @@ fn load_model(path: &str, source: &dyn ModelSource, uploads: &mut dyn Uploads, l
 }
 
 /// `material` with its images uploaded, each image and kind once per model (`images` holds those
-/// done); an image that cannot be used leaves its slot untextured (logged).
+/// done); an image that cannot be used leaves its slot untextured (logged). `model` is the model's
+/// path and, when the program holds them for its whole life, its bytes (a replay decodes an image
+/// from them again).
 fn glb_textures(
-    path: &str,
+    model: (&str, Option<&'static [u8]>),
     glb: &GlbModel,
     material: &GlbMaterial,
     images: &mut Vec<(u32, TextureKind, Option<TextureId>)>,
@@ -473,9 +514,11 @@ fn glb_textures(
         if images.iter().any(|(i, k, _)| *i == image && *k == kind) {
             continue;
         }
+        let (path, still) = model;
         let what = format!("model {path:?} image {image}");
+        let again = still.map(|bytes| -> TextureSource { Arc::new(move || GlbModel::image_from_glb(bytes, image)) });
         let id = match glb.image(image) {
-            Some(Ok(data)) => upload_texture(uploads, data, kind, &what, log)?,
+            Some(Ok(data)) => upload_texture(uploads, (data, kind, again), &what, log)?,
             Some(Err(error)) => {
                 log(&format!("{what} refused: {error}"));
                 None

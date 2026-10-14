@@ -196,37 +196,7 @@ impl GlbModel {
     pub fn from_glb(bytes: &[u8]) -> Result<GlbModel, RenderError> {
         let gltf = open_glb(bytes)?;
         let blob = gltf.blob.as_deref();
-        let mut groups: Vec<(Option<usize>, MeshData, MeshletMerge)> = Vec::new();
-        for_each_primitive(&gltf, &mut |primitive, world| {
-            let key = primitive.material().index();
-            let at = match groups.iter().position(|(known, _, _)| *known == key) {
-                Some(at) => at,
-                None => {
-                    groups.push((key, MeshData::default(), MeshletMerge::default()));
-                    groups.len() - 1
-                }
-            };
-            let (_, mesh, merge) = &mut groups[at];
-            mesh.append_with_meshlets(&gltf, primitive, world, blob, merge)
-        })?;
-        groups.retain(|(_, mesh, _)| !mesh.indices.is_empty());
-        if groups.is_empty() {
-            return Err(invalid("the GLB has no triangles"));
-        }
-        let parts: Vec<GlbPart> = groups
-            .into_iter()
-            .map(|(key, mesh, merge)| {
-                let material = key.and_then(|index| gltf.materials().nth(index));
-                let merged = merge.finish();
-                GlbPart {
-                    mesh,
-                    material: material.as_ref().map(read_material),
-                    emission: material.as_ref().and_then(read_emission),
-                    meshlets: merged.set,
-                    meshlet_warnings: merged.warnings,
-                }
-            })
-            .collect();
+        let parts = glb_parts(&gltf)?;
         let mut images: Vec<Option<Result<TextureData, RenderError>>> = vec![None; gltf.images().len()];
         for (index, _) in parts.iter().flat_map(part_textures) {
             let Some(slot) = images.get_mut(index as usize) else { continue };
@@ -238,6 +208,22 @@ impl GlbModel {
         Ok(GlbModel { parts, images })
     }
 
+    /// The meshes and meshlets of [`GlbModel::from_glb`]'s parts, in its order, with no image
+    /// decoded: what a renderer replays a model's upload from (review F6).
+    pub fn parts_from_glb(bytes: &[u8]) -> Result<Vec<(MeshData, Option<MeshletSet>)>, RenderError> {
+        let gltf = open_glb(bytes)?;
+        Ok(glb_parts(&gltf)?.into_iter().map(|part| (part.mesh, part.meshlets)).collect())
+    }
+
+    /// Image `index` of a GLB decoded as [`GlbModel::from_glb`] decodes it (refused
+    /// `texture-invalid` when the GLB names no such image): what a renderer replays the image's
+    /// upload from.
+    pub fn image_from_glb(bytes: &[u8], index: u32) -> Result<TextureData, RenderError> {
+        let gltf = open_glb(bytes)?;
+        let image = gltf.images().nth(index as usize).ok_or_else(|| texture_invalid("the GLB names no such image"))?;
+        embedded_image(&image, gltf.blob.as_deref())
+    }
+
     /// The parts, in first-use order of their materials.
     pub fn parts(&self) -> &[GlbPart] {
         &self.parts
@@ -247,6 +233,44 @@ impl GlbModel {
     pub fn image(&self, index: u32) -> Option<&Result<TextureData, RenderError>> {
         self.images.get(index as usize)?.as_ref()
     }
+}
+
+/// The parts of `gltf`: one mesh per material in first-use order, empty parts dropped (refused
+/// `mesh-invalid` with no triangles at all).
+fn glb_parts(gltf: &gltf::Gltf) -> Result<Vec<GlbPart>, RenderError> {
+    let blob = gltf.blob.as_deref();
+    let mut groups: Vec<(Option<usize>, MeshData, MeshletMerge)> = Vec::new();
+    for_each_primitive(gltf, &mut |primitive, world| {
+        let key = primitive.material().index();
+        let at = match groups.iter().position(|(known, _, _)| *known == key) {
+            Some(at) => at,
+            None => {
+                groups.push((key, MeshData::default(), MeshletMerge::default()));
+                groups.len() - 1
+            }
+        };
+        let (_, mesh, merge) = &mut groups[at];
+        mesh.append_with_meshlets(gltf, primitive, world, blob, merge)
+    })?;
+    groups.retain(|(_, mesh, _)| !mesh.indices.is_empty());
+    if groups.is_empty() {
+        return Err(invalid("the GLB has no triangles"));
+    }
+    let parts = groups
+        .into_iter()
+        .map(|(key, mesh, merge)| {
+            let material = key.and_then(|index| gltf.materials().nth(index));
+            let merged = merge.finish();
+            GlbPart {
+                mesh,
+                material: material.as_ref().map(read_material),
+                emission: material.as_ref().and_then(read_emission),
+                meshlets: merged.set,
+                meshlet_warnings: merged.warnings,
+            }
+        })
+        .collect();
+    Ok(parts)
 }
 
 /// A value in `0..=1`, or `fallback` when it is not finite.

@@ -114,6 +114,12 @@
 //! ([`CustomPasses::take_pending`], a capture or the boot), and a pass whose scope reports an error
 //! is refused `gpu-pass-invalid` from then on. Until an in-world pass's first proof has resolved
 //! clean its draws stay out of the world pass, so a pass that was never valid cannot poison it.
+//! After that a frame's draws are replayed while their own proof is pending only when an earlier
+//! clean proof covers each of them (the same pipeline and vertex slots, slices at least as large,
+//! ranges ending no later; [`WorldDraws`] checks the rest on the CPU as it records): a pass whose
+//! draws grow past what was proven waits for its proof, because one invalid command in the world
+//! pass loses the browser's whole frame (RC-11). Bind groups are not compared: a pass may make
+//! them per frame, and their contents are not visible here.
 
 use std::future::Future;
 use std::ops::{Bound, Range, RangeBounds};
@@ -775,6 +781,8 @@ struct Parked {
     index: usize,
     kind: ScopeKind,
     future: ScopeFuture,
+    /// What a clean answer proves of an in-world pass's draws (empty for the other kinds).
+    proves: Vec<DrawFact>,
 }
 
 /// The scopes a registry had parked ([`CustomPasses::take_pending`]), to await where waiting is
@@ -800,7 +808,7 @@ impl PendingScopes {
         let mut answers = Vec::with_capacity(self.scopes.len());
         for parked in self.scopes {
             let error = parked.future.await;
-            answers.push((parked.index, parked.kind, error.map(|error| error.to_string())));
+            answers.push(Answer { index: parked.index, kind: parked.kind, error: error.map(|error| error.to_string()), proves: parked.proves });
         }
         SettledScopes { epoch: self.epoch, answers }
     }
@@ -809,7 +817,16 @@ impl PendingScopes {
 /// The answers of awaited scopes, for [`CustomPasses::apply_settled`].
 pub struct SettledScopes {
     epoch: u32,
-    answers: Vec<(usize, ScopeKind, Option<String>)>,
+    answers: Vec<Answer>,
+}
+
+/// One scope's answer for the pass at `index`: the error it caught, if any, and what a clean
+/// answer proves of the pass's draws.
+struct Answer {
+    index: usize,
+    kind: ScopeKind,
+    error: Option<String>,
+    proves: Vec<DrawFact>,
 }
 
 /// The tables bind group's layout (API v1): the frame uniforms, then the instance and material
@@ -1116,30 +1133,118 @@ fn byte_range(range: impl RangeBounds<u64>, size: u64) -> Option<(u64, u64)> {
     (start <= end && end <= size).then(|| (start, end - start))
 }
 
+/// Bytes of one indirect draw's arguments (`draw_indirect`: vertex count, instance count, first
+/// vertex, first instance).
+const DRAW_INDIRECT_BYTES: u64 = 16;
+/// Bytes of one indexed indirect draw's arguments (index count, instance count, first index, base
+/// vertex, first instance).
+const DRAW_INDEXED_INDIRECT_BYTES: u64 = 20;
+/// The alignment WebGPU asks of vertex-buffer and indirect offsets.
+const COMMAND_OFFSET_ALIGNMENT: u64 = 4;
+/// The most proven draw facts an in-world pass keeps (the oldest go first).
+const PROVEN_FACTS_MAX: usize = 64;
+/// Bind group indices a pass may set: the device is opened with WebGPU core's limits
+/// ([`crate::floor::core_limits`]).
+const BIND_GROUPS_MAX: u32 = wgpu::Limits::defaults().max_bind_groups;
+/// Vertex buffer slots a pass may set, as [`BIND_GROUPS_MAX`].
+const VERTEX_SLOTS_MAX: u32 = wgpu::Limits::defaults().max_vertex_buffers;
+
+/// The kind of one recorded draw, as a proven fact compares it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrawKind {
+    Direct,
+    Indexed,
+    Indirect,
+    IndexedIndirect,
+}
+
+/// What one draw of a clean proof shows WebGPU accepts (RC-11): with `pipeline` and the vertex
+/// slices `slots` bound, `vertices` and `instances` (the ranges' ends) fit every buffer the
+/// pipeline reads. A later draw on the same pipeline and slots, with slices at least as large and
+/// ranges ending no later, fits too: the pipeline fixes the strides. Bind groups and indirect
+/// arguments are not compared (wgpu validates indirect counts on the GPU; a bind group's
+/// contents are not visible here).
+#[derive(Clone, Debug, PartialEq)]
+struct DrawFact {
+    pipeline: wgpu::RenderPipeline,
+    kind: DrawKind,
+    /// (slot, bytes) of every vertex slice bound, by slot.
+    slots: Vec<(u32, u64)>,
+    vertices: u32,
+    instances: u32,
+}
+
+impl DrawFact {
+    /// Whether `proven` shows this draw fits.
+    fn within(&self, proven: &DrawFact) -> bool {
+        let same_slots = self.slots.len() == proven.slots.len()
+            && self.slots.iter().zip(&proven.slots).all(|((slot, bytes), (proven_slot, proven_bytes))| slot == proven_slot && bytes >= proven_bytes);
+        self.pipeline == proven.pipeline && self.kind == proven.kind && same_slots && self.vertices <= proven.vertices && self.instances <= proven.instances
+    }
+}
+
+/// Whether every draw of `facts` is shown to fit by one of `proven` (no draw at all is covered).
+fn covered(facts: &[DrawFact], proven: &[DrawFact]) -> bool {
+    facts.iter().all(|fact| proven.iter().any(|known| fact.within(known)))
+}
+
+/// Add `facts` to `proven`, each once, keeping the newest [`PROVEN_FACTS_MAX`].
+fn remember(proven: &mut Vec<DrawFact>, facts: Vec<DrawFact>) {
+    for fact in facts {
+        if !proven.contains(&fact) {
+            proven.push(fact);
+        }
+    }
+    let over = proven.len().saturating_sub(PROVEN_FACTS_MAX);
+    proven.drain(..over);
+}
+
+/// The render-pass state a recording has set so far: what each draw is checked and described by.
+#[derive(Debug, Default)]
+struct DrawState {
+    pipeline: Option<wgpu::RenderPipeline>,
+    slots: Vec<(u32, u64)>,
+    /// The index slice bound: its format and bytes.
+    index: Option<(wgpu::IndexFormat, u64)>,
+}
+
 /// What an in-world pass draws: the commands of a render pass, recorded, validated and replayed
 /// inside the world pass (its colour, depth and samples; see [`PassSetup::world_depth`] and
 /// [`PassSetup::world_multisample`]). Each pass starts from no pipeline and no bindings of its
 /// own choosing: bind everything it draws with.
+///
+/// What the CPU can check is checked as it is recorded, and a command that fails refuses the pass
+/// (`gpu-pass-invalid`) before anything is replayed: a slice outside its buffer, a buffer without
+/// the usage its command needs, a misaligned offset, an inverted range, an indexed draw past its
+/// index slice (or with none of its own bound) and indirect arguments past their buffer.
 #[derive(Debug)]
 pub struct WorldDraws {
     tables: BindGroup,
     commands: Vec<DrawCommand>,
     fault: Option<String>,
+    state: DrawState,
+    /// Every draw recorded, as a proof would show it fits; None when a draw had no pipeline.
+    facts: Option<Vec<DrawFact>>,
 }
 
 impl WorldDraws {
     fn new(tables: BindGroup) -> WorldDraws {
-        WorldDraws { tables, commands: Vec::new(), fault: None }
+        WorldDraws { tables, commands: Vec::new(), fault: None, state: DrawState::default(), facts: Some(Vec::new()) }
     }
 
     /// Draw with `pipeline`.
     pub fn set_pipeline(&mut self, pipeline: &wgpu::RenderPipeline) -> &mut Self {
+        self.state.pipeline = Some(pipeline.clone());
         self.commands.push(DrawCommand::Pipeline(pipeline.clone()));
         self
     }
 
     /// Bind `group` at `index` with its dynamic `offsets`.
     pub fn set_bind_group(&mut self, index: u32, group: &BindGroup, offsets: &[u32]) -> &mut Self {
+        if index >= BIND_GROUPS_MAX {
+            self.fault(|| format!("bind group index {index}, past the {BIND_GROUPS_MAX} a pipeline has"));
+            return self;
+        }
         self.commands.push(DrawCommand::BindGroup(index, group.clone(), offsets.to_vec()));
         self
     }
@@ -1150,17 +1255,91 @@ impl WorldDraws {
         self.set_bind_group(index, &tables, &[])
     }
 
+    /// Keep the first fault: the one the refusal names.
+    fn fault(&mut self, what: impl FnOnce() -> String) {
+        self.fault.get_or_insert_with(what);
+    }
+
     fn slice_of(&mut self, buffer: &Buffer, range: impl RangeBounds<u64>) -> Option<(u64, u64)> {
         let slice = byte_range(range, buffer.size());
         if slice.is_none() {
-            self.fault.get_or_insert_with(|| format!("a slice outside a {}-byte buffer", buffer.size()));
+            self.fault(|| format!("a slice outside a {}-byte buffer", buffer.size()));
         }
         slice
     }
 
+    /// Whether `buffer` has `usage` (a fault naming `what` otherwise).
+    fn has_usage(&mut self, buffer: &Buffer, usage: BufferUsages, what: &str) -> bool {
+        let has = buffer.usage().contains(usage);
+        if !has {
+            self.fault(|| format!("a {what} buffer without {usage:?} usage"));
+        }
+        has
+    }
+
+    /// Whether `offset` is a multiple of `alignment` (a fault naming `what` otherwise).
+    fn aligned(&mut self, offset: u64, alignment: u64, what: &str) -> bool {
+        let aligned = offset.is_multiple_of(alignment);
+        if !aligned {
+            self.fault(|| format!("a {what} offset of {offset} bytes, not a multiple of {alignment}"));
+        }
+        aligned
+    }
+
+    /// Whether `ranges` all run forwards (a fault otherwise).
+    fn forwards(&mut self, ranges: &[&Range<u32>]) -> bool {
+        let forwards = ranges.iter().all(|range| range.start <= range.end);
+        if !forwards {
+            self.fault(|| "a draw range that ends before it starts".to_owned());
+        }
+        forwards
+    }
+
+    /// Note a draw of `kind` reading `vertices` and `instances` (the ranges' ends) for the proof.
+    fn note(&mut self, kind: DrawKind, vertices: u32, instances: u32) {
+        let fact = self.state.pipeline.clone().map(|pipeline| DrawFact { pipeline, kind, slots: self.state.slots.clone(), vertices, instances });
+        match (fact, self.facts.as_mut()) {
+            (Some(fact), Some(facts)) => facts.push(fact),
+            // A draw with no pipeline of the pass's own is never shown to fit by another frame.
+            _ => self.facts = None,
+        }
+    }
+
+    /// The index slice an indexed draw reads, or None (a fault) when the pass bound none.
+    fn index_slice(&mut self) -> Option<(wgpu::IndexFormat, u64)> {
+        let index = self.state.index;
+        if index.is_none() {
+            self.fault(|| "an indexed draw with no index buffer of its own".to_owned());
+        }
+        index
+    }
+
+    /// Whether `bytes` of indirect arguments at `offset` of `buffer` fit (a fault otherwise).
+    fn indirect_fits(&mut self, buffer: &Buffer, offset: u64, bytes: u64) -> bool {
+        if !self.has_usage(buffer, BufferUsages::INDIRECT, "indirect") || !self.aligned(offset, COMMAND_OFFSET_ALIGNMENT, "indirect") {
+            return false;
+        }
+        let fits = offset.checked_add(bytes).is_some_and(|end| end <= buffer.size());
+        if !fits {
+            self.fault(|| format!("indirect arguments at {offset} past the end of a {}-byte buffer", buffer.size()));
+        }
+        fits
+    }
+
     /// Read vertex buffer `slot` from `range` of `buffer`.
     pub fn set_vertex_buffer(&mut self, slot: u32, buffer: &Buffer, range: impl RangeBounds<u64>) -> &mut Self {
-        if let Some((offset, size)) = self.slice_of(buffer, range) {
+        if slot >= VERTEX_SLOTS_MAX {
+            self.fault(|| format!("vertex buffer slot {slot}, past the {VERTEX_SLOTS_MAX} a pipeline has"));
+            return self;
+        }
+        if !self.has_usage(buffer, BufferUsages::VERTEX, "vertex") {
+            return self;
+        }
+        let Some((offset, size)) = self.slice_of(buffer, range) else { return self };
+        if self.aligned(offset, COMMAND_OFFSET_ALIGNMENT, "vertex") {
+            self.state.slots.retain(|(known, _)| *known != slot);
+            self.state.slots.push((slot, size));
+            self.state.slots.sort_unstable();
             self.commands.push(DrawCommand::Vertex(slot, buffer.clone(), offset, size));
         }
         self
@@ -1168,7 +1347,12 @@ impl WorldDraws {
 
     /// Read indices of `format` from `range` of `buffer`.
     pub fn set_index_buffer(&mut self, buffer: &Buffer, format: wgpu::IndexFormat, range: impl RangeBounds<u64>) -> &mut Self {
-        if let Some((offset, size)) = self.slice_of(buffer, range) {
+        if !self.has_usage(buffer, BufferUsages::INDEX, "index") {
+            return self;
+        }
+        let Some((offset, size)) = self.slice_of(buffer, range) else { return self };
+        if self.aligned(offset, u64::from(format.byte_size()), "index") {
+            self.state.index = Some((format, size));
             self.commands.push(DrawCommand::Index(buffer.clone(), format, offset, size));
         }
         self
@@ -1176,25 +1360,45 @@ impl WorldDraws {
 
     /// Draw `vertices` of `instances`.
     pub fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) -> &mut Self {
-        self.commands.push(DrawCommand::Draw(vertices, instances));
+        if self.forwards(&[&vertices, &instances]) {
+            self.note(DrawKind::Direct, vertices.end, instances.end);
+            self.commands.push(DrawCommand::Draw(vertices, instances));
+        }
         self
     }
 
     /// Draw `indices` from `base_vertex` of `instances`.
     pub fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32, instances: Range<u32>) -> &mut Self {
+        if !self.forwards(&[&indices, &instances]) {
+            return self;
+        }
+        let Some((format, bytes)) = self.index_slice() else { return self };
+        let held = bytes / u64::from(format.byte_size());
+        if u64::from(indices.end) > held {
+            self.fault(|| format!("an indexed draw to index {} of a slice holding {held}", indices.end));
+            return self;
+        }
+        // Vertex-rate buffers are not range-checked for an indexed draw (WebGPU): only instances count.
+        self.note(DrawKind::Indexed, 0, instances.end);
         self.commands.push(DrawCommand::DrawIndexed(indices, base_vertex, instances));
         self
     }
 
     /// Draw from the arguments at `offset` of `buffer`.
     pub fn draw_indirect(&mut self, buffer: &Buffer, offset: u64) -> &mut Self {
-        self.commands.push(DrawCommand::DrawIndirect(buffer.clone(), offset));
+        if self.indirect_fits(buffer, offset, DRAW_INDIRECT_BYTES) {
+            self.note(DrawKind::Indirect, 0, 0);
+            self.commands.push(DrawCommand::DrawIndirect(buffer.clone(), offset));
+        }
         self
     }
 
     /// Draw indexed from the arguments at `offset` of `buffer`.
     pub fn draw_indexed_indirect(&mut self, buffer: &Buffer, offset: u64) -> &mut Self {
-        self.commands.push(DrawCommand::DrawIndexedIndirect(buffer.clone(), offset));
+        if self.index_slice().is_some() && self.indirect_fits(buffer, offset, DRAW_INDEXED_INDIRECT_BYTES) {
+            self.note(DrawKind::IndexedIndirect, 0, 0);
+            self.commands.push(DrawCommand::DrawIndexedIndirect(buffer.clone(), offset));
+        }
         self
     }
 
@@ -1420,6 +1624,9 @@ struct Entry {
     /// Whether one of its in-world proofs resolved clean on this device (deferred scopes keep its
     /// draws out of the world pass until then).
     proven: bool,
+    /// The draws its clean proofs showed fit (RC-11): while a later proof is pending, a frame's
+    /// draws are replayed only when these cover every one of them.
+    proven_draws: Vec<DrawFact>,
 }
 
 /// The passes one renderer runs: their names, stages, bytes and refusals, and the tables layout
@@ -1616,7 +1823,8 @@ impl CustomPasses {
             match poll_once(&mut scope.future) {
                 Poll::Ready(error) => {
                     answered += 1;
-                    let _ = self.answer(scope.index, scope.kind, error.map(|error| error.to_string()));
+                    let answer = Answer { index: scope.index, kind: scope.kind, error: error.map(|error| error.to_string()), proves: scope.proves };
+                    let _ = self.answer(answer);
                 }
                 Poll::Pending => self.parked.push(scope),
             }
@@ -1641,8 +1849,8 @@ impl CustomPasses {
             return false;
         }
         let mut changed = false;
-        for (index, kind, error) in settled.answers {
-            changed |= self.answer(index, kind, error);
+        for answer in settled.answers {
+            changed |= self.answer(answer);
         }
         changed
     }
@@ -1650,11 +1858,13 @@ impl CustomPasses {
     /// One scope's answer for the pass at `index`: a clean proof admits its draws, an error refuses
     /// it (once: a pass already stopped keeps its first refusal). Answers whether it changed what
     /// the frame draws (a first proof, or a refusal).
-    fn answer(&mut self, index: usize, kind: ScopeKind, error: Option<String>) -> bool {
+    fn answer(&mut self, answer: Answer) -> bool {
+        let Answer { index, kind, error, proves } = answer;
         let Some(entry) = self.entries.get_mut(index) else { return false };
         let Some(error) = error else {
             let first_proof = kind == ScopeKind::Draws && !entry.proven;
             entry.proven |= first_proof;
+            remember(&mut entry.proven_draws, proves);
             return first_proof && entry.enabled;
         };
         if !entry.enabled {
@@ -1673,7 +1883,12 @@ impl CustomPasses {
     }
 
     fn park(&mut self, index: usize, kind: ScopeKind, future: ScopeFuture) {
-        self.parked.push(Parked { epoch: self.epoch, index, kind, future });
+        self.park_proving(index, kind, future, Vec::new());
+    }
+
+    /// [`CustomPasses::park`] for a scope whose clean answer proves `proves` of the pass's draws.
+    fn park_proving(&mut self, index: usize, kind: ScopeKind, future: ScopeFuture, proves: Vec<DrawFact>) {
+        self.parked.push(Parked { epoch: self.epoch, index, kind, future, proves });
     }
 
     /// Register every running pass's bytes in `ledger` (kind [`BudgetKind::Pass`], by name).
@@ -1815,7 +2030,7 @@ impl CustomPasses {
         }
         let (bytes, pending) = self.build(gpu, name, stage, pass, RebuildReason::Install)?;
         let (api, inputs) = (pass.api(), pass.inputs());
-        self.entries.push(Entry { name: name.to_owned(), stage, api, inputs, bytes, enabled: true, refused: None, proven: false });
+        self.entries.push(Entry { name: name.to_owned(), stage, api, inputs, bytes, enabled: true, refused: None, proven: false, proven_draws: Vec::new() });
         if let Some(scope) = pending {
             self.park(self.entries.len() - 1, ScopeKind::Rebuild, scope);
         }
@@ -1862,6 +2077,7 @@ impl CustomPasses {
                 continue;
             }
             self.entries[index].proven = false;
+            self.entries[index].proven_draws.clear();
             match self.build(gpu, &name, stage, &mut **pass, reason) {
                 Ok((bytes, pending)) => {
                     self.entries[index].bytes = bytes;
@@ -2265,18 +2481,25 @@ impl PassRun<'_, '_> {
                 }
                 let proving = self.proving(samples);
                 let (_, proved) = scoped(&device, || prove(&device, &name, &draws, &proving));
+                let facts = draws.facts.take();
                 match judge(self.registry.mode, either(encoded, proved)) {
                     Verdict::Failed(error) => {
                         self.refuse(index, invalid(&name, format!("wgpu refused its {}: {error}", ScopeKind::Draws.what())));
                     }
                     Verdict::Clean => {
-                        self.registry.entries[index].proven = true;
+                        let entry = &mut self.registry.entries[index];
+                        entry.proven = true;
+                        remember(&mut entry.proven_draws, facts.unwrap_or_default());
                         self.keep_draws(stage, draws);
                     }
                     Verdict::Pending(scope) => {
-                        self.registry.park(index, ScopeKind::Draws, scope);
-                        // On probation until one proof resolves clean: never replayed before that.
-                        if self.registry.entries[index].proven {
+                        let entry = &self.registry.entries[index];
+                        // On probation until one proof resolves clean, and afterwards held out of
+                        // the world pass while it draws beyond what its clean proofs showed fits
+                        // (RC-11: on the web an invalid command there loses the whole frame).
+                        let replays = entry.proven && facts.as_deref().is_some_and(|facts| covered(facts, &entry.proven_draws));
+                        self.registry.park_proving(index, ScopeKind::Draws, scope, facts.unwrap_or_default());
+                        if replays {
                             self.keep_draws(stage, draws);
                         }
                     }

@@ -86,6 +86,12 @@ nearest-texel. Live paints the HUD over the letterbox after that, at the window'
 (`genex::present::Presenter::present`); a capture paints it into the world target at its own
 pixels per point (node 24). The ledger counts the window present's images (`BudgetInput::window`).
 
+Each dynamic-resolution step draws into targets of its exact size (`target_pool`). On desktop a
+step change keeps the targets it replaced, and those a step draws without (FSR1's at scale 1), as
+spares in the ledger (`TargetPolicy::spares`, at most `SPARE_BYTES_MAX` together), so going back
+to a step swaps them in instead of allocating and clearing them again; a spare idle for
+`SPARE_IDLE_FRAMES` frames is released. Phones and the web keep no spares.
+
 ## Extension layouts
 
 Level-2 materials and post passes declare `[[wgsl]] api = 1 | 2`. API 2 reads the v2 group map
@@ -194,4 +200,8 @@ A loaded model keeps each part's merged set (`GlbPart::meshlets`: one part per m
 when any of its primitives had none or was refused) and hands it to the renderer with the part
 (`Renderer::add_meshes_with_meshlets`; the facade's `Uploads::add_meshes_with_meshlets`). The
 device-loss `Resilient` keeps the sets with the upload and the game's `Meshlets` setting
-(`Resilient::set_meshlets`), and a recovered renderer takes the setting before it replays them.
+(`Resilient::set_meshlets`), and a recovered renderer takes the setting before it replays them. A
+model or texture from the game's compiled asset table is kept as its source instead
+(`Resilient::add_meshes_from`, `add_texture_from`; the facade's `ModelSource::static_bytes`): a
+replay decodes it again (`GlbModel::parts_from_glb`, `image_from_glb`), so a phone or the web does
+not hold the decoded copy beside the GPU's (`Resilient::kept_bytes` counts what is still kept).

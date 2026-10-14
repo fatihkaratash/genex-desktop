@@ -2,7 +2,9 @@
 //! [`DeviceWatch`] marks the device lost from wgpu's device-lost callback; while it is lost every
 //! frame and capture answers the typed `device-lost` refusal and nothing touches the device. The
 //! [`Resilient`] renderer keeps a CPU cache of everything it uploaded (meshes, skinned meshes,
-//! textures, custom materials, post passes, emitters, in the order they were added), so
+//! textures, custom materials, post passes, emitters, in the order they were added; a model or
+//! texture decoded from bytes the program holds for its whole life keeps only how to decode it
+//! again, [`Resilient::add_meshes_from`], so a game's compiled assets are not resident twice), so
 //! [`Resilient::recover`] re-creates the adapter and device, rebuilds the renderer and replays the
 //! cache: every id is the same and the next frame draws the identical image. Each recovery bumps
 //! [`Resilient::generation`], the ring generation the Live sender re-announces.
@@ -94,14 +96,29 @@ fn device_lost() -> RenderError {
     RenderError::refused(RenderCode::DeviceLost, "the GPU device was lost; it is being re-created")
 }
 
+/// Every part of one model with the meshlets each brought, as [`Resilient::add_meshes_with_meshlets`]
+/// takes them.
+pub type ModelParts = Vec<(MeshData, Option<MeshletSet>)>;
+
+/// Where a model's parts come back from for a replay: decoded again from bytes that live as long
+/// as the program (a game's compiled asset table), so no CPU copy is kept (review F6). A replay may
+/// run on the thread that warms a renderer ([`RendererPlan::build`]).
+pub type PartsSource = Arc<dyn Fn() -> Result<ModelParts, RenderError> + Send + Sync>;
+/// Where a texture comes back from for a replay, as [`PartsSource`].
+pub type TextureSource = Arc<dyn Fn() -> Result<TextureData, RenderError> + Send + Sync>;
+
 /// One upload, kept to replay after a loss.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum Upload {
     Mesh(MeshData),
     /// Every part of one model with the meshlets each brought, replayed as one upload.
-    Meshes(Vec<(MeshData, Option<MeshletSet>)>),
+    Meshes(ModelParts),
+    /// [`Upload::Meshes`] decoded again from its source at each replay.
+    MeshesFrom(PartsSource),
     Skinned(SkinnedMeshData),
     Texture(TextureData, TextureKind),
+    /// [`Upload::Texture`] decoded again from its source at each replay.
+    TextureFrom(TextureSource, TextureKind),
     Material(Extension),
     PostPass(PostStage, Extension),
     Emitter(EmitterDesc),
@@ -119,6 +136,57 @@ struct Extension {
 impl Extension {
     fn new(api: u32, wgsl: &str, uniforms: &[u8], textures: &[TextureData]) -> Extension {
         Extension { api, wgsl: wgsl.to_owned(), uniforms: uniforms.to_vec(), textures: textures.to_vec() }
+    }
+
+    fn bytes(&self) -> u64 {
+        let textures: u64 = self.textures.iter().map(texture_bytes).sum();
+        (self.wgsl.len() + self.uniforms.len()) as u64 + textures
+    }
+}
+
+/// The CPU bytes a kept mesh holds.
+fn mesh_bytes(mesh: &MeshData) -> u64 {
+    (std::mem::size_of_val(mesh.vertices.as_slice()) + std::mem::size_of_val(mesh.indices.as_slice())) as u64
+}
+
+/// The CPU bytes a kept meshlet set holds.
+fn meshlet_bytes(set: &MeshletSet) -> u64 {
+    (std::mem::size_of_val(set.meshlets.as_slice()) + std::mem::size_of_val(set.vertices.as_slice()) + std::mem::size_of_val(set.triangles.as_slice())) as u64
+}
+
+/// The CPU bytes a kept texture holds.
+fn texture_bytes(data: &TextureData) -> u64 {
+    data.rgba().len() as u64
+}
+
+impl Upload {
+    /// The CPU bytes this upload keeps for a replay.
+    fn kept_bytes(&self) -> u64 {
+        match self {
+            Upload::Mesh(mesh) => mesh_bytes(mesh),
+            Upload::Meshes(parts) => parts.iter().map(|(mesh, set)| mesh_bytes(mesh) + set.as_ref().map_or(0, meshlet_bytes)).sum(),
+            Upload::Skinned(data) => mesh_bytes(&data.mesh) + std::mem::size_of_val(data.skin.as_slice()) as u64,
+            Upload::Texture(data, _) => texture_bytes(data),
+            Upload::Material(kept) | Upload::PostPass(_, kept) => kept.bytes(),
+            Upload::Emitter(_) => std::mem::size_of::<EmitterDesc>() as u64,
+            Upload::MeshesFrom(_) | Upload::TextureFrom(..) => 0,
+        }
+    }
+}
+
+impl std::fmt::Debug for Upload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Upload::Mesh(mesh) => f.debug_tuple("Mesh").field(mesh).finish(),
+            Upload::Meshes(parts) => f.debug_tuple("Meshes").field(&parts.len()).finish(),
+            Upload::MeshesFrom(_) => f.write_str("MeshesFrom"),
+            Upload::Skinned(_) => f.write_str("Skinned"),
+            Upload::Texture(data, kind) => f.debug_tuple("Texture").field(&(data.width(), data.height())).field(kind).finish(),
+            Upload::TextureFrom(_, kind) => f.debug_tuple("TextureFrom").field(kind).finish(),
+            Upload::Material(_) => f.write_str("Material"),
+            Upload::PostPass(stage, _) => f.debug_tuple("PostPass").field(stage).finish(),
+            Upload::Emitter(desc) => f.debug_tuple("Emitter").field(desc).finish(),
+        }
     }
 }
 
@@ -280,6 +348,14 @@ impl Resilient {
         self.watch.is_lost()
     }
 
+    /// The CPU bytes kept to replay the uploads after a loss or onto a rebuilt renderer: what a
+    /// game's procedural meshes, decoded files and Level-2 sources hold in RAM (wasm memory on the
+    /// web) beside their GPU copies. Uploads with a source ([`Resilient::add_meshes_from`],
+    /// [`Resilient::add_texture_from`]) keep none.
+    pub fn kept_bytes(&self) -> u64 {
+        self.uploads.iter().map(|upload| upload.kept_bytes()).sum()
+    }
+
     /// Recoveries so far: the Live ring generation to announce.
     pub fn generation(&self) -> u32 {
         self.generation
@@ -328,6 +404,13 @@ impl Resilient {
         self.upload(Upload::Meshes(parts.clone()), |r, gpu| r.add_meshes_with_meshlets(gpu, parts))
     }
 
+    /// [`Resilient::add_meshes_with_meshlets`] for parts that `source` decodes again (bytes the
+    /// program holds for its whole life, a game's compiled assets): nothing is kept, and a replay
+    /// takes the parts from `source`.
+    pub fn add_meshes_from(&mut self, parts: ModelParts, source: PartsSource) -> Result<Vec<MeshId>, RenderError> {
+        self.upload(Upload::MeshesFrom(source), |r, gpu| r.add_meshes_with_meshlets(gpu, parts))
+    }
+
     /// Cluster the game's meshes by `meshlets` from now on ([`crate::Renderer::set_meshlets`]);
     /// a recovered renderer takes the latest setting before it replays the uploads.
     pub fn set_meshlets(&mut self, meshlets: Meshlets) -> Result<(), RenderError> {
@@ -345,6 +428,12 @@ impl Resilient {
     /// Add a texture (kept for replay).
     pub fn add_texture(&mut self, data: &TextureData, kind: TextureKind) -> Result<TextureId, RenderError> {
         self.upload(Upload::Texture(data.clone(), kind), |r, gpu| r.add_texture(gpu, data, kind))
+    }
+
+    /// [`Resilient::add_texture`] for a texture that `source` decodes again (as
+    /// [`Resilient::add_meshes_from`]): nothing is kept.
+    pub fn add_texture_from(&mut self, data: &TextureData, kind: TextureKind, source: TextureSource) -> Result<TextureId, RenderError> {
+        self.upload(Upload::TextureFrom(source, kind), |r, gpu| r.add_texture(gpu, data, kind))
     }
 
     /// Admit a custom material (kept for replay).
@@ -622,8 +711,10 @@ fn replay(renderer: &mut FrameRenderer, gpu: &Gpu, upload: &Upload) -> Result<()
     match upload {
         Upload::Mesh(mesh) => renderer.add_mesh(gpu, mesh.clone()).map(drop),
         Upload::Meshes(parts) => renderer.add_meshes_with_meshlets(gpu, parts.clone()).map(drop),
+        Upload::MeshesFrom(source) => renderer.add_meshes_with_meshlets(gpu, source()?).map(drop),
         Upload::Skinned(data) => renderer.add_skinned_mesh(gpu, data).map(drop),
         Upload::Texture(data, kind) => renderer.add_texture(gpu, data, *kind).map(drop),
+        Upload::TextureFrom(source, kind) => renderer.add_texture(gpu, &source()?, *kind).map(drop),
         Upload::Material(kept) => renderer.add_material_api(gpu, kept.api, &kept.wgsl, &kept.uniforms, &kept.textures).map(drop),
         Upload::PostPass(stage, kept) => renderer.add_post_pass_api(gpu, kept.api, *stage, &kept.wgsl, &kept.uniforms, &kept.textures).map(drop),
         Upload::Emitter(desc) => renderer.add_emitter(gpu, *desc).map(drop),

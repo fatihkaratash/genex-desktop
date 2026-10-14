@@ -539,7 +539,11 @@ fog function, so such a pass repeats the height fog with the cube read just abov
 its in-scatter (the showcase's `look_fog`; the air's aerial perspective does not reach it) and
 lights a ground lantern with a soft additive disc of its own. Every resource counts against the GPU caps, WGSL is checked against WebGPU core
 plus `[gpu] native_features`, no buffer is mappable, and a pass wgpu rejects stops running with
-`gpu-pass-invalid` (listed with its code in `state().volatile.customPasses`). Each pass counts one
+`gpu-pass-invalid` (listed with its code in `state().volatile.customPasses`). In-world draws are
+checked as they are recorded (slices, usages, offsets, index and indirect ranges); on the web, where
+wgpu answers a frame later, a frame whose in-world draws reach further than one already accepted
+(more vertices or instances, a smaller vertex slice, another pipeline) leaves that pass out until
+its own answer comes. Each pass counts one
 draw under the `custom` tag; native captures and Live show its output, and the web build runs
 them in the browser's WebGPU too (`PostHdr` included), so a web capture shows them.
 
