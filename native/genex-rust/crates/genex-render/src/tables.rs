@@ -297,11 +297,24 @@ fn light_tile_bytes(plan: &FramePlan, uploads: &Uploads) -> u64 {
     plan.binned.as_ref().map_or(0, |binned| binned.bins.grid.mask_bytes()).max(uploads.light_tiles.len() as u64)
 }
 
+/// The pass-view entry of view `view`'s rows for draw variant `variant` (P2-0.12): the plain
+/// variant's is the view's own entry; the others follow the transparent draws' entries, one block
+/// of the plan's views per variant after plain, present only when the plan draws a variant.
+pub fn variant_pass_entry(plan: &FramePlan, view: u32, variant: usize) -> u64 {
+    if variant == 0 {
+        return u64::from(view);
+    }
+    u64::from(plan.views) + plan.transparent.len() as u64 + (variant as u64 - 1) * u64::from(plan.views) + u64::from(view)
+}
+
 fn pass_views(plan: &FramePlan) -> Vec<u8> {
     let transparent_base = plan.views * plan.opaque_instances;
-    let views = (0..plan.views).map(|view| GpuPassView { view, direct: 0, base: 0, pad: 0 });
-    let glass = (0..plan.transparent.len() as u32).map(|k| GpuPassView { view: 0, direct: 1, base: transparent_base + k, pad: 0 });
-    let entries: Vec<GpuPassView> = views.chain(glass).collect();
+    let views = (0..plan.views).map(|view| GpuPassView { view, direct: 0, base: 0, slot_offset: 0 });
+    let glass = (0..plan.transparent.len() as u32).map(|k| GpuPassView { view: 0, direct: 1, base: transparent_base + k, slot_offset: 0 });
+    // Each non-plain variant's rows read its region of the slot-base table (P2-0.12).
+    let varied = if plan.variants.is_empty() { 0..0 } else { 1..crate::scene::DRAW_VARIANTS as u32 };
+    let variants = varied.flat_map(|variant| (0..plan.views).map(move |view| GpuPassView { view, direct: 0, base: 0, slot_offset: variant * plan.slot_count }));
+    let entries: Vec<GpuPassView> = views.chain(glass).chain(variants).collect();
     let mut bytes = vec![0u8; entries.len().max(1) * PASS_VIEW_STRIDE as usize];
     for (i, entry) in entries.iter().enumerate() {
         let at = i * PASS_VIEW_STRIDE as usize;

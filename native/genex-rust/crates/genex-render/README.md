@@ -54,6 +54,22 @@ renderer enables it. In-pass nodes draw inside one world pass.
 The HDR path draws camera views reverse-Z (`Greater`, cleared to 0) on `Depth32Float`; the
 legacy path keeps standard Z. `GxFrameV2` and `GxPostV2` expose `depth_reversed`.
 
+## Materials: alpha masks, double-sided, occlusion
+
+A glTF `MASK` material keeps its alpha factor and `alphaCutoff`, `doubleSided` and the occlusion
+texture are read too (`GlbMaterial`, `Material::alpha_cutoff`, `double_sided`,
+`occlusion_texture`). Each `scene::DrawVariant` other than plain (double-sided, alpha-tested,
+both) gets its own batches after the plain ones and its own pipelines (`src/renderer/variants.rs`),
+reading its region of the slot-base table through its own pass-view rows, so a scene without
+them draws exactly as before. An alpha-tested batch cuts its cutout in the prepass, the sun's
+casters (the plain test) and a depth step of the world pass (alpha-to-coverage under MSAA, a
+hashed threshold under TAA), then shades with an `Equal` depth test and no discard. Its base
+colour map uploads as `TextureKind::Cutout`, whose mips keep the alpha test's coverage (NVTT's
+`scaleAlphaToCoverage`). An occlusion map (its red; an ORM texture's metallic-roughness texel) is
+the smaller of it and the screen-space AO on indirect light only. The material sampler filters
+anisotropically by preset (`Quality::anisotropy`: 16 on high and ultra, 8 medium, 4 low and
+phones, 2 on low-tier phones). Spot casters still draw a variant whole.
+
 ## Output size and window present
 
 A renderer is made at the game's logical `world_size` (`Renderer::logical_size`: the 2D layer's

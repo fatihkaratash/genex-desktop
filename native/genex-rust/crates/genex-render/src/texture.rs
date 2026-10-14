@@ -46,12 +46,20 @@ pub enum TextureKind {
     /// renormalized with the lost length kept for roughness (Toksvig, [`normal_mip_chain`]) when
     /// the texture quality asks, else mipped as data.
     Normal,
+    /// An alpha-tested material's base colour (P2-0.12): sRGB colour in the colour arrays like
+    /// [`TextureKind::Color`], its mips' alpha scaled so each level keeps level 0's coverage at
+    /// [`CUTOUT_COVERAGE_ALPHA`] ([`cutout_mip_chain`]): a cutout keeps its shape far away.
+    Cutout,
 }
+
+/// The alpha a [`TextureKind::Cutout`] texture's mips keep the coverage of: glTF's default
+/// `alphaCutoff`.
+pub const CUTOUT_COVERAGE_ALPHA: f32 = 0.5;
 
 impl TextureKind {
     fn format(self) -> TextureFormat {
         match self {
-            TextureKind::Color => TextureFormat::Rgba8UnormSrgb,
+            TextureKind::Color | TextureKind::Cutout => TextureFormat::Rgba8UnormSrgb,
             TextureKind::Data | TextureKind::Normal => TextureFormat::Rgba8Unorm,
         }
     }
@@ -60,7 +68,7 @@ impl TextureKind {
     /// maps are data).
     pub const fn array(self) -> TextureKind {
         match self {
-            TextureKind::Color => TextureKind::Color,
+            TextureKind::Color | TextureKind::Cutout => TextureKind::Color,
             TextureKind::Data | TextureKind::Normal => TextureKind::Data,
         }
     }
@@ -192,9 +200,9 @@ fn resample(texture: &TextureData, width: u32, height: u32, kind: TextureKind) -
     if (texture.width, texture.height) == (width, height) {
         return texture.clone();
     }
-    let decode = |c: usize, byte: u8| if kind == TextureKind::Color && c < 3 { srgb_to_linear(byte) } else { f32::from(byte) / 255.0 };
+    let decode = |c: usize, byte: u8| if kind.array() == TextureKind::Color && c < 3 { srgb_to_linear(byte) } else { f32::from(byte) / 255.0 };
     let encode = |c: usize, value: f32| {
-        if kind == TextureKind::Color && c < 3 { linear_to_srgb(value) } else { (value.clamp(0.0, 1.0) * 255.0).round() as u8 }
+        if kind.array() == TextureKind::Color && c < 3 { linear_to_srgb(value) } else { (value.clamp(0.0, 1.0) * 255.0).round() as u8 }
     };
     let columns: Vec<Vec<(u32, f32)>> = (0..width).map(|x| taps(texture.width, width, x)).collect();
     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -228,6 +236,71 @@ pub fn mip_chain(texture: &TextureData, kind: TextureKind, px: u32) -> Vec<Textu
         levels.push(next);
     }
     levels
+}
+
+/// The share of `level`'s texels whose alpha is at least `cutoff` (what an alpha test at `cutoff`
+/// keeps).
+pub fn alpha_coverage(level: &TextureData, cutoff: f32) -> f32 {
+    let texels = level.rgba.len() / 4;
+    if texels == 0 {
+        return 0.0;
+    }
+    let kept = level.rgba.as_chunks::<4>().0.iter().filter(|texel| f32::from(texel[3]) / 255.0 >= cutoff).count();
+    kept as f32 / texels as f32
+}
+
+/// The largest alpha scale [`cutout_mip_chain`]'s search tries (NVTT's).
+const COVERAGE_SCALE_MAX: f32 = 4.0;
+/// Bisection steps of that search (NVTT takes 10 on its continuous coverage; 8-bit alpha needs a
+/// few more to land on the nearest step).
+const COVERAGE_SEARCH_STEPS: u32 = 16;
+
+/// `level`'s coverage at `cutoff` once its alpha is multiplied by `scale` (clamped to 1).
+fn scaled_coverage(level: &TextureData, cutoff: f32, scale: f32) -> f32 {
+    let texels = (level.rgba.len() / 4).max(1);
+    let kept = level.rgba.as_chunks::<4>().0.iter().filter(|texel| (f32::from(texel[3]) / 255.0 * scale).min(1.0) >= cutoff).count();
+    kept as f32 / texels as f32
+}
+
+/// The alpha scale that brings `level`'s coverage at `cutoff` closest to `target`: a bisection
+/// over 0..[`COVERAGE_SCALE_MAX`] (coverage only grows with the scale), the closest scale tried.
+fn coverage_scale(level: &TextureData, cutoff: f32, target: f32) -> f32 {
+    let (mut low, mut high, mut scale) = (0.0f32, COVERAGE_SCALE_MAX, 1.0f32);
+    let mut best = (f32::INFINITY, 1.0f32);
+    for _ in 0..COVERAGE_SEARCH_STEPS {
+        let coverage = scaled_coverage(level, cutoff, scale);
+        let error = (coverage - target).abs();
+        if error < best.0 {
+            best = (error, scale);
+        }
+        if coverage < target {
+            low = scale;
+        } else if coverage > target {
+            high = scale;
+        } else {
+            break;
+        }
+        scale = (low + high) * 0.5;
+    }
+    best.1
+}
+
+/// A [`TextureKind::Cutout`] texture's mip chain as a `px`-sided layer (P2-0.12; the method of
+/// NVIDIA Texture Tools' `scaleAlphaToCoverage`, Castaño 2010, written anew): the colour chain
+/// filtered as [`mip_chain`] filters it, then each level's alpha scaled so an alpha test at
+/// [`CUTOUT_COVERAGE_ALPHA`] keeps the share of texels the source keeps. A box-filtered mip of thin
+/// blades or leaves averages their alpha under the cutoff, so far-away foliage would thin out and
+/// vanish.
+pub fn cutout_mip_chain(texture: &TextureData, px: u32) -> Vec<TextureData> {
+    let mut chain = mip_chain(texture, TextureKind::Color, px);
+    let target = alpha_coverage(texture, CUTOUT_COVERAGE_ALPHA);
+    for level in chain.iter_mut().skip(1) {
+        let scale = coverage_scale(level, CUTOUT_COVERAGE_ALPHA, target);
+        for texel in level.rgba.as_chunks_mut::<4>().0 {
+            texel[3] = (f32::from(texel[3]) * scale).round().min(255.0) as u8;
+        }
+    }
+    chain
 }
 
 /// The mip chain of `texture` at its own size: level 0 is the texture, then each level halves
@@ -588,6 +661,9 @@ impl ClassArrays {
     pub fn add(&mut self, device: &Device, queue: &Queue, data: &TextureData, kind: TextureKind) -> Result<TextureId, RenderError> {
         if kind == TextureKind::Normal {
             return self.add_normal_map(device, queue, data);
+        }
+        if kind == TextureKind::Cutout {
+            return self.place(device, queue, data, kind, |side| cutout_mip_chain(data, side));
         }
         self.place(device, queue, data, kind, |side| mip_chain(data, kind, side))
     }

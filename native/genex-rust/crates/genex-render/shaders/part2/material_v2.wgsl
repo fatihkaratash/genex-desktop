@@ -154,11 +154,15 @@ fn gx_scene_pixel(world_pos: vec3<f32>) -> vec2<f32> {
 
 // The renderer's own shading of `s` in the order its forward pass applies it (ambient, the sun,
 // the local lights, fog), exposed for the scene target: what a built-in surface writes, the sun's
-// shadows filtered, blended across cascades and faded out as the preset draws them.
+// shadows filtered, blended across cascades and faded out as the preset draws them, and on the HDR
+// scene the sun a disc for the highlight (`gx_sun_area_direction`, renderer pass 2 P2-0.12).
 fn gx_shade_pbr(s: GxSurface) -> vec3<f32> {
     gx_sun_shadow_context(gx_scene_pixel(s.world_pos), frame.frame_index, GX_SUN_BLEND_BAND);
     gx_sun_shadow_end_fade(GX_SUN_END_FADE);
-    let sun = normalize(frame.sun_dir.xyz);
+    var sun = normalize(frame.sun_dir.xyz);
+    if gx_scene_shades_hdr() {
+        sun = gx_sun_area_direction(sun, frame.sun_dir.w, s.n, s.v);
+    }
     var color = gx_ambient(s);
     color += gx_sun(s, sun);
     color = gx_local_lights(color, s);

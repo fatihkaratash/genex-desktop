@@ -16,7 +16,9 @@
 // darkens indirect light only (this chunk: the flat ambient or the environment), never the sun or
 // local lights, with Jimenez's multi-bounce fit so bright albedo is not over-darkened; where GTAO
 // carries a bent normal the diffuse environment light is looked up along it (SI-06). A blended
-// surface takes no screen-space occlusion: the AO map holds the opaque surface behind it.
+// surface takes no screen-space occlusion: the AO map holds the opaque surface behind it. A
+// material's occlusion map (glTF `occlusionTexture`, P2-0.12 LG-09: the surface chunk's
+// `gx_material_ao`) occludes the same indirect light, the smaller of it and the screen-space AO.
 
 // Whether the environment may light this pipeline's surfaces (`frame.ambient.w` then says whether
 // it does this frame): the forward pass compiles it out of the legacy LDR scene, which the
@@ -29,8 +31,12 @@ fn gx_ambient(s: Surface) -> vec3<f32> {
     if GX_ENVIRONMENT_LIGHT && frame.ambient.w > 0.5 {
         return gx_environment_light(s);
     }
-    // Without an AO term the visibility is 1 and its multi-bounce factor exactly 1 (RX.R1).
+    // Without an AO term the visibility is 1 and its multi-bounce factor exactly 1 (RX.R1); an
+    // occlusion map still darkens it (P2-0.12 LG-09: on presets without AO it is the only AO).
     if !gx_ao_drawn() {
+        if gx_material_ao < 1.0 {
+            return frame.ambient.rgb * s.albedo * gx_ao_multibounce(gx_material_ao, s.albedo);
+        }
         return frame.ambient.rgb * s.albedo;
     }
     let occlusion = gx_surface_occlusion(s).w;
@@ -48,12 +54,14 @@ fn gx_ao_decode(texel: vec4<f32>) -> vec4<f32> {
 }
 
 // The ambient occlusion `s` takes: the accessor's (xyz bent normal, zero when none; w visibility),
-// or none for a blended surface (the AO map holds the opaque surface behind it).
+// or none for a blended surface (the AO map holds the opaque surface behind it); the visibility
+// is at most the occlusion map's (P2-0.12 LG-09, Filament's `min(material AO, SSAO)`).
 fn gx_surface_occlusion(s: Surface) -> vec4<f32> {
     if s.alpha < 1.0 {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        return vec4<f32>(0.0, 0.0, 0.0, gx_material_ao);
     }
-    return gx_ambient_occlusion(s.world_pos);
+    let screen = gx_ambient_occlusion(s.world_pos);
+    return vec4<f32>(screen.xyz, min(screen.w, gx_material_ao));
 }
 
 // Jimenez et al. 2016's multi-bounce fit: the light `visibility` lets through plus what bounces

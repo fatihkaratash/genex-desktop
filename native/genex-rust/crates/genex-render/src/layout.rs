@@ -194,10 +194,10 @@ pub struct GpuLocalLight {
 /// A material row's extension (RQ6.0): the Level-2 v2 `GxMaterialExt`, parallel to the material
 /// table at the same row, so [`GpuMaterial`] (and the frozen v1 `GxMaterial`) keeps its 48 bytes.
 /// The renderer's forward pass and v2 materials read one table: `emissive` is the emissive
-/// radiance (linear rgb, scene units, its strength folded in; a: reserved) and `params` holds the
-/// emissive texture: x its layer (-1: none), y its size class, z flag bits
-/// ([`MATERIAL_EXT_FLAG_*`](MATERIAL_EXT_FLAG_EMISSIVE)), w reserved; all f32, exact as small
-/// integers.
+/// radiance (linear rgb, scene units, its strength folded in; a: the occlusion map's strength,
+/// P2-0.12) and `params` holds the emissive texture: x its layer (-1: none), y its size class, z
+/// flag bits ([`MATERIAL_EXT_FLAG_*`](MATERIAL_EXT_FLAG_EMISSIVE)), w the alpha cutoff (P2-0.12; 0:
+/// not alpha-tested); all f32, exact as small integers.
 pub type GpuMaterialExt = crate::abi::GxMaterialExt;
 
 /// [`GpuMaterialExt`] flag: the material emits light (its emissive radiance is not 0 or it has
@@ -233,8 +233,9 @@ pub struct GpuMaterial {
     pub base_color: [f32; 4],
     /// x: metallic, y: roughness, z: 1 for the missing-asset checker, w: normal-map scale.
     pub params: [f32; 4],
-    /// Texture-array layers: x base colour (sRGB array), y normal map, z metallic-roughness (data
-    /// array), w unused; [`NO_TEXTURE`] when absent.
+    /// Texture-array layers: x base colour (sRGB array), y normal map, z metallic-roughness, w
+    /// ambient occlusion (data array; P2-0.12, equal to z for an ORM texture); [`NO_TEXTURE`] when
+    /// absent.
     pub textures: [u32; 4],
 }
 
@@ -270,8 +271,10 @@ pub struct GpuPassView {
     pub direct: u32,
     /// The visible-list row of a direct (transparent) draw.
     pub base: u32,
-    /// Padding to 16 bytes.
-    pub pad: u32,
+    /// Where the drawn variant's region of the slot-base table starts (renderer pass 2, P2-0.12):
+    /// 0 for the plain batches, `variant index × FramePlan::slot_count` on the other variants'
+    /// rows (`tables::variant_pass_entry`).
+    pub slot_offset: u32,
 }
 
 /// What the cull pass reads about its views (`CullViews`).

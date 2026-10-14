@@ -1672,6 +1672,9 @@ pub struct Quality {
     pub occlusion: bool,
     /// Specular anti-aliasing (roughness from normal variance).
     pub specular_aa: bool,
+    /// The material sampler's anisotropic filtering, 1..=16 (`anisotropy_clamp`; P2-0.12 LG-02):
+    /// a resource knob (a new sampler and frame group, no pipeline). 1 is plain trilinear.
+    pub anisotropy: u8,
 }
 
 impl Quality {
@@ -1721,6 +1724,7 @@ impl Quality {
             meshlets: false,
             occlusion: false,
             specular_aa: false,
+            anisotropy: 1,
         }
     }
 

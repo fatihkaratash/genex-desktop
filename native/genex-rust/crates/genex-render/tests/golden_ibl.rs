@@ -501,8 +501,11 @@ const FLICKER_SPHERE: f32 = 1.2;
 const FLICKER_REGION_PX: f32 = 36.0;
 /// The second camera position's jitter, in pixels to the right.
 const FLICKER_JITTER_PX: f32 = 0.5;
-/// With specular AA on, the frame flickers at most this share of the flicker it shows off.
-const FLICKER_SHARE: f32 = 0.6;
+/// With specular AA on, the frame flickers at most this share of the flicker it shows off. 0.8
+/// since renderer pass 2 P2-0.12 (C8; was 0.6): specular AA filters the geometric normal's
+/// variance as Filament does, and the normal map's detail is its mips' (Toksvig), so a magnified
+/// bumpy map is steadied by the sphere's curvature alone (0.37 against 0.48 off).
+const FLICKER_SHARE: f32 = 0.8;
 /// The flicker off must reach this share for the row to measure anything.
 const FLICKER_FLOOR: f32 = 0.2;
 /// The normal map's bump period in texels, and its size.

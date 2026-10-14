@@ -111,6 +111,7 @@
 pub mod live_timing;
 /// The forward pass's RQ4 screen effects: fog row, AO term, contact-shadow mask (RQ4.6).
 mod effects;
+mod variants;
 
 use wgpu::{
     BindGroup, BindGroupLayout, BindGroupLayoutEntry, BindingType, Buffer, BufferUsages, Device, Queue, RenderPass,
@@ -371,6 +372,10 @@ struct SurfaceKey {
     /// The most cascades the quality draws (`GX_SUN_CASCADES`): the sun chunk's cascade choice
     /// never looks past them (RX.R1).
     sun_cascades: u8,
+    /// The least perceptual roughness the surfaces shade with, its bits (`GX_ROUGHNESS_FLOOR`,
+    /// renderer pass 2 P2-0.12 LG-04): Filament's 0.045 on the HDR scene of a desktop, its
+    /// half-precision 0.089 on a phone's, the legacy 0.04 on the LDR scene.
+    roughness_floor: u32,
 }
 
 /// The RQ4 screen effects a quality draws, one pipeline constant each (`GX_AO`,
@@ -413,6 +418,7 @@ impl SurfaceKey {
         binned_lights: false,
         sun_soft_edges: false,
         sun_cascades: SHADOW_CASCADES as u8,
+        roughness_floor: LEGACY_ROUGHNESS_FLOOR.to_bits(),
     };
 
     /// The key `quality` asks of the HDR scene (`hdr`) or the legacy one, `taa` when TAA resolves
@@ -431,7 +437,18 @@ impl SurfaceKey {
             binned_lights: crate::lights::BINNED_SHADING_LANDED && quality.lights.clustered,
             sun_soft_edges: quality.shadows.blend_percent > 0 || quality.shadows.fade_percent > 0,
             sun_cascades: quality.shadows.cascades.clamp(1, MAX_CASCADES as u8),
+            roughness_floor: if hdr { DESKTOP_ROUGHNESS_FLOOR } else { LEGACY_ROUGHNESS_FLOOR }.to_bits(),
         }
+    }
+
+    /// This key for a device of `form` (P2-0.12 LG-04): a phone's HDR scene shades with the
+    /// coarser floor of half-precision shading; the legacy scene keeps its own.
+    const fn for_form(self, form: FormFactor) -> SurfaceKey {
+        let hdr_floor = self.roughness_floor == DESKTOP_ROUGHNESS_FLOOR.to_bits();
+        if hdr_floor && matches!(form, FormFactor::Mobile) {
+            return SurfaceKey { roughness_floor: MOBILE_ROUGHNESS_FLOOR.to_bits(), ..self };
+        }
+        self
     }
 
     /// This key as the transparent pipeline compiles it: the soft filters' static tap pattern and
@@ -443,6 +460,15 @@ impl SurfaceKey {
         SurfaceKey { shadow_temporal: false, ..self }
     }
 }
+
+/// The legacy LDR scene's roughness floor (the surface chunk's default `GX_ROUGHNESS_FLOOR`).
+const LEGACY_ROUGHNESS_FLOOR: f32 = 0.04;
+/// The HDR scene's roughness floor on a desktop (Filament's fp32 `MIN_PERCEPTUAL_ROUGHNESS`,
+/// `surface_material.fs`, Apache-2.0; P2-0.12 LG-04): a polished surface's GGX peak stays within
+/// what a pixel and the sun's disc resolve.
+const DESKTOP_ROUGHNESS_FLOOR: f32 = 0.045;
+/// The HDR scene's roughness floor on a phone (Filament's half-precision floor, Bevy's too).
+const MOBILE_ROUGHNESS_FLOOR: f32 = 0.089;
 
 /// The depth/normal prepass's pipelines (graph node 7) and the world pass's `Equal`-depth forward
 /// twin, for one scene format and depth convention (made on the first frame that runs the prepass).
@@ -572,6 +598,8 @@ struct GroupsKey {
     /// The AO term, the contact-shadow mask and the aerial-perspective volume (the neutral texture
     /// where their nodes do not run).
     effects: [TextureView; 3],
+    /// The material sampler's anisotropy (P2-0.12 LG-02: a quality change replaces the sampler).
+    anisotropy: u16,
 }
 
 /// What the meshlet draw pipelines were made for: the scene's format, depth convention and surface
@@ -778,10 +806,15 @@ pub struct Renderer {
     shadow_draws: CascadeDraws,
     /// The shadowed spots' caster pipelines, made on the first frame that draws a spot map.
     spot_shadow: Option<crate::spot_shadow::SpotShadowPipelines>,
+    /// The draw variants' pipelines (P2-0.12: double-sided and alpha-tested batches), made on the
+    /// first frame that draws each.
+    variants: variants::VariantPipelines,
     shadow_sampler: Sampler,
     /// PCSS's blocker search gathers the shadow map through it (`layout::SHADOW_BLOCKER_SAMPLER`).
     point_sampler: Sampler,
     texture_sampler: Sampler,
+    /// `texture_sampler`'s anisotropy (the quality's, [`Quality::anisotropy`]).
+    texture_anisotropy: u16,
     /// The material texture arrays of every size class (RQ6.4): made for the quality and device
     /// class in effect when the first texture is added, then kept (a later quality change keeps
     /// what was uploaded; the shaders read each texture's class from its reference). Class 0 is
@@ -936,16 +969,33 @@ pub fn frame_layout_entries() -> Vec<BindGroupLayoutEntry> {
     .collect()
 }
 
+/// The sun casters' group: the frame, the instance table, the visible list and the slot bases,
+/// then an alpha-tested caster's material inputs (P2-0.12, `shaders/shadow.wgsl`): the material
+/// table and its extension, the colour arrays of every size class and the material sampler.
+fn shadow_layout_entries() -> Vec<BindGroupLayoutEntry> {
+    use wgpu::TextureViewDimension::D2Array;
+    let (vertex, fragment) = (ShaderStages::VERTEX, ShaderStages::FRAGMENT);
+    let color = wgpu::TextureSampleType::Float { filterable: true };
+    let mut entries = vec![uniform(0, false, vertex), storage(1, true, vertex), storage(2, true, vertex), storage(3, true, vertex)];
+    entries.extend([storage(SHADOW_MASK_MATERIALS, true, fragment), storage(SHADOW_MASK_MATERIAL_EXT, true, fragment)]);
+    entries.extend(SHADOW_MASK_COLOR_ARRAYS.map(|binding| texture_entry(binding, color, D2Array)));
+    entries.push(sampler_entry(SHADOW_MASK_SAMPLER, wgpu::SamplerBindingType::Filtering));
+    entries
+}
+
+/// The sun casters' alpha-mask bindings (P2-0.12, `shaders/shadow.wgsl`): the material table, its
+/// extension, the colour arrays of size classes 256, 512, 1024 and 2048, and the material sampler.
+const SHADOW_MASK_MATERIALS: u32 = 4;
+const SHADOW_MASK_MATERIAL_EXT: u32 = 5;
+const SHADOW_MASK_COLOR_ARRAYS: [u32; 4] = [6, 7, 8, 9];
+const SHADOW_MASK_SAMPLER: u32 = 10;
+
 fn layouts(device: &Device) -> Layouts {
     let (vertex, fragment) = (ShaderStages::VERTEX, ShaderStages::FRAGMENT);
     let frame = frame_layout_entries();
     Layouts {
         frame: bind_group_layout(device, "frame", &frame),
-        shadow: bind_group_layout(
-            device,
-            "shadow",
-            &[uniform(0, false, vertex), storage(1, true, vertex), storage(2, true, vertex), storage(3, true, vertex)],
-        ),
+        shadow: bind_group_layout(device, "shadow", &shadow_layout_entries()),
         pass: bind_group_layout(device, "pass view", &[uniform(0, true, vertex)]),
         // The line fragment reads the frame's pre-exposure on the HDR scene.
         lines: bind_group_layout(device, "lines", &[uniform(0, false, vertex | fragment)]),
@@ -1172,10 +1222,12 @@ fn forward_equal_pipeline(device: &Device, layouts: &Layouts, format: TextureFor
 /// them (`GX_SUN_SOFT_EDGES`), its cascade choice only over the quality's cascades
 /// (`GX_SUN_CASCADES`). An HDR scene stored as `rg11b10ufloat` (`format`) dithers its writes by
 /// half a mantissa step (`GX_SCENE_RG11B10`, renderer pass 2 P2-0.10 C5); every other format writes
-/// as before.
+/// as before. The surfaces shade no smoother than the key's roughness floor (`GX_ROUGHNESS_FLOOR`,
+/// P2-0.12 LG-04).
 fn surface_constants(reversed: bool, format: TextureFormat, surface: SurfaceKey) -> [(&'static str, f64); 16] {
     let effects = surface.effects;
     [
+        ("GX_ROUGHNESS_FLOOR", f64::from(f32::from_bits(surface.roughness_floor))),
         ("GX_SUN_SOFT_EDGES", f64::from(u8::from(surface.sun_soft_edges))),
         ("GX_SUN_CASCADES", f64::from(surface.sun_cascades)),
         ("GX_ENVIRONMENT_LIGHT", f64::from(u8::from(reversed))),
@@ -1552,6 +1604,26 @@ fn pooled_targets(pool: &mut TargetPool, device: &Device, output: (u32, u32), re
 
 /// The shadow comparison sampler, the non-filtering one PCSS's blocker search gathers the shadow
 /// map with (clamped to its edge, as the search's own texel reads were) and the material sampler.
+/// The material textures' sampler: trilinear and repeating, filtered anisotropically up to
+/// `anisotropy` (1..=16; P2-0.12 LG-02, WebGPU core's `maxAnisotropy`, which needs all three
+/// filters linear). Grazing ground and floors keep their detail into the distance instead of
+/// taking the mip of the footprint's long axis.
+fn texture_sampler(device: &Device, anisotropy: u16) -> Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("textures"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        anisotropy_clamp: anisotropy.clamp(1, MAX_ANISOTROPY),
+        ..Default::default()
+    })
+}
+
+/// WebGPU core's largest `maxAnisotropy`.
+const MAX_ANISOTROPY: u16 = 16;
+
 fn samplers(device: &Device) -> (Sampler, Sampler, Sampler) {
     let shadow = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("shadow"),
@@ -1561,16 +1633,7 @@ fn samplers(device: &Device) -> (Sampler, Sampler, Sampler) {
         ..Default::default()
     });
     let point = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow blockers"), ..Default::default() });
-    let textures = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("textures"),
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Linear,
-        ..Default::default()
-    });
-    (shadow, point, textures)
+    (shadow, point, texture_sampler(device, 1))
 }
 
 /// What a [`WorldStage`] draws with inside the world pass.
@@ -2168,6 +2231,7 @@ impl<'a> WorldNodes<'a> {
                     pass.set_bind_group(1, &groups.pass, &[0]);
                     let meshlets = self.prep.meshlets.as_ref().map(|meshlets| &meshlets.frame);
                     renderer.draw_batches(pass, plan, 0, self.counts(0), meshlets, &mut self.stats);
+                    renderer.draw_world_variants(pass, &groups.pass, plan, self.counts(0), &mut self.stats);
                     if let Some(pipeline) = meshlets.and_then(|_| renderer.meshlet_opaque_pipeline())
                         && renderer.draw_meshlets(pass, &groups.frame, &groups.pass, 0, ArgsSlot::All, pipeline)
                     {
@@ -2421,9 +2485,11 @@ impl Renderer {
             spot_slots: crate::spot_shadow::SpotSlots::default(),
             shadow_draws: CascadeDraws::default(),
             spot_shadow: None,
+            variants: variants::VariantPipelines::default(),
             shadow_sampler,
             point_sampler,
             texture_sampler,
+            texture_anisotropy: 1,
             textures: ClassArrays::new(&device, TEXTURE_DEFAULT_CLASS, crate::settings::TextureQuality::OFF),
             textures_fixed: false,
             environment_choice: Environment::Color,
@@ -2507,6 +2573,12 @@ impl Renderer {
     pub fn set_quality(&mut self, quality: &Quality) {
         self.quality = *quality;
         self.follow_meshlet_setting();
+        let anisotropy = u16::from(quality.anisotropy).clamp(1, MAX_ANISOTROPY);
+        if anisotropy != self.texture_anisotropy {
+            // A resource knob (P2-0.12 LG-02): a new sampler, and the frame groups that bind it.
+            self.texture_sampler = texture_sampler(&self.device, anisotropy);
+            self.texture_anisotropy = anisotropy;
+        }
     }
 
     /// The quality frames draw with.
@@ -3088,7 +3160,7 @@ impl Renderer {
         let textures = if self.textures_fixed { self.textures.quality() } else { self.quality.textures };
         let classes = textures != crate::settings::TextureQuality::OFF;
         let taa = hdr && self.quality.hdr && self.scene_format.is_hdr() && self.taa_drawn();
-        SurfaceKey { texture_classes: classes, toksvig: classes && textures.toksvig, ..SurfaceKey::of(&self.quality, hdr, taa) }
+        SurfaceKey { texture_classes: classes, toksvig: classes && textures.toksvig, ..SurfaceKey::of(&self.quality, hdr, taa) }.for_form(self.form)
     }
 
     /// The meshes this renderer can draw.
@@ -3098,7 +3170,7 @@ impl Renderer {
 
     /// The sun's shadows as Level-2 v2 materials draw them beside the built-in surfaces of a scene
     /// that is HDR (`hdr`) or the legacy one: the quality's filter, its temporal tap pattern (under
-    /// a drawn TAA), cascade blend band and end fade.
+    /// a drawn TAA), cascade blend band and end fade, and the surfaces' roughness floor (P2-0.12).
     pub fn sun_shadow_constants(&self, hdr: bool) -> crate::extension::SunShadowConstants {
         let surface = self.surface_key(hdr);
         let settings = ShadowSettings::from_quality(&self.quality.shadows, 0.0, 0.0);
@@ -3107,6 +3179,7 @@ impl Renderer {
             temporal: surface.shadow_temporal,
             blend_band: settings.blend_band,
             end_fade: settings.end_fade,
+            roughness_floor: f32::from_bits(surface.roughness_floor),
         }
     }
 
@@ -3505,6 +3578,7 @@ impl Renderer {
             // The world pass's statistics count its own draws; the prepass's repeat them.
             let meshlets = prep.meshlets.as_ref().map(|meshlets| &meshlets.frame);
             self.draw_batches(&mut pass, &prep.plan, 0, counts, meshlets, &mut FrameStats::default());
+            self.draw_prepass_variants(&mut pass, &prep.groups.pass, &prep.plan, counts, motion.is_some());
             // Pass 1's meshlets (every visible one without occlusion); node 8 adds pass 2's.
             if let (Some(_), Some(meshlet_pipelines)) = (meshlets, self.meshlet_pipelines()) {
                 let pipeline = self.meshlet_prepass_pipeline(meshlet_pipelines, &mut pass, prep);
@@ -3854,6 +3928,7 @@ impl Renderer {
             self.ensure_prepass(&scene_path, prepass.draws.len(), spec.motion)?;
         }
         self.ensure_temporal(&scene_path)?;
+        self.ensure_variants(&plan, &scene_path, prepass.as_ref(), spec.motion)?;
         self.path = scene_path;
         let meshlets = self.prepare_meshlets(meshlets, prepass.is_some())?;
         let consumers = prepass.as_ref().map_or(PrepassConsumers::NONE, |prepass| prepass.consumers);
@@ -4279,6 +4354,7 @@ impl Renderer {
             views: (self.shadow_maps.array.clone(), self.texture_views()),
             environment: self.environment.borrow().generation(),
             effects: self.effect_views(),
+            anisotropy: self.texture_anisotropy,
         }
     }
 
@@ -4368,11 +4444,15 @@ impl Renderer {
             resource: wgpu::BindingResource::TextureView(view),
         }));
         let frame = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("frame"), layout: &self.layouts.frame, entries: &entries });
-        let shadow = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("shadow"),
-            layout: &self.layouts.shadow,
-            entries: &[entry(0, &self.frame_uniforms), entry(1, t.instances.get()), entry(2, t.visible.get()), entry(3, t.slot_base.get())],
-        });
+        let color_classes = TextureClass::ALL.map(|class| self.textures.view(class, TextureKind::Color));
+        let mut shadow_entries =
+            vec![entry(0, &self.frame_uniforms), entry(1, t.instances.get()), entry(2, t.visible.get()), entry(3, t.slot_base.get())];
+        shadow_entries.extend([entry(SHADOW_MASK_MATERIALS, t.materials.get()), entry(SHADOW_MASK_MATERIAL_EXT, t.material_ext.get())]);
+        shadow_entries.extend(
+            SHADOW_MASK_COLOR_ARRAYS.into_iter().zip(color_classes).map(|(binding, view)| wgpu::BindGroupEntry { binding, resource: wgpu::BindingResource::TextureView(view) }),
+        );
+        shadow_entries.push(wgpu::BindGroupEntry { binding: SHADOW_MASK_SAMPLER, resource: wgpu::BindingResource::Sampler(&self.texture_sampler) });
+        let shadow = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("shadow"), layout: &self.layouts.shadow, entries: &shadow_entries });
         let pass = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("pass view"),
             layout: &self.layouts.pass,
@@ -4443,9 +4523,10 @@ impl Renderer {
     /// view are skipped (the multi-draw splits around them); the meshlet draw covers them.
     fn draw_batches(&self, pass: &mut RenderPass<'_>, plan: &FramePlan, view: u32, counts: Option<&[u32]>, meshlets: Option<&MeshletFrame>, stats: &mut FrameStats) {
         let total = plan.batches.len() as u32;
+        // The plain batches; the variants' follow (`draw_*_variants`, P2-0.12).
         let sources = [
             (0..plan.static_batches, &self.meshes.vertices, &self.meshes.slots),
-            (plan.static_batches..total, self.tables.skinned.get(), self.tables.skinned_slots.get()),
+            (plan.static_batches..plan.plain_batches, self.tables.skinned.get(), self.tables.skinned_slots.get()),
         ];
         for (range, vertices, slots) in sources {
             if range.is_empty() {
@@ -4555,6 +4636,7 @@ impl Renderer {
             pass.set_bind_group(1, &groups.pass, &[(u64::from(view) * PASS_VIEW_STRIDE) as u32]);
             // The meshlet path never covers a spot's view: its casters draw whole.
             self.draw_batches(&mut pass, plan, view, *counts, None, stats);
+            self.draw_spot_variants(&mut pass, &groups.pass, plan, view, *counts, stats);
         }
     }
 
@@ -4616,6 +4698,7 @@ impl Renderer {
         pass.set_index_buffer(self.meshes.indices.slice(..), wgpu::IndexFormat::Uint32);
         let meshlets = prep.meshlets.as_ref().map(|meshlets| &meshlets.frame);
         self.draw_batches(&mut pass, plan, view, counts, meshlets, stats);
+        self.draw_caster_variants(&mut pass, &groups.pass, (plan, view), self.shadow_desc.format, counts, stats);
         let casters = self.meshlet_pipelines().map(|pipelines| if self.shadow_desc.format == ShadowFormat::Depth16.texture_format() { &pipelines.shadow16 } else { &pipelines.shadow });
         let caster_view = meshlets.is_some_and(|frame| view < frame.views);
         if let (true, Some(casters)) = (caster_view, casters)
@@ -4909,6 +4992,20 @@ mod surface_constants_tests {
         assert_eq!(dither(true, TextureFormat::Rg11b10Ufloat), Some(1.0), "the rg11b10 HDR scene dithers");
         assert_eq!(dither(true, TextureFormat::Rgba16Float), Some(0.0), "the rgba16float HDR scene does not");
         assert_eq!(dither(false, WORLD_FORMAT), Some(0.0), "the legacy scene does not");
+    }
+
+    /// Renderer pass 2, P2-0.12 (LG-04): the HDR scene shades with Filament's roughness floor,
+    /// 0.045 on a desktop and the half-precision 0.089 on a phone; the legacy scene keeps 0.04.
+    #[test]
+    fn phones_shade_with_a_coarser_roughness_floor_than_desktops() {
+        let quality = preset_quality(QualityPreset::High, DeviceClass::new(FormFactor::Desktop, PerformanceTier::High));
+        let floor = |hdr: bool, form| {
+            let constants = surface_constants(hdr, TextureFormat::Rgba16Float, SurfaceKey::of(&quality, hdr, false).for_form(form));
+            constants.iter().find(|(key, _)| *key == "GX_ROUGHNESS_FLOOR").map(|(_, value)| *value as f32)
+        };
+        assert_eq!(floor(true, FormFactor::Desktop), Some(0.045));
+        assert_eq!(floor(true, FormFactor::Mobile), Some(0.089));
+        assert_eq!(floor(false, FormFactor::Mobile), Some(0.04), "the legacy scene draws as before");
     }
 
     /// The legacy key the renderer starts from is the features-off quality's.

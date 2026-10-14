@@ -57,6 +57,30 @@ fn gx_specular_energy(f0: vec3<f32>, n_dot_v: f32, roughness: f32) -> vec3<f32> 
     return vec3<f32>(1.0) + f0 * (1.0 / max(gx_energy_albedo, 1e-4) - 1.0);
 }
 
+// The direction the sun lights `n` seen from `v` along, the sun a disc of `angular_radius`
+// (radians) around the unit direction `l` (renderer pass 2, P2-0.12 LG-04; Filament's
+// `sampleSunAreaLight`, Apache-2.0): the direction inside the disc closest to the mirror direction,
+// which is the mirror direction itself when it falls inside. A smooth surface then reflects the
+// sun's whole disc, a glint a few pixels wide, instead of a delta light's one-pixel spike that
+// sparkles under TAA's jitter. `l` itself for a point sun.
+fn gx_sun_area_direction(l: vec3<f32>, angular_radius: f32, n: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    if angular_radius <= 0.0 {
+        return l;
+    }
+    let r = reflect(-v, n);
+    let l_dot_r = dot(l, r);
+    let d = cos(angular_radius);
+    if l_dot_r >= d {
+        return r;
+    }
+    let s = r - l_dot_r * l;
+    let s_length = length(s);
+    if s_length <= 1.0e-6 {
+        return l;
+    }
+    return normalize(l * d + (s / s_length) * sin(angular_radius));
+}
+
 fn shade(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, radiance: vec3<f32>, albedo: vec3<f32>, metallic: f32, roughness: f32) -> vec3<f32> {
     let n_dot_l = max(dot(n, l), 0.0);
     if n_dot_l <= 0.0 {

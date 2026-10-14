@@ -93,7 +93,7 @@ pub(crate) const CASTER_CONSTANT_BIAS: i32 = 2;
 /// The casters' slope-scaled depth bias (against acne on sloped receivers).
 pub(crate) const CASTER_SLOPE_BIAS: f32 = 2.0;
 /// The depth resolution of a `depth16unorm` map (`r` of the constant bias).
-const DEPTH16_UNIT: f64 = 1.0 / 65536.0;
+pub(crate) const DEPTH16_UNIT: f64 = 1.0 / 65536.0;
 
 /// How a caster pipeline lands casters nearer the sun than the cascade's near plane on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

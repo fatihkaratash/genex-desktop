@@ -1291,6 +1291,8 @@ struct V2FrameKey {
     buffers: [Buffer; 5],
     views: [wgpu::TextureView; 6],
     environment: Option<EnvironmentViews>,
+    /// The material sampler (a quality's anisotropy replaces it; renderer pass 2 P2-0.12).
+    sampler: wgpu::Sampler,
 }
 
 impl V2FrameKey {
@@ -1306,6 +1308,7 @@ impl V2FrameKey {
                 world.aerial.clone(),
             ],
             environment: environment.cloned(),
+            sampler: world.texture_sampler.clone(),
         }
     }
 }
@@ -1395,17 +1398,24 @@ pub struct SunShadowConstants {
     pub blend_band: f32,
     /// The fraction of the last cascade's depth range the shadows fade out over.
     pub end_fade: f32,
+    /// The least perceptual roughness the surfaces shade with (`GX_ROUGHNESS_FLOOR`, renderer pass 2
+    /// P2-0.12 LG-04): the forward pass's, so a v2 highlight of the sun's disc matches the
+    /// built-in one.
+    pub roughness_floor: f32,
 }
 
 impl SunShadowConstants {
-    /// The legacy renderer's: 3x3 PCF, a static pattern, hard switches and a hard end.
-    pub const LEGACY: SunShadowConstants = SunShadowConstants { filter: ShadowFilter::Pcf3x3, temporal: false, blend_band: 0.0, end_fade: 0.0 };
+    /// The legacy renderer's: 3x3 PCF, a static pattern, hard switches and a hard end, the
+    /// legacy roughness floor.
+    pub const LEGACY: SunShadowConstants =
+        SunShadowConstants { filter: ShadowFilter::Pcf3x3, temporal: false, blend_band: 0.0, end_fade: 0.0, roughness_floor: 0.04 };
 
     /// The v2 prelude's pipeline constants. `GX_SUN_SOFT_EDGES` follows the band and the end fade
     /// as the forward pass's does (renderer pass 2, P2-0.3: it also turns the lookup's normal
     /// offset towards the light), so a legacy custom surface keeps the legacy lookup bit for bit.
-    fn constants(&self) -> [(&'static str, f64); 5] {
+    fn constants(&self) -> [(&'static str, f64); 6] {
         [
+            ("GX_ROUGHNESS_FLOOR", f64::from(self.roughness_floor)),
             ("GX_SHADOW_FILTER", f64::from(self.filter.shader_id())),
             ("GX_SHADOW_TEMPORAL", f64::from(u8::from(self.temporal))),
             ("GX_SUN_BLEND_BAND", f64::from(self.blend_band)),

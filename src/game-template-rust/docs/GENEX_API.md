@@ -166,7 +166,8 @@ fading the farthest kept ones out so a light crossing the cap never pops. Give a
 `Material::color(Color::rgb(255, 200, 80)).with_metallic(1.0).with_roughness(0.25)`, textures by
 asset path with `.with_base_texture("textures/bark.png")`, drawn with `frame.cube_with`,
 `frame.sphere_with` or `frame.model_with` (a GLB's own materials, emission and textures load by
-themselves). A missing texture leaves the surface untextured; `.with_untextured_color(color)` names
+themselves: an alpha-`MASK` leaf or fence is cut out in its shadow too, a `doubleSided` card
+draws both faces, an occlusion map darkens its crevices' ambient light). A missing texture leaves the surface untextured; `.with_untextured_color(color)` names
 the colour drawn then, so optional downloaded textures keep a stand-in. A texture keeps its resolution up to the size class the device and the game's
 `[render]` choose at load (512 texels on `low`, 1024 on `medium`, 2048 from `high` on desktops;
 phones stop at 1024), so author it at the size it is seen at; the classes stay fixed until the

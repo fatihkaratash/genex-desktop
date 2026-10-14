@@ -111,7 +111,9 @@ struct Material {
     base_color: vec4<f32>,
     // x: metallic, y: roughness, z: 1 for the missing-asset checker, w: normal-map scale.
     params: vec4<f32>,
-    // Texture-array layers: x base colour, y normal map, z metallic-roughness; NO_TEXTURE if none.
+    // Texture references: x base colour, y normal map, z metallic-roughness, w ambient occlusion
+    // (P2-0.12; equal to z for an ORM texture, whose red is then read from z's texel);
+    // NO_TEXTURE if none.
     textures: vec4<u32>,
 }
 
@@ -132,7 +134,9 @@ struct PassView {
     // 1: `base` is the visible-list row (a transparent draw); 0: the vertex's slot finds it.
     direct: u32,
     base: u32,
-    pad: u32,
+    // Where the drawn variant's region of the slot-base table starts (P2-0.12: 0 for plain
+    // batches, the variant's index times the plan's slots for the others' rows).
+    slot_offset: u32,
 }
 
 struct CullViews {
@@ -376,8 +380,10 @@ struct GxEnvSh {
 
 // A material row's v2 extension, parallel to the material table.
 struct GxMaterialExt {
-    // rgb: emissive radiance in scene units.
+    // rgb: emissive radiance in scene units; a: the occlusion map's strength (P2-0.12).
     emissive: vec4<f32>,
+    // x: emissive map layer (-1 none), y: its size class, z: flags, w: the alpha cutoff (P2-0.12;
+    // 0: not alpha-tested).
     params: vec4<f32>,
 }
 

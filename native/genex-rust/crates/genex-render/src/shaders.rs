@@ -39,11 +39,16 @@ pub const FORWARD: &str = concat!(
     include_str!("../shaders/lighting/fog.wgsl"),
     include_str!("../shaders/lighting/output.wgsl"),
     include_str!("../shaders/forward_effects.wgsl"),
+    include_str!("../shaders/alpha_mask.wgsl"),
     include_str!("../shaders/forward.wgsl")
 );
 /// Depth-only shadow casters through a cascade's visible list.
-pub const SHADOW: &str =
-    concat!(include_str!("../shaders/common.wgsl"), include_str!("../shaders/shadow_caster.wgsl"), include_str!("../shaders/shadow.wgsl"));
+pub const SHADOW: &str = concat!(
+    include_str!("../shaders/common.wgsl"),
+    include_str!("../shaders/shadow_caster.wgsl"),
+    include_str!("../shaders/alpha_mask.wgsl"),
+    include_str!("../shaders/shadow.wgsl")
+);
 /// The compute frustum cull writing indirect draw arguments for every view.
 pub const CULL: &str = concat!(include_str!("../shaders/common.wgsl"), include_str!("../shaders/cull.wgsl"));
 /// Compute skinning into the storage vertex buffer.
@@ -173,6 +178,7 @@ pub const PREPASS: &str = concat!(
     include_str!("../shaders/common.wgsl"),
     include_str!("../shaders/clip_position.wgsl"),
     include_str!("../shaders/effects.wgsl"),
+    include_str!("../shaders/alpha_mask.wgsl"),
     include_str!("../shaders/prepass.wgsl")
 );
 /// Bloom's downsample (graph node 19; threshold-free, Karis-weighted first step).

@@ -822,7 +822,7 @@ impl Bench {
         let prepass = plain_prepass(device, &module, &buffers, [&frame_layout, &pass_layout], reversed);
         let background = node.background_pipeline(device, reversed)?;
         let mesh_usage = BufferUsages::VERTEX | BufferUsages::STORAGE;
-        let pass_view = GpuPassView { view: 0, direct: 0, base: 0, pad: 0 };
+        let pass_view = GpuPassView { view: 0, direct: 0, base: 0, slot_offset: 0 };
         Ok(Bench {
             reversed,
             size,

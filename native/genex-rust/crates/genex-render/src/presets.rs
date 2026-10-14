@@ -281,8 +281,17 @@ fn lights(cap: u32, tile_px: u32, shadowed_spots: u8) -> LightQuality {
     LightQuality { cap, clustered: true, tile_px, shadowed_spots }
 }
 
+/// The material sampler's anisotropy per preset and class (P2-0.12 LG-02): desktop high and ultra
+/// 16, medium 8, low 4; phones at most 4, the low-tier phone 2 (its bandwidth). A resource knob.
+const HIGH_ANISOTROPY: u8 = 16;
+const MEDIUM_ANISOTROPY: u8 = 8;
+const LOW_ANISOTROPY: u8 = 4;
+const MOBILE_ANISOTROPY: u8 = 4;
+const MOBILE_LOW_ANISOTROPY: u8 = 2;
+
 fn low_row(quality: &mut Quality, form: FormFactor) {
     quality.anti_aliasing = AntiAliasing::Msaa4;
+    quality.anisotropy = LOW_ANISOTROPY;
     quality.exposure_input_divisor = 16;
     quality.environment = environment(64, (64, 36), 8, 20, false);
     // Two cascades (pass-1 gate findings 01, 01b and 02): one 1024 px cascade over 50 units has
@@ -307,6 +316,7 @@ fn low_row(quality: &mut Quality, form: FormFactor) {
 
 fn medium_row(quality: &mut Quality) {
     quality.anti_aliasing = AntiAliasing::Msaa4;
+    quality.anisotropy = MEDIUM_ANISOTROPY;
     quality.exposure_input_divisor = 8;
     quality.environment = environment(128, (96, 54), 4, 10, true);
     quality.shadows = shadows(2, 1536, ShadowFilter::Pcf3x3, ShadowFormat::Depth32, &MEDIUM_REACH);
@@ -318,6 +328,7 @@ fn medium_row(quality: &mut Quality) {
 
 fn high_row(quality: &mut Quality) {
     quality.anti_aliasing = AntiAliasing::Taa;
+    quality.anisotropy = HIGH_ANISOTROPY;
     quality.exposure_input_divisor = 4;
     quality.environment = environment(256, (192, 108), 1, 5, true);
     quality.shadows = shadows(3, 2048, ShadowFilter::PcssLite, ShadowFormat::Depth32, &HIGH_REACH);
@@ -484,6 +495,8 @@ fn apply_mobile_caps(quality: &mut Quality, preset: QualityPreset, class: Device
     // RCAS run only while the render size differs from the output.
     quality.upscaler = Upscaler::Fsr1;
     quality.bloom.mips = quality.bloom.mips.min(5);
+    let anisotropy = if class.tier == PerformanceTier::Low { MOBILE_LOW_ANISOTROPY } else { MOBILE_ANISOTROPY };
+    quality.anisotropy = quality.anisotropy.min(anisotropy);
     let taa_allowed = class.tier >= PerformanceTier::High && preset >= QualityPreset::High;
     if quality.anti_aliasing.temporal() && !taa_allowed {
         quality.anti_aliasing = AntiAliasing::Msaa4;

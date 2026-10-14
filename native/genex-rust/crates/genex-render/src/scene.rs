@@ -572,6 +572,15 @@ pub struct FramePlan {
     pub batches: Vec<GpuBatch>,
     /// How many of `batches` draw from the library (the rest draw skinned output).
     pub static_batches: u32,
+    /// How many of `batches` are plain ([`DrawVariant::PLAIN`]): the library's, then the skinned
+    /// draws'. The other variants' runs follow ([`FramePlan::variants`]; P2-0.12).
+    pub plain_batches: u32,
+    /// The batches of each non-plain variant the frame draws, in [`DrawVariant::ALL`] order.
+    pub variants: Vec<VariantRun>,
+    /// Slots per variant: the library's meshes, then the skinned draws. A variant's slot-base
+    /// region starts at its index times this; [`FramePlan::slot_base`] holds one region per
+    /// variant when any non-plain variant is drawn, else the plain region alone.
+    pub slot_count: u32,
     /// The visible-list base of each slot (library mesh ids, then skinning jobs), [`NO_BATCH`] if unused.
     pub slot_base: Vec<u32>,
     /// Active cull views: 1, or 1 + the drawn shadow cascades, then one per shadowed spot (of the
@@ -607,6 +616,50 @@ pub struct FramePlan {
     /// The previous-model table, row for row, once [`crate::motion::MotionHistory::apply`] matched
     /// the rows against last frame's; empty otherwise (nothing is uploaded).
     pub prev_models: Vec<crate::layout::GpuPrevModel>,
+}
+
+/// How a material's opaque draws are batched and drawn (P2-0.12): plain (back faces culled, drawn
+/// whole), double-sided (no culling, the viewer-facing normal), alpha-tested (glTF `MASK`: cut
+/// away below the cutoff in the prepass, the casters and the world pass), or both. Each variant
+/// other than plain has its own batches after the plain ones and its own pipelines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DrawVariant {
+    /// Alpha-tested against the material's cutoff.
+    pub masked: bool,
+    /// Both faces drawn and cast.
+    pub double_sided: bool,
+}
+
+impl DrawVariant {
+    /// Back faces culled, drawn whole: every draw before P2-0.12.
+    pub const PLAIN: DrawVariant = DrawVariant { masked: false, double_sided: false };
+    /// Every variant, plain first (its index is its place here).
+    pub const ALL: [DrawVariant; DRAW_VARIANTS] = [
+        DrawVariant::PLAIN,
+        DrawVariant { masked: false, double_sided: true },
+        DrawVariant { masked: true, double_sided: false },
+        DrawVariant { masked: true, double_sided: true },
+    ];
+
+    /// Its place in [`DrawVariant::ALL`].
+    pub const fn index(self) -> usize {
+        (self.masked as usize) * 2 + self.double_sided as usize
+    }
+}
+
+/// How many draw variants there are ([`DrawVariant::ALL`]).
+pub const DRAW_VARIANTS: usize = 4;
+
+/// The batches of one non-plain [`DrawVariant`] (P2-0.12): a run of [`FramePlan::batches`], the
+/// library's meshes first, then its skinned draws.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VariantRun {
+    /// The variant its batches draw.
+    pub variant: DrawVariant,
+    /// Its batches.
+    pub batches: std::ops::Range<u32>,
+    /// Where its skinned batches start (`batches.end` when it has none).
+    pub skinned_from: u32,
 }
 
 /// Material rows shared by equal materials, each with its extension row at the same index.
@@ -654,6 +707,10 @@ fn same_bits(a: &Material, b: &Material) -> bool {
         && a.emissive.iter().zip(&b.emissive).all(|(x, y)| bits(*x, *y))
         && bits(a.emissive_strength, b.emissive_strength)
         && a.emissive_texture == b.emissive_texture
+        && a.alpha_cutoff.map(f32::to_bits) == b.alpha_cutoff.map(f32::to_bits)
+        && a.double_sided == b.double_sided
+        && a.occlusion_texture == b.occlusion_texture
+        && bits(a.occlusion_strength, b.occlusion_strength)
 }
 
 /// A transparent instance before sorting.
@@ -675,6 +732,52 @@ impl DrawKeys {
     #[inline]
     fn row(&mut self, id: Option<DrawId>, mesh: MeshId, kind: RowKind, skinned_base: Option<u32>) -> Option<MotionRow> {
         self.keys.as_mut().map(|keys| keys.row(id, mesh, kind, skinned_base))
+    }
+}
+
+/// The opaque rows a plan builds: the instance table's opaque rows with their motion rows, the
+/// batches and the slot bases (one region of `slot_count` per variant when any is drawn).
+struct Rows {
+    instances: Vec<GpuInstance>,
+    motion: Vec<MotionRow>,
+    batches: Vec<GpuBatch>,
+    slot_base: Vec<u32>,
+    slot_count: usize,
+}
+
+impl Rows {
+    /// One batch per library mesh `variant` draws (ascending mesh id), its slot base in the
+    /// variant's region.
+    fn push_meshes(
+        &mut self,
+        scene: &Scene,
+        library: &MeshLibrary,
+        by_mesh: &BTreeMap<(usize, MeshId), Vec<usize>>,
+        variant: usize,
+        key_of: &[Option<MotionRow>],
+        materials: &mut Materials,
+    ) -> Result<(), RenderError> {
+        let meshes = (variant, MeshId(0))..=(variant, MeshId(u32::MAX));
+        for ((_, mesh), draws) in by_mesh.range(meshes) {
+            let entry = mesh_entry(library, *mesh)?;
+            self.slot_base[variant * self.slot_count + mesh.raw() as usize] = self.instances.len() as u32;
+            self.batches.push(batch(self.instances.len(), draws.len(), entry.first_index, entry.index_count, entry.base_vertex));
+            for at in draws {
+                let draw = &scene.draws[*at];
+                self.instances.push(instance_row(&draw.model, entry.center, entry.radius, materials.row(&draw.material)));
+                self.motion.extend(key_of.get(*at).copied().flatten());
+            }
+        }
+        Ok(())
+    }
+
+    /// One opaque skinned draw's batch (one row), its slot base in `variant`'s region.
+    fn push_skinned(&mut self, part: &SkinnedPart, draw: &SkinnedDraw, variant: usize, key: Option<MotionRow>, materials: &mut Materials) {
+        let row = instance_row(&draw.model, part.center, part.radius, materials.row(&draw.material));
+        self.slot_base[variant * self.slot_count + part.job.slot as usize] = self.instances.len() as u32;
+        self.batches.push(batch(self.instances.len(), 1, part.source.first_index, part.source.index_count, part.source.base_vertex));
+        self.instances.push(row);
+        self.motion.extend(key);
     }
 }
 
@@ -759,9 +862,9 @@ impl FramePlan {
         let (parts, joints) = skinned_parts(scene, library)?;
         let mut materials = Materials::default();
         let mut keys = DrawKeys { keys: motion.then(MotionKeys::default) };
-        // Opaque draws by mesh as indices into the scene's draws (and, with motion, into their
-        // keys, made in draw order so an id's ordinals follow the game's order).
-        let mut by_mesh: BTreeMap<MeshId, Vec<usize>> = BTreeMap::new();
+        // Opaque draws by variant and mesh as indices into the scene's draws (and, with motion,
+        // into their keys, made in draw order so an id's ordinals follow the game's order).
+        let mut by_mesh: BTreeMap<(usize, MeshId), Vec<usize>> = BTreeMap::new();
         let mut key_of: Vec<Option<MotionRow>> = if motion { vec![None; scene.draws.len()] } else { Vec::new() };
         let mut glass = Vec::new();
         for (at, draw) in scene.draws.iter().enumerate() {
@@ -774,36 +877,51 @@ impl FramePlan {
                 if let Some(key) = keys.row(draw.id, draw.mesh, RowKind::Opaque, None) {
                     key_of[at] = Some(key);
                 }
-                by_mesh.entry(draw.mesh).or_default().push(at);
+                by_mesh.entry((draw.material.draw_variant().index(), draw.mesh)).or_default().push(at);
             }
         }
-        let mut instances = Vec::with_capacity(scene.draws.len() + parts.len());
-        let mut motion = Vec::with_capacity(if motion { scene.draws.len() + parts.len() } else { 0 });
-        let mut batches = Vec::new();
-        let mut slot_base = vec![NO_BATCH; library.len() + parts.len()];
-        for (mesh, draws) in &by_mesh {
-            let entry = mesh_entry(library, *mesh)?;
-            slot_base[mesh.raw() as usize] = instances.len() as u32;
-            batches.push(batch(instances.len(), draws.len(), entry.first_index, entry.index_count, entry.base_vertex));
-            for at in draws {
-                let draw = &scene.draws[*at];
-                instances.push(instance_row(&draw.model, entry.center, entry.radius, materials.row(&draw.material)));
-                motion.extend(key_of.get(*at).copied().flatten());
-            }
-        }
-        let static_batches = batches.len() as u32;
-        for (part, draw) in parts.iter().zip(&scene.skinned) {
-            let row = instance_row(&draw.model, part.center, part.radius, materials.row(&draw.material));
+        let slot_count = library.len() + parts.len();
+        let varied_skin = scene.skinned.iter().any(|draw| !draw.material.is_transparent() && draw.material.draw_variant() != DrawVariant::PLAIN);
+        let varied = varied_skin || by_mesh.keys().any(|(variant, _)| *variant > 0);
+        let mut rows = Rows {
+            instances: Vec::with_capacity(scene.draws.len() + parts.len()),
+            motion: Vec::with_capacity(if motion { scene.draws.len() + parts.len() } else { 0 }),
+            batches: Vec::new(),
+            slot_base: vec![NO_BATCH; if varied { slot_count * DRAW_VARIANTS } else { slot_count }],
+            slot_count,
+        };
+        rows.push_meshes(scene, library, &by_mesh, 0, &key_of, &mut materials)?;
+        let static_batches = rows.batches.len() as u32;
+        // The skinned draws in the game's order: the transparent ones to the glass, the plain ones
+        // batched now, the other variants after the plain batches.
+        let mut varied_skinned = Vec::new();
+        for (at, (part, draw)) in parts.iter().zip(&scene.skinned).enumerate() {
             let key = keys.row(draw.id, draw.skin.mesh, RowKind::Skinned, Some(part.job.dst_base));
             if draw.material.is_transparent() {
+                let row = instance_row(&draw.model, part.center, part.radius, materials.row(&draw.material));
                 glass.push(Glass { row, source: part.source, motion: key });
                 continue;
             }
-            slot_base[part.job.slot as usize] = instances.len() as u32;
-            batches.push(batch(instances.len(), 1, part.source.first_index, part.source.index_count, part.source.base_vertex));
-            instances.push(row);
-            motion.extend(key);
+            match draw.material.draw_variant().index() {
+                0 => rows.push_skinned(part, draw, 0, key, &mut materials),
+                variant => varied_skinned.push((variant, at, key)),
+            }
         }
+        let plain_batches = rows.batches.len() as u32;
+        let mut variants = Vec::new();
+        for variant in DrawVariant::ALL.into_iter().skip(1) {
+            let first = rows.batches.len() as u32;
+            rows.push_meshes(scene, library, &by_mesh, variant.index(), &key_of, &mut materials)?;
+            let skinned_from = rows.batches.len() as u32;
+            for (_, at, key) in varied_skinned.iter().filter(|(v, _, _)| *v == variant.index()) {
+                rows.push_skinned(&parts[*at], &scene.skinned[*at], variant.index(), *key, &mut materials);
+            }
+            let end = rows.batches.len() as u32;
+            if end > first {
+                variants.push(VariantRun { variant, batches: first..end, skinned_from });
+            }
+        }
+        let Rows { mut instances, mut motion, batches, slot_base, .. } = rows;
         let opaque_instances = instances.len() as u32;
         let view_proj = scene.camera.projection(aspect, depth_reversed);
         let lit = options.sun.map_or(scene.lighting.sun_intensity > 0.0, |sun| sun.color.iter().any(|c| *c > 0.0));
@@ -842,6 +960,9 @@ impl FramePlan {
             material_ext: materials.ext,
             legacy_ext: vec![crate::layout::GpuLightExt::POINT; lights.len()],
             lights,
+            plain_batches,
+            variants,
+            slot_count: slot_count as u32,
             batches,
             static_batches,
             slot_base,

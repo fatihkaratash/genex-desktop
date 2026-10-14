@@ -44,6 +44,13 @@ override GX_TOKSVIG: bool = false;
 // disc on desktop, a coarser floor on phones' half-precision paths).
 override GX_ROUGHNESS_FLOOR: f32 = 0.04;
 
+// The occlusion map's ambient occlusion at the fragment `gx_surface` last built (P2-0.12 LG-09;
+// its strength applied by the caller, which reads the material's extension row): 1 without a map,
+// and for every Level-2 v2 surface (which builds no built-in surface). The ambient chunk takes the
+// smaller of it and the screen-space AO for the diffuse and specular occlusion of indirect light;
+// direct light never reads it.
+var<private> gx_material_ao: f32 = 1.0;
+
 // What the lighting chunks shade.
 struct Surface {
     world_pos: vec3<f32>,
@@ -122,6 +129,7 @@ fn gx_surface(world_pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, tangent: v
     }
     let base = material.base_color * select(base_sample, vec4<f32>(1.0), material.textures.x == NO_TEXTURE);
     let mr = select(mr_sample.rgb, vec3<f32>(1.0), material.textures.z == NO_TEXTURE);
+    gx_material_ao = gx_surface_ao(material, mr_sample.r, uv);
     var albedo = base.rgb;
     if material.params.z > 0.5 {
         albedo = checker(world_pos);
@@ -140,13 +148,33 @@ fn gx_surface(world_pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, tangent: v
         }
     }
     // Derivatives in uniform control flow (after the branches above rejoin), used only when the
-    // pipeline filters specular aliasing on the HDR scene.
-    let n_dx = dpdx(n);
-    let n_dy = dpdy(n);
+    // pipeline filters specular aliasing on the HDR scene. They are the geometric normal's (P2-0.12
+    // C8, Filament's `normalFiltering` over the geometric normal): how the surface itself curves
+    // across the pixel. The normal map's detail is Toksvig's in its mips; its 2x2-quad derivatives
+    // would count it twice and step the roughness per quad.
+    let n_dx = dpdx(geometric);
+    let n_dy = dpdy(geometric);
     if GX_SPECULAR_AA && GX_SCENE_HDR {
         roughness = gx_filtered_roughness(roughness, n_dx, n_dy);
     }
     return Surface(world_pos, geometric, n, vec3<f32>(0.0), albedo, base.a, metallic, roughness);
+}
+
+// The occlusion map's value for `material` at `uv` (P2-0.12 LG-09): 1 without a map; an ORM
+// texture's red from the metallic-roughness texel already fetched (`mr_red`); else one more
+// gradient fetch of its own map, only for such a material.
+fn gx_surface_ao(material: Material, mr_red: f32, uv: vec2<f32>) -> f32 {
+    let lod_scale = exp2(gx_texture_lod_bias());
+    let uv_dx = dpdx(uv) * lod_scale;
+    let uv_dy = dpdy(uv) * lod_scale;
+    let reference = material.textures.w;
+    if reference == NO_TEXTURE {
+        return 1.0;
+    }
+    if reference == material.textures.z {
+        return mr_red;
+    }
+    return gx_class_texel(false, reference, uv, uv_dx, uv_dy).r;
 }
 
 // The radiance a fragment of a material emits (RQ6.3): its extension row's emissive radiance

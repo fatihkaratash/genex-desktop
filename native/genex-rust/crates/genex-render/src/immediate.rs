@@ -365,7 +365,7 @@ impl ImmediateFrame {
         let corners = [turn(x, y), turn(x + w, y), turn(x + w, y + h), turn(x, y + h)];
         // Quads sample the colour arrays of every size class (the reference carries the class;
         // class 0 is the bare layer).
-        let layer = if texture.kind() == TextureKind::Color { texture.reference() } else { NO_TEXTURE };
+        let layer = if texture.kind().array() == TextureKind::Color { texture.reference() } else { NO_TEXTURE };
         self.quad(corners, source, tint, layer)
     }
 

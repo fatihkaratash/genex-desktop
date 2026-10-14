@@ -16,7 +16,7 @@ use crate::meshlet::{
 // The GLB material loader lives beside the mesh loader it shares the primitive walk with.
 #[path = "glb_material.rs"]
 mod glb_material;
-pub use glb_material::{GlbEmission, GlbMaterial, GlbModel, GlbPart, decode_image};
+pub use glb_material::{GLTF_DEFAULT_ALPHA_CUTOFF, GlbEmission, GlbMaterial, GlbModel, GlbPart, decode_image};
 
 /// One vertex as the vertex buffer holds it (`MeshVertex` in the skinning shader).
 #[repr(C)]
