@@ -303,6 +303,8 @@ fn frame(map: &ShadowMap, camera: [f32; 3], forward: [f32; 3], ends: [f32; 4], r
         cascade_texels: std::array::from_fn(|c| lane(&map.texel_world, c)),
         shadow_soft: [libm::tanf(radius), 0.0, 0.0, 0.0],
         shadow_counts: [drawn as u32, 0, 0, 0],
+        // Each cascade's comparison bias, as `scene::write_cascades` fills it.
+        cascade_bias: [BIAS; 4],
         ..GpuFrame::default()
     }
 }

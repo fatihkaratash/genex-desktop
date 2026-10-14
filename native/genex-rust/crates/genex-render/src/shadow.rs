@@ -191,6 +191,14 @@ impl Cascades {
         self.depth_range.map(|range| range * DEPTH_BIAS)
     }
 
+    /// Each cascade's comparison bias in its own light depth (NDC), the frame's `cascade_bias`:
+    /// [`DEPTH_BIAS`] in every lane (the bias the sun chunk shared across cascades), so a held
+    /// cascade and a fresh one compare alike. The per-cascade world-space bias replaces it with
+    /// one world bias over each cascade's depth range.
+    pub fn comparison_bias(&self) -> [f32; MAX_CASCADES] {
+        [DEPTH_BIAS; MAX_CASCADES]
+    }
+
     /// Where each cascade starts blending into the next (the reference of the sun chunk's band):
     /// `band` of the cascade's view-depth range before its end, the first cascade starting at
     /// `near`. A band of 0 starts at the end (a hard switch); 0 past the drawn cascades.
@@ -510,6 +518,7 @@ fn hold_frame(frame: &mut GpuFrame, c: usize, old: &Cascades) {
     frame.cascade_matrices[c] = old.view_proj[c];
     frame.cascade_texels[c] = old.texel_world[c];
     frame.cascade_offsets[c] = offset;
+    frame.cascade_bias[c] = old.comparison_bias()[c];
     if c < SHADOW_CASCADES {
         frame.cascade_view_proj[c] = old.view_proj[c];
         frame.shadow_params[1 + c] = offset;

@@ -48,8 +48,9 @@ struct GxTonemapParams {
     frame: vec4<u32>,
     // x: bloom's stylistic threshold (0: none, the lerp); y: its soft knee as a fraction of it.
     bloom: vec4<f32>,
-    // xyz: the look's white-balance gains (luminance-normalised; 1 each leaves the scene as it is).
-    balance: vec4<f32>,
+    // The look's white balance on linear rgb (`GpuTonemapParams::balance`): the diagonal of its
+    // luminance-normalised gains (identity leaves the scene as it is).
+    balance: mat3x3<f32>,
 }
 
 @group(0) @binding(0) var gx_hdr_scene: texture_2d<f32>;
@@ -147,10 +148,10 @@ fn gx_tm_neutral(color: vec3<f32>) -> vec3<f32> {
     return clamp(mix(c * (new_peak / peak), vec3<f32>(new_peak), g), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// The look's curve: pre-exposed linear radiance, white-balanced by the look's gains, to
+// The look's curve: pre-exposed linear radiance, white-balanced by the look's matrix, to
 // display-linear colour in [0, 1].
 fn gx_tonemap_curve(color: vec3<f32>) -> vec3<f32> {
-    let c = min(max(color * gx_tm.balance.rgb, vec3<f32>(0.0)), vec3<f32>(GX_TM_RADIANCE_MAX));
+    let c = min(max(gx_tm.balance * color, vec3<f32>(0.0)), vec3<f32>(GX_TM_RADIANCE_MAX));
     if GX_TONEMAPPER == 1u || GX_TONEMAPPER == 4u {
         return gx_tm_agx(c, GX_TONEMAPPER == 4u);
     }

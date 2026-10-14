@@ -14,6 +14,11 @@
 // removed) and TAA's `r8unorm` reactive mask, where a row without history writes 1 (TAA's
 // reactive coverage pass max-blends the transparents over it later).
 
+// Whether the pipeline's instances may fade between LODs (a pipeline-overridable constant): their
+// fragments are dithered away by the instance fade table (layout::FRAME_INSTANCE_FADE_BINDING)
+// once the crossfade lands; false (the default) draws every row whole.
+override GX_LOD_FADE: bool = false;
+
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(3) var<storage, read> visible: array<u32>;

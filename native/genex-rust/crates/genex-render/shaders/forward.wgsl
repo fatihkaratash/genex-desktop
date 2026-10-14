@@ -7,6 +7,11 @@
 // `gx_clip_position` and `@invariant` (shaders/clip_position.wgsl), as every depth writer's is, so
 // the depth/normal prepass and an `Equal`-depth main pass agree bit for bit.
 
+// Whether the pipeline's instances may fade between LODs (a pipeline-overridable constant): their
+// fragments are dithered away by the instance fade table (layout::FRAME_INSTANCE_FADE_BINDING)
+// once the crossfade lands; false (the default) draws every row whole.
+override GX_LOD_FADE: bool = false;
+
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> materials: array<Material>;

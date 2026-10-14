@@ -1,7 +1,8 @@
 // Lighting chunk: the sun. Its direct light through the cascaded shadow maps and the screen-space
 // contact shadows. Reads the forward bindings `frame`, `shadow_map` and `shadow_sampler` and the
-// accessor `gx_contact_shadow` (shaders/effects.wgsl; 1 where none are drawn); `shade` is
-// pbr.wgsl's BRDF.
+// accessors `gx_contact_shadow` (shaders/effects.wgsl; 1 where none are drawn) and
+// `gx_sun_cascade_bias` (each cascade's comparison bias: the frame uniforms' per-cascade row in the
+// forward pass, the shared `shadow_params.x` in the v2 prelude); `shade` is pbr.wgsl's BRDF.
 //
 // The chunk compiles against FrameUniforms (the forward pass) and GxFrameV2 (the Level-2 v2
 // prelude), so it reads only members both frames share under one meaning: `camera_pos`,
@@ -239,7 +240,7 @@ fn gx_sun_lookup(world_pos: vec3<f32>, n: vec3<f32>, cascade: u32) -> GxSunLooku
     let ndc = clip.xyz / clip.w;
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     let inside = abs(ndc.x) <= 1.0 && abs(ndc.y) <= 1.0 && ndc.z <= 1.0;
-    return GxSunLookup(uv, ndc.z, ndc.z - frame.shadow_params.x, inside);
+    return GxSunLookup(uv, ndc.z, ndc.z - gx_sun_cascade_bias(cascade), inside);
 }
 
 // `cascade`'s scale from rows 0 and 2 of its orthographic light matrix: x uv per world unit (half

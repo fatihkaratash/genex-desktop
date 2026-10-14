@@ -155,9 +155,22 @@ pub struct GpuTonemapParams {
     /// x: bloom's stylistic threshold (0: none, the energy-conserving lerp); y: its soft knee
     /// ([`crate::post::bloom::THRESHOLD_KNEE`]); zw: reserved.
     pub bloom: [f32; 4],
-    /// xyz: the look's white-balance gains ([`crate::settings::Look::white_balance_gains`]; 1 each
-    /// leaves the scene as it is); w: reserved.
-    pub balance: [f32; 4],
+    /// The look's white balance as a 3x3 matrix on linear rgb, three columns of xyz with w
+    /// reserved (`mat3x3<f32>` in WGSL, 16-byte column stride): today the diagonal of
+    /// [`crate::settings::Look::white_balance_gains`] ([`balance_columns`]); a chromatic-adaptation
+    /// matrix baked on the CPU from temperature and tint takes its place without a layout change.
+    pub balance: [[f32; 4]; 3],
+}
+
+/// A column-major 3x3 matrix on linear rgb (`m[column][row]`).
+pub type ColorMatrix = [[f32; 3]; 3];
+
+/// The identity colour matrix (no white balance).
+pub const COLOR_MATRIX_IDENTITY: ColorMatrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+/// `matrix` as the uniform's three columns.
+pub fn balance_columns(matrix: &ColorMatrix) -> [[f32; 4]; 3] {
+    matrix.map(|[x, y, z]| [x, y, z, 0.0])
 }
 
 fn size_row(size: (u32, u32)) -> [f32; 4] {
@@ -327,8 +340,9 @@ pub(crate) struct TonemapPass<'a> {
     pub frame_index: u64,
     /// The input's identity: the bind group is rebuilt when it changes (the pool's generation).
     pub generation: u64,
-    /// The look's white-balance gains, applied to the scene before the curve.
-    pub balance: [f32; 3],
+    /// The look's white balance, a matrix on the scene's linear rgb before the curve
+    /// ([`crate::settings::Look::white_balance_matrix`]).
+    pub balance: ColorMatrix,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -537,7 +551,7 @@ impl TonemapNode {
             shape: [if pass.dither { DITHER_AMPLITUDE } else { 0.0 }, UPSCALE_SHARPNESS, intensity, scale],
             frame: [(pass.frame_index % DITHER_CYCLE) as u32, 0, 0, 0],
             bloom: [threshold, crate::post::bloom::THRESHOLD_KNEE, 0.0, 0.0],
-            balance: [pass.balance[0], pass.balance[1], pass.balance[2], 0.0],
+            balance: balance_columns(&pass.balance),
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         let pipeline = self.pipeline(device, pass.tonemapper, pass.source, pass.format);
@@ -707,7 +721,7 @@ fn tonemap_through(
         dither,
         frame_index: 0,
         generation: 0,
-        balance: [1.0; 3],
+        balance: COLOR_MATRIX_IDENTITY,
     };
     node.encode(device, &gpu.queue, &mut encoder, &pass);
     let (width, height) = target;

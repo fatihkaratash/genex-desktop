@@ -77,9 +77,10 @@ use naga::proc::Layouter;
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 
 /// The golden sizes in bytes. Changing one is a layout change for every shader and extension.
-const GOLDEN: [(&str, usize); 32] = [
-    // RQ5.6 flipped 752 -> 768: the camera's TAA jitter lane (`GpuFrame::jitter`).
-    ("FrameUniforms", 768),
+const GOLDEN: [(&str, usize); 33] = [
+    // RQ5.6 flipped 752 -> 768: the camera's TAA jitter lane (`GpuFrame::jitter`). Pass 2's
+    // contracts wave flipped 768 -> 784: each cascade's comparison bias (`GpuFrame::cascade_bias`).
+    ("FrameUniforms", 784),
     ("Light", 32),
     ("Instance", 160),
     ("Material", 48),
@@ -113,6 +114,9 @@ const GOLDEN: [(&str, usize); 32] = [
     ("LightExt", 32),
     ("GxMaterialExt", 32),
     ("LightBinParams", 32),
+    // Pass 2's contracts wave: the tonemap's uniform joins the table at 128 bytes, its white
+    // balance a 3x3 matrix (three 16-byte columns) where the gains row was (96 before).
+    ("GxTonemapParams", 128),
 ];
 
 fn parse(name: &str, source: &str) -> naga::Module {
@@ -178,9 +182,18 @@ const OVERRIDE_VARIANTS: &[(&str, &[Variant])] = &[
             &[("GX_SHADOW_FILTER", 2.0)],
             &[("GX_SHADOW_FILTER", 3.0)],
             &[("GX_SHADOW_FILTER", 4.0), ("GX_SCENE_HDR", 1.0)],
+            // Pass 2's contracts wave (stage 0): the transparent pipeline's static shadow kernel
+            // (`GX_SHADOW_TEMPORAL` off beside TAA's soft filter), the roughness floor a class sets
+            // (desktop's sun disc, phones'), the rg11b10 scene's dither and the LOD crossfade.
+            &[("GX_SHADOW_FILTER", 4.0), ("GX_SHADOW_TEMPORAL", 0.0), ("GX_SCENE_HDR", 1.0)],
+            &[("GX_ROUGHNESS_FLOOR", 0.045), ("GX_SCENE_HDR", 1.0)],
+            &[("GX_ROUGHNESS_FLOOR", 0.089), ("GX_SCENE_RG11B10", 1.0), ("GX_SCENE_HDR", 1.0)],
+            &[("GX_LOD_FADE", 1.0), ("GX_SCENE_HDR", 1.0)],
         ],
     ),
     ("lines", &[&[("GX_SCENE_HDR", 1.0)]]),
+    ("prepass", &[&[("GX_LOD_FADE", 1.0)]]),
+    ("shadow", &[&[("GX_LOD_FADE", 1.0)]]),
 ];
 
 /// One pipeline's `override` values: (name, value) pairs.
@@ -1325,6 +1338,71 @@ fn the_wgsl_light_bin_and_texture_constants_are_the_rust_ones() {
     assert_eq!(value("GX_ZBIN_INDEX_BITS"), ZBIN_INDEX_BITS);
     assert_eq!(value("GX_TEXTURE_CLASS_SHIFT"), TEXTURE_CLASS_SHIFT);
     assert_eq!(value("GX_TEXTURE_LAYER_MASK"), TEXTURE_LAYER_MASK);
+}
+
+/// Each `f32` constant `module` declares, by name.
+fn f32_constants(module: &naga::Module) -> Vec<(String, f32)> {
+    module
+        .constants
+        .iter()
+        .filter_map(|(_, constant)| match module.global_expressions[constant.init] {
+            naga::Expression::Literal(naga::Literal::F32(value)) => Some((constant.name.clone()?, value)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Each `override` `module` declares, with its default, by name.
+fn override_defaults(module: &naga::Module) -> Vec<(String, Option<naga::Literal>)> {
+    module
+        .overrides
+        .iter()
+        .filter_map(|(_, declared)| {
+            let default = declared.init.and_then(|init| match module.global_expressions[init] {
+                naga::Expression::Literal(literal) => Some(literal),
+                _ => None,
+            });
+            Some((declared.name.clone()?, default))
+        })
+        .collect()
+}
+
+/// Pass 2's contracts wave (stage 0): the slots and lanes later packages fill are declared with
+/// the values that draw today's picture. The spot shadow fade lane and the instance fade table's
+/// whole value are the Rust ones; the stage's new pipeline constants default to today's behaviour
+/// (the roughness floor 0.04, no rg11b10 dither, no LOD fade) in every module that declares them;
+/// the instance fade table's reserved slot collides with no forward frame binding.
+#[test]
+fn the_stage_zero_contract_slots_hold_todays_values() {
+    use genex_render::layout::{
+        FRAME_EFFECT_BINDINGS, FRAME_ENV_BINDINGS, FRAME_INSTANCE_FADE_BINDING, FRAME_LIGHT_BINDINGS, FRAME_MATERIAL_CLASS_BINDINGS, INSTANCE_FADE_WHOLE,
+        SPOT_SHADOW_UNFADED,
+    };
+    let forward = parse("forward", shader("forward"));
+    let constants = f32_constants(&forward);
+    let value = |name: &str| constants.iter().find(|(declared, _)| declared == name).map(|(_, value)| *value).unwrap_or_else(|| panic!("{name} declared"));
+    assert_eq!(value("GX_SPOT_SHADOW_UNFADED").to_bits(), SPOT_SHADOW_UNFADED.to_bits());
+    assert_eq!(value("GX_INSTANCE_FADE_WHOLE").to_bits(), INSTANCE_FADE_WHOLE.to_bits());
+    let expected: &[(&str, &[&str], naga::Literal)] = &[
+        ("GX_ROUGHNESS_FLOOR", &["forward", "material-v2-sample"], naga::Literal::F32(0.04)),
+        ("GX_SCENE_RG11B10", &["forward", "material-v2-sample"], naga::Literal::Bool(false)),
+        ("GX_LOD_FADE", &["forward", "prepass", "shadow"], naga::Literal::Bool(false)),
+    ];
+    for (name, shaders, default) in expected {
+        for shader_name in *shaders {
+            let declared = override_defaults(&parse(shader_name, shader(shader_name)));
+            let found = declared.iter().find(|(declared, _)| declared == name).unwrap_or_else(|| panic!("{shader_name} declares {name}"));
+            assert_eq!(found.1, Some(*default), "{name} in {shader_name}");
+        }
+    }
+    let taken: Vec<u32> = (0..=10)
+        .chain(FRAME_ENV_BINDINGS.iter().map(|(binding, _)| *binding))
+        .chain(FRAME_EFFECT_BINDINGS.iter().map(|(binding, _)| *binding))
+        .chain(FRAME_LIGHT_BINDINGS.iter().map(|(binding, _)| *binding))
+        .chain(FRAME_MATERIAL_CLASS_BINDINGS.iter().map(|(binding, _)| *binding))
+        .collect();
+    assert!(!taken.contains(&FRAME_INSTANCE_FADE_BINDING.0), "binding {} is free", FRAME_INSTANCE_FADE_BINDING.0);
+    assert!(FRAME_INSTANCE_FADE_BINDING.0 > 30, "it clears the screen reflections' binding 30");
 }
 
 #[test]

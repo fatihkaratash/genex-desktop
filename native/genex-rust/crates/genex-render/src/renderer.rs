@@ -3613,7 +3613,7 @@ impl Renderer {
             dither: fsr.is_none(),
             frame_index: self.frame_index,
             generation,
-            balance: self.look.white_balance_gains(),
+            balance: self.look.white_balance_matrix(),
         };
         let device = frame.device().clone();
         let queue = frame.queue().clone();

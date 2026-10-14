@@ -115,6 +115,11 @@ pub struct GpuFrame {
     /// a history reset; the v2 frame's `prev_jitter`, RQ5 review). `view_proj` stays unjittered,
     /// so motion vectors, the fog and the cull read the camera as it is.
     pub jitter: [f32; 4],
+    /// Each cascade's comparison bias in its own light depth (NDC), the sun chunk's
+    /// `gx_sun_cascade_bias` (`Cascades::comparison_bias`): one world-space bias over each
+    /// cascade's depth range once the per-cascade bias lands; today every lane is the shared
+    /// `shadow::DEPTH_BIAS` (`shadow_params.x`), so the picture is unchanged.
+    pub cascade_bias: [f32; 4],
 }
 
 /// One point light in the light table (`Light`).
@@ -155,13 +160,18 @@ pub struct GpuLightExt {
     /// ([`LIGHT_KIND_POINT`], [`LIGHT_KIND_SPOT`]); z: the shadow slot (0 to
     /// [`MAX_SHADOWED_SPOTS`] - 1, [`NO_SHADOW_SLOT`] without a shadow map; its layer of the
     /// shared shadow array is the spot atlas after the drawn cascades, its tile the slot's,
-    /// `spot_shadow::tile_rect`); w: reserved (0).
+    /// `spot_shadow::tile_rect`); w: how far the spot's shadow has faded out as its slot changes
+    /// hands, 0 (whole, [`SPOT_SHADOW_UNFADED`]) to 1 (none): every row writes 0 until spot slots
+    /// fade, and the shading reads it from then on.
     pub params: [f32; 4],
 }
 
+/// The shadow fade of a spot whose shadow is whole (`GpuLightExt::params.w`).
+pub const SPOT_SHADOW_UNFADED: f32 = 0.0;
+
 impl GpuLightExt {
     /// The extension row of a point light: no cone, no shadow map.
-    pub const POINT: GpuLightExt = GpuLightExt { spot: [0.0, 0.0, 0.0, -1.0], params: [-1.0, LIGHT_KIND_POINT, NO_SHADOW_SLOT, 0.0] };
+    pub const POINT: GpuLightExt = GpuLightExt { spot: [0.0, 0.0, 0.0, -1.0], params: [-1.0, LIGHT_KIND_POINT, NO_SHADOW_SLOT, SPOT_SHADOW_UNFADED] };
 }
 
 /// One local light as the CPU builds it (RQ6.0): the light-table row and its extension row. It is
@@ -443,6 +453,18 @@ pub const FRAME_MATERIAL_CLASS_BINDINGS: [(u32, &str); 6] = [
     (29, "data_textures_2048"),
 ];
 
+/// The forward frame group's instance fade table (renderer pass 2, LOD crossfade), as (binding,
+/// WGSL name): one f32 per instance-table row, parallel to the instance table so the frozen v1 rows
+/// keep their 160 bytes; [`INSTANCE_FADE_WHOLE`] for a row drawn whole, 0..1 for a row fading in or
+/// out (its fragments dithered away, shadow casters included). Reserved, not bound: the forward,
+/// prepass and caster pipelines declare it (behind `GX_LOD_FADE`) once the crossfade lands; it
+/// sits past binding 30, which the screen reflections take.
+pub const FRAME_INSTANCE_FADE_BINDING: (u32, &str) = (31, "instance_fade");
+/// An instance row's fade when it is drawn whole (`GX_INSTANCE_FADE_WHOLE`).
+pub const INSTANCE_FADE_WHOLE: f32 = 1.0;
+/// Bytes of one instance fade row.
+pub const INSTANCE_FADE_BYTES: u64 = 4;
+
 /// One meshlet of the library's meshlet table (`Meshlet`, R2): at most
 /// [`crate::meshlet::MESHLET_MAX_VERTICES`] vertices and [`crate::meshlet::MESHLET_MAX_TRIANGLES`]
 /// triangles of one mesh. The same 48 bytes are a record of the `genex_meshlets` GLB extras
@@ -643,4 +665,5 @@ pub const GPU_STRUCTS: &[GpuStructLayout] = &[
     layout_of::<GpuLightExt>("LightExt"),
     layout_of::<GpuMaterialExt>("GxMaterialExt"),
     layout_of::<GpuLightBinParams>("LightBinParams"),
+    layout_of::<crate::post::tonemap::GpuTonemapParams>("GxTonemapParams"),
 ];

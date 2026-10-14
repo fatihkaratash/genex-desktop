@@ -14,7 +14,7 @@
 //! renderer's forward pass draws through them.
 
 use crate::cluster::LightBinFrame;
-use crate::layout::{GpuLight, GpuLightExt, GpuLocalLight, LIGHT_KIND_SPOT, MAX_LIGHTS, MAX_LOCAL_LIGHTS, NO_SHADOW_SLOT};
+use crate::layout::{GpuLight, GpuLightExt, GpuLocalLight, LIGHT_KIND_SPOT, MAX_LIGHTS, MAX_LOCAL_LIGHTS, NO_SHADOW_SLOT, SPOT_SHADOW_UNFADED};
 #[cfg(doc)]
 use crate::layout::MAX_SHADOWED_SPOTS;
 use crate::scene::CameraDesc;
@@ -170,7 +170,7 @@ fn spot_ext(spot: &SpotLight, slot: Option<usize>) -> GpuLightExt {
     let inner = if spot.inner_angle.is_finite() { spot.inner_angle.clamp(0.0, outer) } else { 0.0 };
     let [x, y, z] = unit_or_down(spot.direction);
     let shadow = slot.map_or(NO_SHADOW_SLOT, |slot| slot as f32);
-    GpuLightExt { spot: [x, y, z, libm::cosf(outer)], params: [libm::cosf(inner), LIGHT_KIND_SPOT, shadow, 0.0] }
+    GpuLightExt { spot: [x, y, z, libm::cosf(outer)], params: [libm::cosf(inner), LIGHT_KIND_SPOT, shadow, SPOT_SHADOW_UNFADED] }
 }
 
 /// The local-light rows of the binned path, in scene order: every point light, then every spot

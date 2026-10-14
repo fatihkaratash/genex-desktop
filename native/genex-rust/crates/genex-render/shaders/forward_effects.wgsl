@@ -24,6 +24,12 @@ override GX_FOG: bool = true;
 override GX_AERIAL: bool = true;
 
 // Whether this pipeline reads an AO term (`GX_AO`); without one every visibility is 1.
+// The sun chunk's comparison bias for `cascade` (its light depth, NDC): the frame's per-cascade
+// row (`GpuFrame::cascade_bias`).
+fn gx_sun_cascade_bias(cascade: u32) -> f32 {
+    return frame.cascade_bias[cascade];
+}
+
 fn gx_ao_drawn() -> bool {
     return GX_AO;
 }

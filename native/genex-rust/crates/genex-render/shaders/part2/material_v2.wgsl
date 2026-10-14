@@ -113,7 +113,7 @@ alias GxSurface = Surface;
 fn gx_surface_v2(world_pos: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, metallic: f32, roughness: f32) -> GxSurface {
     let n = normalize(normal);
     let v = normalize(frame.camera_pos.xyz - world_pos);
-    return Surface(world_pos, n, n, v, albedo, 1.0, clamp(metallic, 0.0, 1.0), clamp(roughness, 0.04, 1.0));
+    return Surface(world_pos, n, n, v, albedo, 1.0, clamp(metallic, 0.0, 1.0), clamp(roughness, GX_ROUGHNESS_FLOOR, 1.0));
 }
 
 // `s` with its roughness widened by how fast its shading normal turns across the pixel (`n_dx`,
@@ -198,6 +198,12 @@ fn gx_screen_texel_v2(world_pos: vec3<f32>, size: vec2<u32>) -> vec2<i32> {
 }
 
 // Whether a v2 material reads the AO term: always (the neutral term reads exactly 1).
+// The sun chunk's comparison bias for `cascade`: the v2 frame carries one shared bias
+// (`shadow_params.x`), the value every cascade's lane holds until the per-cascade bias lands.
+fn gx_sun_cascade_bias(cascade: u32) -> f32 {
+    return frame.shadow_params.x;
+}
+
 fn gx_ao_drawn() -> bool {
     return true;
 }

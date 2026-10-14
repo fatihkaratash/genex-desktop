@@ -37,6 +37,11 @@ override GX_TEXTURE_CLASSES: bool = false;
 // widens roughness by the detail a coarse mip averaged away.
 override GX_TOKSVIG: bool = false;
 
+// The least perceptual roughness a forward surface shades with (a pipeline-overridable constant):
+// 0.04 by default, as before the floor was a knob; a class's pipelines may raise it (the sun as a
+// disc on desktop, a coarser floor on phones' half-precision paths).
+override GX_ROUGHNESS_FLOOR: f32 = 0.04;
+
 // What the lighting chunks shade.
 struct Surface {
     world_pos: vec3<f32>,
@@ -119,7 +124,7 @@ fn gx_surface(world_pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, tangent: v
         albedo = checker(world_pos);
     }
     let metallic = clamp(material.params.x * mr.b, 0.0, 1.0);
-    var roughness = clamp(material.params.y * mr.g, 0.04, 1.0);
+    var roughness = clamp(material.params.y * mr.g, GX_ROUGHNESS_FLOOR, 1.0);
     let geometric = normalize(normal);
     var n = geometric;
     if material.textures.y != NO_TEXTURE {

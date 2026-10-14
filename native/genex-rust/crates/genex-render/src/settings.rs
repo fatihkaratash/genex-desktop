@@ -488,6 +488,14 @@ impl Look {
         self.white_balance.map(|gain| gain / luminance)
     }
 
+    /// The matrix the tonemap applies to the scene's linear rgb before its curve: today the
+    /// diagonal of [`Look::white_balance_gains`] (so every look draws exactly as with the gains);
+    /// a chromatic-adaptation matrix from temperature and tint replaces it in the same uniform.
+    pub fn white_balance_matrix(&self) -> crate::post::tonemap::ColorMatrix {
+        let [r, g, b] = self.white_balance_gains();
+        [[r, 0.0, 0.0], [0.0, g, 0.0], [0.0, 0.0, b]]
+    }
+
     /// The look with `fog`.
     pub fn with_fog(mut self, fog: Fog) -> Look {
         self.fog = fog;

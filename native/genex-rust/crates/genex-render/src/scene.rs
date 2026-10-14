@@ -946,6 +946,8 @@ fn write_cascades(frame: &mut GpuFrame, set: &Cascades, settings: &ShadowSetting
     frame.cascade_ends = std::array::from_fn(|c| lane(&set.splits, c));
     frame.cascade_offsets = std::array::from_fn(|c| lane(&offsets, c));
     frame.cascade_texels = std::array::from_fn(|c| lane(&set.texel_world, c));
+    // Every lane, drawn or not: a lookup past the drawn cascades compares as it always did.
+    frame.cascade_bias = set.comparison_bias();
     frame.shadow_soft = [libm::tanf(settings.sun_angular_radius), settings.blend_band, settings.end_fade, 0.0];
     frame.shadow_counts = [drawn as u32, 0, 0, 0];
 }

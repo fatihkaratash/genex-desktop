@@ -15,6 +15,9 @@ const GX_SCENE_RADIANCE_MAX: f32 = 64512.0;
 
 // Whether the pipeline draws the HDR scene (a pipeline-overridable constant).
 override GX_SCENE_HDR: bool = false;
+// Whether the HDR scene is `rg11b10ufloat` (a pipeline-overridable constant): its writes take a
+// half-ULP dither against banding once that lands; false (the default) writes as before.
+override GX_SCENE_RG11B10: bool = false;
 
 // Lit linear colour as the frame's scene colour stores it.
 fn gx_encode_ldr(color: vec3<f32>) -> vec3<f32> {

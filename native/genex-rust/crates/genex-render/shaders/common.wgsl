@@ -41,6 +41,9 @@ struct FrameUniforms {
     // xy: TAA's jitter of the camera's projection in NDC (y up; 0 without TAA), added by every
     // camera depth writer's gx_clip_position; view_proj stays unjittered. zw: last frame's.
     jitter: vec4<f32>,
+    // Each cascade's comparison bias in its light depth (NDC), read through gx_sun_cascade_bias
+    // (the v2 prelude's reads `shadow_params.x`).
+    cascade_bias: vec4<f32>,
 }
 
 struct Light {
@@ -58,7 +61,8 @@ struct LightExt {
     spot: vec4<f32>,
     // x: cos of the inner half-angle; y: kind (GX_LIGHT_POINT, GX_LIGHT_SPOT); z: shadow slot
     // (-1 none; its map is the slot's tile of the spot atlas, the shadow-array layer after the drawn
-    // cascades); w: reserved.
+    // cascades); w: how far the spot's shadow has faded out as its slot changes hands (0 whole,
+    // GX_SPOT_SHADOW_UNFADED, to 1 none; 0 in every row until spot slots fade).
     params: vec4<f32>,
 }
 
@@ -75,6 +79,10 @@ const GX_LIGHT_POINT: u32 = 0u;
 const GX_LIGHT_SPOT: u32 = 1u;
 const GX_LIGHT_EXT_VEC4S: u32 = 2u;
 const GX_SPOT_MATRIX_VEC4S: u32 = 4u;
+const GX_SPOT_SHADOW_UNFADED: f32 = 0.0;
+// The LOD crossfade of an instance-table row that is not fading (the instance fade table's value,
+// layout::INSTANCE_FADE_WHOLE): drawn whole.
+const GX_INSTANCE_FADE_WHOLE: f32 = 1.0;
 const GX_LIGHT_BIN_HEADER_WORDS: u32 = 8u;
 // A z-bin no light touches: lowest index 0xFFFF above highest 0.
 const GX_ZBIN_EMPTY: u32 = 0x0000ffffu;

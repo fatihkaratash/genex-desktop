@@ -80,8 +80,6 @@ pub const BENT_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 /// which the denoise averages by (one slice per pixel measures little of the hemisphere where it
 /// grazes the surface; pass-1 fix gate, visual RED 01).
 pub const RAW_WEIGHTED_FORMAT: TextureFormat = TextureFormat::Rg8Unorm;
-/// AO's own history without a bent normal (the accumulated term at the AO resolution).
-pub const HISTORY_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 /// The view-depth chain's format: positive distance in front of the camera, fragment-written
 /// (renderable and unfilterable in core; read with `textureLoad`).
 pub const VIEW_DEPTH_FORMAT: TextureFormat = TextureFormat::R32Float;
@@ -329,6 +327,13 @@ pub const fn term_format(quality: &AoQuality) -> TextureFormat {
     if quality.bent_normals() { BENT_FORMAT } else { AO_FORMAT }
 }
 
+/// AO's own history's format under `quality` (the accumulated term at the AO resolution, last
+/// frame's): today the term's own ([`term_format`], 8 bits a channel). The history's precision is
+/// its own knob, so a wider history (`r16float`, `rgba16float`) changes this alone.
+pub const fn history_format(quality: &AoQuality) -> TextureFormat {
+    term_format(quality)
+}
+
 /// The raw term's format under `quality`: the bent term's, or visibility with its weight.
 pub const fn raw_format(quality: &AoQuality) -> TextureFormat {
     if quality.bent_normals() { BENT_FORMAT } else { RAW_WEIGHTED_FORMAT }
@@ -354,7 +359,7 @@ fn targets_with_usage(render: (u32, u32), quality: &AoQuality, extra_usage: Text
     let (terms, chains) = (AO_USAGE | extra_usage | copies, AO_USAGE | copies);
     let mut all = vec![target(AO_RAW_LABEL, raw_format(quality), 1, AO_USAGE | extra_usage), target(AO_LABEL, term, 1, terms), target(DEPTH_LABEL, VIEW_DEPTH_FORMAT, mips, chains)];
     if quality.temporal {
-        all.extend([target(HISTORY_LABEL, term, 1, terms), target(DEPTH_HISTORY_LABEL, VIEW_DEPTH_FORMAT, mips, chains)]);
+        all.extend([target(HISTORY_LABEL, history_format(quality), 1, terms), target(DEPTH_HISTORY_LABEL, VIEW_DEPTH_FORMAT, mips, chains)]);
     }
     if size != (render.0.max(1), render.1.max(1)) {
         all.push(TargetDesc { size: (render.0.max(1), render.1.max(1)), ..target(AO_FULL_LABEL, term, 1, terms) });
@@ -380,7 +385,8 @@ pub fn depth_mips(size: (u32, u32)) -> u32 {
 fn texel_bytes(format: TextureFormat) -> u64 {
     match format {
         TextureFormat::R8Unorm => 1,
-        TextureFormat::Rg8Unorm => 2,
+        TextureFormat::Rg8Unorm | TextureFormat::R16Float => 2,
+        TextureFormat::Rgba16Float => 8,
         _ => 4,
     }
 }
@@ -394,7 +400,7 @@ fn chain_bytes(size: (u32, u32)) -> u64 {
 /// view-depth chain it is reprojected against, at the AO resolution.
 pub fn history_bytes(render: (u32, u32), quality: &AoQuality) -> u64 {
     match ao_size(render, quality.resolution) {
-        Some((w, h)) if quality.temporal => u64::from(w) * u64::from(h) * texel_bytes(term_format(quality)) + chain_bytes((w, h)),
+        Some((w, h)) if quality.temporal => u64::from(w) * u64::from(h) * texel_bytes(history_format(quality)) + chain_bytes((w, h)),
         _ => 0,
     }
 }
@@ -1332,6 +1338,9 @@ mod tests {
         let (frame, history) = target_bytes((1920, 1080), &HIGH);
         assert_eq!(frame + history, high.iter().map(TargetDesc::bytes).sum::<u64>(), "the ledger's bytes, split");
         assert_eq!(term_format(&HIGH), BENT_FORMAT, "two slices carry a bent normal");
+        // The history's format is its own knob (pass 2's contracts wave), today the term's.
+        assert_eq!(high[3].format, history_format(&HIGH));
+        assert_eq!(history_format(&HIGH), term_format(&HIGH));
         let chain: u64 = [(960, 540), (480, 270), (240, 135), (120, 67), (60, 33)].iter().map(|(w, h)| w * h * 4).sum();
         assert_eq!(history_bytes((1920, 1080), &HIGH), 960 * 540 * 4 + chain, "last frame's term and view-depth chain");
         let medium = AoQuality { slices: 1, steps: 4, temporal: false, ..HIGH };
