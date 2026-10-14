@@ -132,6 +132,11 @@ exceptions: Genex ships them (below).
 - zig (MIT) for the Windows and Linux cross-builds, and llvm-mingw (LLVM under Apache-2.0 with
   LLVM exception; the mingw-w64 runtime and headers under ZPL-2.1 and public-domain terms) as its
   pinned fallback.
+- The Basis Universal v2.50 WebAssembly encoder (`basis_encoder.js` and `basis_encoder.wasm`,
+  Apache-2.0 with its NOTICE, the text under [Basis Universal](#basis-universal)), which the Rust ·
+  wgpu asset import step encodes textures with (`src/substrate/asset-import/basis-encoder.ts`,
+  pinned by sha256 at the `v2_50` release commit). So far only a development fetch
+  (`scripts/toolchains/basis-encoder.ts fetch`) downloads it; it is not committed or shipped.
 - The Rust crate checker, installed on the first crate approval: cargo-deny (MIT OR Apache-2.0)
   and cargo-vet (MIT OR Apache-2.0) from their official GitHub releases, and the RustSec
   advisory-db (CC0-1.0) at the commit `native/genex-rust/crate-policy.json` pins. The trusted
