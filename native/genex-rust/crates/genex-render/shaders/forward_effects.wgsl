@@ -9,6 +9,8 @@
 @group(0) @binding(15) var<uniform> frame_fog: GxFog;
 @group(0) @binding(16) var ao_map: texture_2d<f32>;
 @group(0) @binding(17) var aerial_perspective: texture_3d<f32>;
+// PCSS's blocker search gathers the shadow map through it (`layout::SHADOW_BLOCKER_SAMPLER`).
+@group(0) @binding(18) var point_sampler: sampler;
 @group(0) @binding(19) var contact_shadow_mask: texture_2d<f32>;
 
 // The volume's slices (fog::AERIAL_SIDE).

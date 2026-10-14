@@ -27,7 +27,7 @@ use crate::meshlet::{self, MeshletLibrary, MeshletRange, MeshletSet};
 use crate::motion::{DrawId, MotionKeys, MotionRow, RowKind};
 use crate::pbr::{MaterialKey, light_table, radiance};
 use crate::settings::{Meshlets, ShadowSettings};
-use crate::shadow::{Cascades, DEPTH_BIAS, camera_forward, fit};
+use crate::shadow::{Cascades, camera_forward, fit};
 use crate::skin::{MAX_JOINTS, SkinId, SkinnedMeshData, skinned_bounds};
 use crate::transparent::back_to_front;
 
@@ -939,7 +939,7 @@ fn write_cascades(frame: &mut GpuFrame, set: &Cascades, settings: &ShadowSetting
         frame.cascade_view_proj[c] = set.view_proj[c];
     }
     frame.cascade_splits = [lane(&set.splits, 0), lane(&set.splits, 1), 0.0, 1.0];
-    frame.shadow_params = [DEPTH_BIAS, lane(&offsets, 0), lane(&offsets, 1), 1.0 / set.map_px.max(1) as f32];
+    frame.shadow_params = [set.shared_bias, lane(&offsets, 0), lane(&offsets, 1), 1.0 / set.map_px.max(1) as f32];
     for c in 0..drawn {
         frame.cascade_matrices[c] = set.view_proj[c];
     }

@@ -1394,13 +1394,16 @@ impl SunShadowConstants {
     /// The legacy renderer's: 3x3 PCF, a static pattern, hard switches and a hard end.
     pub const LEGACY: SunShadowConstants = SunShadowConstants { filter: ShadowFilter::Pcf3x3, temporal: false, blend_band: 0.0, end_fade: 0.0 };
 
-    /// The v2 prelude's pipeline constants.
-    fn constants(&self) -> [(&'static str, f64); 4] {
+    /// The v2 prelude's pipeline constants. `GX_SUN_SOFT_EDGES` follows the band and the end fade
+    /// as the forward pass's does (renderer pass 2, P2-0.3: it also turns the lookup's normal
+    /// offset towards the light), so a legacy custom surface keeps the legacy lookup bit for bit.
+    fn constants(&self) -> [(&'static str, f64); 5] {
         [
             ("GX_SHADOW_FILTER", f64::from(self.filter.shader_id())),
             ("GX_SHADOW_TEMPORAL", f64::from(u8::from(self.temporal))),
             ("GX_SUN_BLEND_BAND", f64::from(self.blend_band)),
             ("GX_SUN_END_FADE", f64::from(self.end_fade)),
+            ("GX_SUN_SOFT_EDGES", f64::from(u8::from(self.blend_band > 0.0 || self.end_fade > 0.0))),
         ]
     }
 }

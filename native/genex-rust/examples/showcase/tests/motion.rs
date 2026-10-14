@@ -510,6 +510,71 @@ fn metal_lakeside_spot_shadows_add_no_one_frame_pops_across_the_cabin_on_mobile_
     finish("lakeside-cabin-truck", &[record], &problem.into_iter().collect::<Vec<_>>());
 }
 
+/// How far the open-ground row's camera creeps sideways a frame, metres: about a tenth of a pixel
+/// on the ground 10 m ahead (renderer pass 2, P2-0.3).
+const MEADOW_CREEP_M: f32 = 0.002;
+/// The open-ground row's envelope radius, pixels (the creep moves nothing by a whole pixel).
+const MEADOW_RADIUS: usize = 1;
+
+/// The sunlit open ground north of the forest shot's clearing (x -30..-21, z -34..-32: the terrain
+/// and the canopies leave it in the 7 degree sun; most of the bowl lies in the far ridge's shadow at
+/// this hour), looked at from 7 m south of it, creeping sideways at [`MEADOW_CREEP_M`].
+fn open_ground_creep(k: f32) -> (Vec3, Vec3) {
+    let along = k.max(0.0) * MEADOW_CREEP_M;
+    (over_ground(-26.0 + along, -40.0, 2.5), over_ground(-25.0 + along, -33.0, 0.0))
+}
+
+/// The clearing below the wide shot, looked at from its western edge, creeping sideways at
+/// [`MEADOW_CREEP_M`]: grass the far ridge shadows whole under the 7 degree sun (a march of the
+/// terrain towards the sun from 72 of its points finds the ridge every time).
+fn ridge_meadow_creep(k: f32) -> (Vec3, Vec3) {
+    let along = k.max(0.0) * MEADOW_CREEP_M;
+    (over_ground(-33.0, 15.0 + along, 1.7), over_ground(-23.0, 9.0 + along, 0.0))
+}
+
+/// Renderer pass 2, P2-0.3 (SH-02, SH-05, SH-06, S4): the far ridge's shadow over the meadow holds
+/// while the camera creeps, at high and ultra. On the pass-1 head part of the meadow drew lit where
+/// the ridge shadows it, and the shadow there switched in one frame: 11.6 % of the picture at high
+/// and 12.0 % at ultra at frame 112 (mean shadow flicker 0.147 % and 0.139 %).
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_lakeside_the_ridges_shadow_over_the_meadow_holds_while_the_camera_creeps() {
+    if gpu().is_none() {
+        return;
+    }
+    let mut records = Vec::new();
+    let mut problems = Vec::new();
+    for preset in [QualityPreset::High, QualityPreset::Ultra] {
+        let Some((record, problem)) = lakeside_row("ridge-meadow-creep", (ridge_meadow_creep, MEADOW_RADIUS), preset, desktop_high(), SUN_SHADOWS) else { return };
+        records.push(record);
+        problems.extend(problem);
+    }
+    finish("lakeside-ridge-meadow-creep", &records, &problems);
+}
+
+/// Renderer pass 2, P2-0.3 (SH-11): open ground under the Lakeside's 7 degree sun holds still while
+/// the camera creeps, at high and ultra. Its light depth climbs 8.1 per unit across the map, past
+/// the receiver plane's old slope clamp of 4, so PCSS's sun-side taps could find the ground itself.
+/// Under the Lakeside's 0.6 degree sun the search reaches too few texels for that to show: the row
+/// was green on the pass-1 head too (0.046 % and 0.055 %; the 2 degree probe row in
+/// genex-render's shadow_filter.rs is SH-11's red), and it holds the open ground still under every
+/// later change (P2-0.3 measured shadow-texel-keyed filter noise there at 0.82 %).
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_lakeside_open_ground_holds_still_under_the_low_sun_while_the_camera_creeps() {
+    if gpu().is_none() {
+        return;
+    }
+    let mut records = Vec::new();
+    let mut problems = Vec::new();
+    for preset in [QualityPreset::High, QualityPreset::Ultra] {
+        let Some((record, problem)) = lakeside_row("open-ground-creep", (open_ground_creep, MEADOW_RADIUS), preset, desktop_high(), SUN_SHADOWS) else { return };
+        records.push(record);
+        problems.extend(problem);
+    }
+    finish("lakeside-open-ground-creep", &records, &problems);
+}
+
 // ---------------------------------------------------------------------------------------------
 // bench-outdoor
 

@@ -41,8 +41,9 @@ struct FrameUniforms {
     // xy: TAA's jitter of the camera's projection in NDC (y up; 0 without TAA), added by every
     // camera depth writer's gx_clip_position; view_proj stays unjittered. zw: last frame's.
     jitter: vec4<f32>,
-    // Each cascade's comparison bias in its light depth (NDC), read through gx_sun_cascade_bias
-    // (the v2 prelude's reads `shadow_params.x`).
+    // Each cascade's comparison bias in its light depth (NDC): one world-space bias over each
+    // cascade's light depth (shadow.rs `Cascades::comparison_bias`), read through
+    // gx_sun_cascade_bias (the v2 prelude's reads the shared `shadow_params.x`).
     cascade_bias: vec4<f32>,
 }
 

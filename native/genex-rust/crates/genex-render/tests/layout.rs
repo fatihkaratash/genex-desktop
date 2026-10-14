@@ -600,10 +600,11 @@ fn the_forward_frame_group_stays_within_webgpu_core_per_stage_limits() {
     // shadow, two material arrays, env cube, BRDF LUT, the AO term, the aerial-perspective volume
     // and the contact-shadow mask (RQ4.6), and the larger size classes' six material arrays
     // (RQ6.7 flipped 8 -> 14: the forward pass samples them); shadow comparison, texture,
-    // environment samplers.
+    // environment samplers and, since renderer pass 2 (P2-0.3, flipped 3 -> 4), the non-filtering
+    // sampler PCSS's blocker search gathers the shadow map with (16 per stage in core).
     assert_eq!(
         (counts.uniform_buffers, counts.storage_buffers, counts.sampled_textures, counts.samplers),
-        (4, 9, FORWARD_FRAGMENT_TEXTURES_MAX, 3),
+        (4, 9, FORWARD_FRAGMENT_TEXTURES_MAX, 4),
         "{counts:?}"
     );
     // WebGPU's limits are per stage: the fragment stage reads six tables (materials, lights, the
@@ -1168,7 +1169,13 @@ fn the_blocker_search_gathers_the_shadow_map_with_the_non_filtering_sampler_in_c
     assert!(FRAME_EFFECT_BINDINGS.contains(&SHADOW_BLOCKER_SAMPLER), "the forward frame reserves {name} at {binding}");
     let v2 = MATERIAL_V2_BINDINGS.iter().find(|row| row.name == name).expect("the v2 map names it");
     assert_eq!(v2.kind, BindingKind::NonFilteringSampler);
-    let forward = format!("{}\n@group(0) @binding({binding}) var {name}: sampler;\n{BLOCKER_SEARCH}", shader("forward"));
+    // P2-0.3 integration: the forward frame binds it (the search gathers through it), so the
+    // forward pass declares it under the slot's name.
+    assert!(FRAME_EFFECT_BOUND.contains(&SHADOW_BLOCKER_SAMPLER), "the forward frame binds {name} at {binding}");
+    let declared = declared(&parse("forward", shader("forward")));
+    let row = declared.iter().find(|(group, at, ..)| (*group, *at) == (0, binding));
+    assert_eq!(row.map(|row| (row.2.as_str(), row.3)), Some((name, BindingKind::Sampler)), "forward declares {name} at {binding}");
+    let forward = format!("{}\n{BLOCKER_SEARCH}", shader("forward"));
     let material = format!(
         "{MATERIAL_V2_PRELUDE}\n{BLOCKER_SEARCH}\n@fragment fn fs_material(in: GxMaterialInV2) -> @location(0) vec4<f32> {{ return gx_test_blockers(in.uv, 0); }}"
     );

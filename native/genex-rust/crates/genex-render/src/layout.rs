@@ -25,8 +25,9 @@ pub const MAX_SHADOWED_SPOTS: usize = 4;
 pub const MAX_VIEWS: usize = 1 + MAX_CASCADES + MAX_SHADOWED_SPOTS;
 /// The non-filtering sampler PCSS's blocker search gathers the shadow map with (RQ3.2), as
 /// (forward frame binding, WGSL name): the RQ4 `point_sampler` slot of
-/// [`FRAME_EFFECT_BINDINGS`], which the Level-2 v2 material map binds under the same name.
-/// WebGPU core samples a depth texture only with a comparison or a non-filtering sampler.
+/// [`FRAME_EFFECT_BINDINGS`], which the forward frame binds ([`FRAME_EFFECT_BOUND`], renderer
+/// pass 2 P2-0.3) and the Level-2 v2 material map binds under the same name. WebGPU core samples
+/// a depth texture only with a comparison or a non-filtering sampler.
 pub const SHADOW_BLOCKER_SAMPLER: (u32, &str) = (18, "point_sampler");
 /// The texture index that names no texture (`NO_TEXTURE` in the shaders).
 pub const NO_TEXTURE: u32 = u32::MAX;
@@ -117,8 +118,8 @@ pub struct GpuFrame {
     pub jitter: [f32; 4],
     /// Each cascade's comparison bias in its own light depth (NDC), the sun chunk's
     /// `gx_sun_cascade_bias` (`Cascades::comparison_bias`): one world-space bias over each
-    /// cascade's depth range once the per-cascade bias lands; today every lane is the shared
-    /// `shadow::DEPTH_BIAS` (`shadow_params.x`), so the picture is unchanged.
+    /// cascade's depth range (renderer pass 2, P2-0.3); the legacy fit's lanes are the shared
+    /// `shadow::DEPTH_BIAS`, as is `shadow_params.x` but on `depth32float` maps (cascade 0's there).
     pub cascade_bias: [f32; 4],
 }
 
@@ -426,9 +427,11 @@ pub const FRAME_EFFECT_BINDINGS: [(u32, &str); 5] =
     [(15, "frame_fog"), (16, "ao_map"), (17, "aerial_perspective"), (18, "point_sampler"), (19, "contact_shadow_mask")];
 
 /// The effect slots of [`FRAME_EFFECT_BINDINGS`] the forward frame group binds (RQ4.6): the fog
-/// row, the AO term, the aerial-perspective volume and the contact-shadow mask. The volume is read
-/// with the environment's filtering sampler, so `point_sampler` stays free.
-pub const FRAME_EFFECT_BOUND: [(u32, &str); 4] = [(15, "frame_fog"), (16, "ao_map"), (17, "aerial_perspective"), (19, "contact_shadow_mask")];
+/// row, the AO term, the aerial-perspective volume, the non-filtering sampler PCSS's blocker
+/// search gathers the shadow map with ([`SHADOW_BLOCKER_SAMPLER`], renderer pass 2 P2-0.3) and
+/// the contact-shadow mask. The volume is read with the environment's filtering sampler.
+pub const FRAME_EFFECT_BOUND: [(u32, &str); 5] =
+    [(15, "frame_fog"), (16, "ao_map"), (17, "aerial_perspective"), SHADOW_BLOCKER_SAMPLER, (19, "contact_shadow_mask")];
 
 /// The forward frame group's local-light and material-extension tables (RQ6.0), as (binding, WGSL
 /// name): the names and types the Level-2 v2 material map gives them, so the shared lighting

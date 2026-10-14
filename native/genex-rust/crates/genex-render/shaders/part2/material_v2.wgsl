@@ -199,7 +199,9 @@ fn gx_screen_texel_v2(world_pos: vec3<f32>, size: vec2<u32>) -> vec2<i32> {
 
 // Whether a v2 material reads the AO term: always (the neutral term reads exactly 1).
 // The sun chunk's comparison bias for `cascade`: the v2 frame carries one shared bias
-// (`shadow_params.x`), the value every cascade's lane holds until the per-cascade bias lands.
+// (`shadow_params.x`): cascade 0's on depth32 maps, whose light depths span one multiple of their
+// map widths so it is every cascade's world bias, `shadow::DEPTH_BIAS` otherwise (renderer pass 2,
+// P2-0.3). A per-cascade lane in `GxFrameV2` is an ABI decision.
 fn gx_sun_cascade_bias(cascade: u32) -> f32 {
     return frame.shadow_params.x;
 }

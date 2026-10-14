@@ -781,6 +781,8 @@ pub struct Renderer {
     /// The shadowed spots' caster pipelines, made on the first frame that draws a spot map.
     spot_shadow: Option<crate::spot_shadow::SpotShadowPipelines>,
     shadow_sampler: Sampler,
+    /// PCSS's blocker search gathers the shadow map through it (`layout::SHADOW_BLOCKER_SAMPLER`).
+    point_sampler: Sampler,
     texture_sampler: Sampler,
     /// The material texture arrays of every size class (RQ6.4): made for the quality and device
     /// class in effect when the first texture is added, then kept (a later quality change keeps
@@ -1551,7 +1553,9 @@ fn pooled_targets(pool: &mut TargetPool, device: &Device, output: (u32, u32), re
     })
 }
 
-fn samplers(device: &Device) -> (Sampler, Sampler) {
+/// The shadow comparison sampler, the non-filtering one PCSS's blocker search gathers the shadow
+/// map with (clamped to its edge, as the search's own texel reads were) and the material sampler.
+fn samplers(device: &Device) -> (Sampler, Sampler, Sampler) {
     let shadow = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("shadow"),
         mag_filter: wgpu::FilterMode::Linear,
@@ -1559,6 +1563,7 @@ fn samplers(device: &Device) -> (Sampler, Sampler) {
         compare: Some(wgpu::CompareFunction::LessEqual),
         ..Default::default()
     });
+    let point = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow blockers"), ..Default::default() });
     let textures = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("textures"),
         address_mode_u: wgpu::AddressMode::Repeat,
@@ -1568,7 +1573,7 @@ fn samplers(device: &Device) -> (Sampler, Sampler) {
         mipmap_filter: wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     });
-    (shadow, textures)
+    (shadow, point, textures)
 }
 
 /// What a [`WorldStage`] draws with inside the world pass.
@@ -2366,7 +2371,7 @@ impl Renderer {
         let layouts = layouts(&device);
         let casters = CasterDepth::for_features(device.features());
         let pipelines = pipelines(&device, &layouts, casters)?;
-        let (shadow_sampler, texture_sampler) = samplers(&device);
+        let (shadow_sampler, point_sampler, texture_sampler) = samplers(&device);
         let uniform_buffer = |label, size| buffer(&device, label, size, BufferUsages::UNIFORM | BufferUsages::COPY_DST);
         let mut pool = TargetPool::with_policy(TargetPolicy::for_device(&device));
         let targets = pooled_targets(&mut pool, &device, (width, height), (width, height), samples, &TargetSpec::default())?;
@@ -2420,6 +2425,7 @@ impl Renderer {
             shadow_draws: CascadeDraws::default(),
             spot_shadow: None,
             shadow_sampler,
+            point_sampler,
             texture_sampler,
             textures: ClassArrays::new(&device, TEXTURE_DEFAULT_CLASS, crate::settings::TextureQuality::OFF),
             textures_fixed: false,
@@ -4313,9 +4319,10 @@ impl Renderer {
             FRAME_ENV_BINDINGS.into_iter().filter_map(|(binding, name)| environment.binding(name).map(|resource| wgpu::BindGroupEntry { binding, resource })),
         );
         let [ao_term, contact_mask, aerial_volume] = self.effect_views();
-        let [(fog, _), (ao, _), (aerial, _), (contact, _)] = FRAME_EFFECT_BOUND;
+        let [(fog, _), (ao, _), (aerial, _), (point, _), (contact, _)] = FRAME_EFFECT_BOUND;
         entries.extend([
             entry(fog, &self.fog_row),
+            wgpu::BindGroupEntry { binding: point, resource: wgpu::BindingResource::Sampler(&self.point_sampler) },
             wgpu::BindGroupEntry { binding: ao, resource: wgpu::BindingResource::TextureView(&ao_term) },
             wgpu::BindGroupEntry { binding: aerial, resource: wgpu::BindingResource::TextureView(&aerial_volume) },
             wgpu::BindGroupEntry { binding: contact, resource: wgpu::BindingResource::TextureView(&contact_mask) },

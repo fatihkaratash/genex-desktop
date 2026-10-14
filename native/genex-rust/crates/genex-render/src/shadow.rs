@@ -10,11 +10,15 @@
 //!   light depth that reaches [`CASTER_REACH`] towards the sun. Today's goldens hold its bits.
 //! - [`fit`], the fit every other [`ShadowSettings`] gets: an analytic slice sphere (the same
 //!   radius, bit for bit, however the camera turns), the settings' cascade count, map size and
-//!   split, and a **receiver-tight** light depth: only the depth span of the geometry inside the
-//!   cascade's sphere, so `depth16unorm` keeps its precision. The normal offset is a fixed number
-//!   of each cascade's texels ([`Cascades::normal_offsets`]); the comparison's one NDC bias
-//!   ([`DEPTH_BIAS`]) is a share of each cascade's own light depth ([`Cascades::depth_bias_world`])
-//!   and the casters' slope-scaled bias is per texel of slope.
+//!   split, its map widened past the sphere by the filter's reach ([`edge_texels`]), and a light
+//!   depth by format. A `depth16unorm` cascade is **receiver-tight**: only the depth span of the
+//!   geometry inside the cascade's sphere, so it keeps its precision. A `depth32float` cascade
+//!   spans its sphere whatever the receivers (renderer pass 2, P2-0.3, SH-06), so its depth never
+//!   follows the bounds touching it; casters nearer the sun are pancaked. The normal offset is a fixed
+//!   number of each cascade's texels ([`Cascades::normal_offsets`]); the comparison bias is one
+//!   world-space bias per cascade, [`DEPTH_BIAS`] of its map's width, over its own light depth
+//!   ([`Cascades::comparison_bias`], P2-0.3, S1/SH-06), and the casters' slope-scaled bias is per
+//!   texel of slope.
 //!
 //! Both **pancake**: casters nearer the sun than a cascade's near plane are not culled (the near
 //! cull plane is open) and land on the near plane, so they still shadow everything behind them.
@@ -39,7 +43,7 @@ use wgpu::{Device, Features, RenderPipeline, ShaderModule, Texture, TextureForma
 use crate::cull::frustum_planes;
 use crate::layout::{GpuFrame, MAX_CASCADES, SHADOW_CASCADES};
 use crate::scene::{CameraDesc, FramePlan};
-use crate::settings::{DEFAULT_SHADOW_SPLIT_LAMBDA, ShadowFormat, ShadowSettings};
+use crate::settings::{DEFAULT_SHADOW_SPLIT_LAMBDA, ShadowFilter, ShadowFormat, ShadowSettings};
 
 /// Each legacy cascade's shadow map side, in texels.
 pub const SHADOW_MAP_PX: u32 = 1024;
@@ -48,6 +52,17 @@ pub const SHADOW_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 /// How far towards the sun, beyond a cascade's slice, the legacy fit's light depth reaches.
 /// Casters beyond it still shadow: they are pancaked onto the near plane.
 pub const CASTER_REACH: f32 = 60.0;
+/// The texels of a shadow map's square the sun chunk's lookups may read past the texel a lookup
+/// lands on (sun.wgsl): the hardware tap and 3x3 PCF one, 5x5 PCF two, PCSS its 16-texel kernel,
+/// each plus the bilinear neighbour.
+const HARDWARE_REACH_TEXELS: f32 = 1.0;
+const PCF3_REACH_TEXELS: f32 = 2.0;
+const PCF5_REACH_TEXELS: f32 = 3.0;
+const PCSS_REACH_TEXELS: f32 = 17.0;
+/// Texels a cascade's map moves by as it snaps to whole texels, at most (half), rounded up.
+const SNAP_TEXELS: f32 = 1.0;
+/// The largest share of a map's side its edges may take ([`edge_texels`] on a tiny map).
+const EDGE_SHARE_MAX: f32 = 0.25;
 /// Normal offset in shadow texels (pulls the lookup off the surface against acne).
 const NORMAL_OFFSET_TEXELS: f32 = 1.5;
 /// Constant depth bias in the comparison (the pipeline adds a slope-scaled one).
@@ -143,6 +158,20 @@ pub(crate) fn caster_pipeline(device: &Device, spec: &CasterSpec<'_>) -> Compile
     })
 }
 
+/// The texels each side of a tight cascade's map beyond its slice sphere for `filter` (renderer
+/// pass 2, P2-0.3, SH-05): the filter's reach, the normal offset and the snap, so no lookup into
+/// the slice reads a clamped edge texel (MJP's `SetupShadows.hlsl` pads by its kernel the same way).
+/// The legacy fit keeps its one texel.
+pub fn edge_texels(filter: ShadowFilter) -> f32 {
+    let reach = match filter {
+        ShadowFilter::Hardware2x2 => HARDWARE_REACH_TEXELS,
+        ShadowFilter::Pcf3x3 => PCF3_REACH_TEXELS,
+        ShadowFilter::Pcf5x5 => PCF5_REACH_TEXELS,
+        ShadowFilter::PcssLite | ShadowFilter::Pcss => PCSS_REACH_TEXELS,
+    };
+    reach + NORMAL_OFFSET_TEXELS + SNAP_TEXELS
+}
+
 /// The cascades of one frame. Lanes past [`Cascades::count`] are 0 (a split of 0 ends the run).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cascades {
@@ -158,6 +187,14 @@ pub struct Cascades {
     pub texel_world: [f32; MAX_CASCADES],
     /// Each cascade's light depth range (far minus near plane) in world units.
     pub depth_range: [f32; MAX_CASCADES],
+    /// Each cascade's comparison bias in its own light depth (NDC): [`DEPTH_BIAS`] on the legacy
+    /// fit, one world-space bias over the light depth otherwise ([`Cascades::comparison_bias`]).
+    pub bias: [f32; MAX_CASCADES],
+    /// The one comparison bias (NDC) of the frame's `shadow_params.x`, which the v1 prefix, the
+    /// Level-2 v2 prelude and custom passes read for every cascade: cascade 0's on `depth32float`
+    /// maps (each spans one multiple of its map's width, so it is every cascade's world bias),
+    /// [`DEPTH_BIAS`] otherwise.
+    pub shared_bias: f32,
     /// Each cascade's map side in texels.
     pub map_px: u32,
 }
@@ -171,6 +208,9 @@ impl Cascades {
             slice_corners: [[[0.0; 3]; 8]; MAX_CASCADES],
             texel_world: [0.0; MAX_CASCADES],
             depth_range: [0.0; MAX_CASCADES],
+            // Every lane, drawn or not: a lookup past the drawn cascades compares as it always did.
+            bias: [DEPTH_BIAS; MAX_CASCADES],
+            shared_bias: DEPTH_BIAS,
             map_px,
         }
     }
@@ -185,18 +225,19 @@ impl Cascades {
         self.texel_world.map(|texel| texel * NORMAL_OFFSET_TEXELS)
     }
 
-    /// The constant depth bias [`DEPTH_BIAS`] of each cascade in world units: its light depth
-    /// range times the NDC bias, 0 past the drawn cascades.
+    /// Each cascade's comparison bias in world units along the light: its NDC bias times its light
+    /// depth range, 0 past the drawn cascades.
     pub fn depth_bias_world(&self) -> [f32; MAX_CASCADES] {
-        self.depth_range.map(|range| range * DEPTH_BIAS)
+        std::array::from_fn(|c| self.bias[c] * self.depth_range[c])
     }
 
-    /// Each cascade's comparison bias in its own light depth (NDC), the frame's `cascade_bias`:
-    /// [`DEPTH_BIAS`] in every lane (the bias the sun chunk shared across cascades), so a held
-    /// cascade and a fresh one compare alike. The per-cascade world-space bias replaces it with
-    /// one world bias over each cascade's depth range.
+    /// Each cascade's comparison bias in its own light depth (NDC), the frame's `cascade_bias`
+    /// (renderer pass 2, P2-0.3, S1/SH-06): one world-space bias, [`DEPTH_BIAS`] of the map's
+    /// width, over each tight cascade's light depth, so its world size no longer follows the
+    /// bounds that touch the cascade; the legacy fit's [`DEPTH_BIAS`] in every lane. A held
+    /// cascade keeps the bias its map was drawn with.
     pub fn comparison_bias(&self) -> [f32; MAX_CASCADES] {
-        [DEPTH_BIAS; MAX_CASCADES]
+        self.bias
     }
 
     /// Where each cascade starts blending into the next (the reference of the sun chunk's band):
@@ -288,6 +329,8 @@ struct Fitted {
     view_proj: Mat4,
     texel: f32,
     depth_range: f32,
+    /// The comparison bias in its light depth (NDC).
+    bias: f32,
 }
 
 /// The legacy light frustum: a sphere around the slice's corners, the light depth reaching
@@ -302,7 +345,7 @@ fn legacy_light(corners: &[[f32; 3]; 8], sun: Vec3) -> Fitted {
     let extent = radius * (1.0 + 2.0 / SHADOW_MAP_PX as f32);
     let proj = glam::camera::rh::proj::directx::orthographic(-extent, extent, -extent, extent, 0.0, depth);
     let proj = snapped(proj, view, SHADOW_MAP_PX);
-    Fitted { view_proj: proj * view, texel: 2.0 * extent / SHADOW_MAP_PX as f32, depth_range: depth }
+    Fitted { view_proj: proj * view, texel: 2.0 * extent / SHADOW_MAP_PX as f32, depth_range: depth, bias: DEPTH_BIAS }
 }
 
 /// The smallest sphere around the camera slice from view depth `near` to `far`, analytically:
@@ -339,20 +382,28 @@ fn receiver_span(bounds: impl Iterator<Item = [f32; 4]>, center: Vec3, radius: f
     span
 }
 
-/// The receiver-tight light frustum of a cascade at `map_px`: the slice sphere's extent, the light
-/// depth the geometry inside the sphere spans (its whole diameter without any), a margin each side,
-/// rounded out to whole texels.
-fn tight_light(center: Vec3, radius: f32, sun: Vec3, map_px: u32, bounds: impl Iterator<Item = [f32; 4]>) -> Fitted {
-    let extent = radius * (1.0 + 2.0 / map_px as f32);
-    let texel = 2.0 * extent / map_px as f32;
-    let (lo, hi) = receiver_span(bounds, center, radius, sun).unwrap_or((0.0, 2.0 * radius));
+/// The light frustum of a tight cascade at `map_px` drawn by `settings`: the slice sphere's extent
+/// plus [`edge_texels`] each side, and a light depth by format, a margin each side, rounded out to
+/// whole texels. A `depth16unorm` cascade spans the light depth of the geometry inside the sphere
+/// (its whole diameter without any); a `depth32float` one spans the sphere's diameter whatever the
+/// receivers. Its comparison bias is [`DEPTH_BIAS`] of the map's width over that depth.
+fn tight_light(center: Vec3, radius: f32, sun: Vec3, map_px: u32, settings: &ShadowSettings, bounds: impl Iterator<Item = [f32; 4]>) -> Fitted {
+    let side = map_px as f32;
+    let edge = edge_texels(settings.filter).min(EDGE_SHARE_MAX * side);
+    let extent = radius * side / (side - 2.0 * edge);
+    let width = 2.0 * extent;
+    let texel = width / side;
+    let (lo, hi) = match settings.format {
+        ShadowFormat::Depth32 => (0.0, 2.0 * radius),
+        ShadowFormat::Depth16 => receiver_span(bounds, center, radius, sun).unwrap_or((0.0, 2.0 * radius)),
+    };
     let margin = DEPTH_MARGIN_TEXELS * texel;
     let near = libm::floorf((lo - margin) / texel) * texel;
     let far = libm::ceilf((hi + margin) / texel) * texel;
     let far = far.max(near + MIN_DEPTH_TEXELS * texel);
     let view = light_view(center + sun * radius, center, sun);
     let proj = glam::camera::rh::proj::directx::orthographic(-extent, extent, -extent, extent, near, far);
-    Fitted { view_proj: snapped(proj, view, map_px) * view, texel, depth_range: far - near }
+    Fitted { view_proj: snapped(proj, view, map_px) * view, texel, depth_range: far - near, bias: DEPTH_BIAS * width / (far - near) }
 }
 
 /// Record cascade `c` of `set`: its frustum, its open-near cull planes and its slice.
@@ -364,6 +415,7 @@ fn place(set: &mut Cascades, c: usize, fitted: &Fitted, corners: [[f32; 3]; 8]) 
     set.slice_corners[c] = corners;
     set.texel_world[c] = fitted.texel;
     set.depth_range[c] = fitted.depth_range;
+    set.bias[c] = fitted.bias;
 }
 
 /// The legacy two cascades for `camera` on a target of `aspect`, the sun towards `sun_dir`,
@@ -412,8 +464,11 @@ where
     for c in 0..count {
         let end = set.splits[c];
         let (center, radius) = slice_sphere(camera, aspect, begin, end);
-        place(&mut set, c, &tight_light(center, radius, sun, map_px, bounds.clone()), slice_corners(camera, aspect, begin, end));
+        place(&mut set, c, &tight_light(center, radius, sun, map_px, settings, bounds.clone()), slice_corners(camera, aspect, begin, end));
         begin = end;
+    }
+    if settings.format == ShadowFormat::Depth32 {
+        set.shared_bias = set.bias[0];
     }
     set
 }
@@ -477,6 +532,7 @@ impl CascadeHistory {
                 fresh.planes[c] = old.planes[c];
                 fresh.texel_world[c] = old.texel_world[c];
                 fresh.depth_range[c] = old.depth_range[c];
+                fresh.bias[c] = old.bias[c];
                 hold_frame(&mut plan.frame, c, old);
             }
         }

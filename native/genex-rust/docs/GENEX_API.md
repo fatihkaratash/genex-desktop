@@ -205,7 +205,10 @@ Sun shadows are a row of the preset table, per device class, drawn as listed (th
 | `ultra` | 4 x 4096 | PCSS | 32-bit, every frame | 80 units | 10 %, last 10 % |
 
 Neighbouring cascades blend across the band, so no seam shows where one ends, and the shadows fade
-out before the shadow distance instead of stopping on a line. Phones are held to 2 cascades of at
+out before the shadow distance instead of stopping on a line. Shadows hold still while the camera
+moves: the band lerps both cascades on every frame, PCSS finds the same blockers on every frame,
+and the depth bias is one world-space distance per cascade, so a contact gap never changes size as
+other objects come into view. Phones are held to 2 cascades of at
 most 1536 px, no PCSS, 16-bit depth and 40 units, and the far cascade redraws every second frame;
 the weakest phone class draws 512 px cascades. The low desktop tier also draws 16-bit depth with
 the far cascade every second frame. A request never passes a class's caps, so one config is right
@@ -515,7 +518,8 @@ reach geometry a pass draws yet (grass, water), but the sun's shadows do: the v2
 bind its cascades, `@binding(9) var gx_shadow_map: texture_depth_2d_array` and `@binding(10) var
 gx_shadow_sampler: sampler_comparison` (in the cascade `c` whose `gx_frame.cascade_ends[c]` holds the
 point's view depth, compare the depth of the point lifted by `cascade_offsets[c]` along its normal
-in `cascade_view_proj[c]` less `shadow_params.x`; `cascade_splits.w` is 0 on a frame without sun
+in `cascade_view_proj[c]` less `shadow_params.x`, the comparison bias every cascade shares;
+`cascade_splits.w` is 0 on a frame without sun
 shadows; the showcase's grass does this). The tables carry the fog row
 (`gx_frame.fog_color`, `gx_frame.fog_params`) and the environment cube (`gx_env_specular`) but no
 fog function, so such a pass repeats the height fog with the cube read just above the horizon as
