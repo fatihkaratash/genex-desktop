@@ -1383,6 +1383,9 @@ describe("a GPU that hangs, a device that comes back, and where a capture came f
       camera: "default",
       runId: run.status.runId,
       build,
+      // TS-F1: the capture names its output size; this reply carries no render settings.
+      render: null,
+      outputSize: { width: 2, height: 2 },
     });
     await r.runs.stop(run.status.runId);
   });
