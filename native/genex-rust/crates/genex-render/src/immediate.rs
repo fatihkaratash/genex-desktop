@@ -1159,7 +1159,8 @@ impl FrameRenderer {
         budget.charge(self.materials.prepare(gpu, &frame.custom, frame.seconds, self.renderer.library())?)?;
         budget.charge(self.particles.prepare(gpu, &frame.particles)?)?;
         self.start_history(gpu, &history)?;
-        if history.history_reset() {
+        // A dynamic-resolution step restarts the index but keeps these (RC-05).
+        if history.drops_history() {
             self.renderer.reset_shadow_history();
             self.renderer.reset_ao_history();
             if self.settle.is_none() {

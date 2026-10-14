@@ -1930,7 +1930,10 @@ impl<'a> WorldNodes<'a> {
     fn encode_effect(&mut self, id: NodeId, frame: &mut FrameEncoder) {
         let renderer = self.renderer;
         let Some(views) = self.prepass_views() else { return };
-        let effect = renderer.effect_frame(self.prep, &views);
+        // Renderer pass 2, P2-0.6: AO finds its history along the prepass's motion when the
+        // prepass wrote it this frame (TAA's frames), else through the camera.
+        let motion = self.taa_runs().then(|| self.prepass_motion()).flatten();
+        let effect = renderer.effect_frame(self.prep, &views, motion.as_ref());
         let (device, queue) = (frame.device().clone(), frame.queue().clone());
         let mut effects = renderer.effects.borrow_mut();
         let passes = match id {
@@ -2624,7 +2627,7 @@ impl Renderer {
     }
 
     /// What graph nodes 10 and 10a read about the frame `prep` draws over the prepass's `views`.
-    fn effect_frame<'v>(&self, prep: &FramePrep, views: &'v PrepassViews) -> effects::EffectFrame<'v> {
+    fn effect_frame<'v>(&self, prep: &FramePrep, views: &'v PrepassViews, motion: Option<&'v TextureView>) -> effects::EffectFrame<'v> {
         let camera = &prep.camera;
         let (eye, target, up) = (glam::Vec3::from(camera.eye), glam::Vec3::from(camera.target), glam::Vec3::from(camera.up));
         let view = glam::camera::rh::view::look_at_mat4(eye, target, up);
@@ -2634,6 +2637,7 @@ impl Renderer {
         effects::EffectFrame {
             depth: &views.depth,
             normals: &views.normals,
+            motion,
             render: self.targets.render_size,
             view,
             proj,

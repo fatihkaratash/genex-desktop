@@ -48,23 +48,19 @@ fn gx_screen_texel(world_pos: vec3<f32>, size: vec2<u32>) -> vec2<i32> {
     return clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), texels - vec2<i32>(1));
 }
 
-// The screen position (0..1, v down) `world_pos` projects to.
-fn gx_screen_uv(world_pos: vec3<f32>) -> vec2<f32> {
-    let clip = frame.view_proj * vec4<f32>(world_pos, 1.0);
-    let ndc = clip.xy / max(abs(clip.w), 1e-6);
-    return clamp(vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5), vec2<f32>(0.0), vec2<f32>(1.0));
-}
-
 // Ambient occlusion at `world_pos`: xyz the bent normal (zero: none), w the visibility. The term
 // is at the render size (a half-resolution term arrives through the joint-bilateral upsample,
-// post::upsample), so the texel under the pixel is the pixel's own surface's; it is filtered with
-// the environment's clamping sampler all the same, and the neutral texel reads exactly 1 either way.
+// post::upsample), so the fragment reads its own pixel's texel (`gx_sun_context.pixel`, set before
+// shading), as the v2 path does: AO is made from the jittered prepass, and projecting the position
+// through the unjittered `view_proj` landed up to half a pixel off, so a filtered read blended in a
+// different neighbour every frame of the jitter cycle (pass 2, S5). The neutral 1x1 texel reads 1.
 fn gx_ambient_occlusion(world_pos: vec3<f32>) -> vec4<f32> {
     if !gx_ao_drawn() {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    let texel = textureSampleLevel(ao_map, env_sampler, gx_screen_uv(world_pos), 0.0);
-    return gx_ao_decode(texel);
+    let last = vec2<i32>(textureDimensions(ao_map)) - vec2<i32>(1);
+    let pixel = clamp(vec2<i32>(gx_sun_context.pixel), vec2<i32>(0), last);
+    return gx_ao_decode(textureLoad(ao_map, pixel, 0));
 }
 
 // The sun's screen-space contact shadow at `world_pos` (1: unshadowed): the mask at the render

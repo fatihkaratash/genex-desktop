@@ -645,11 +645,15 @@ fn the_ledger_gives_fixed_byte_totals_at_the_reference_resolutions() {
         // Pass-1 fix gate (visual RED 01) flips desktop-mid medium (named in the log): one slice's
         // raw AO term carries its weight beside its visibility (`ao::RAW_WEIGHTED_FORMAT`,
         // `rg8unorm`), +518_400 bytes at 960 x 540 (was 174_077_208). Phone mediums draw no AO.
-        ("desktop-high", QualityPreset::High, (2560, 1440), false, 262_529_924),
+        // Pass 2 P2-0.6 (P3/S2) flips the temporal-AO rows (named in the log): AO's history and the
+        // term it ping-pongs with are `rgba16float`, 4 more bytes a texel each at the AO size:
+        // desktop-high +7_372_800 at 1440p (was 262_529_924) and +4_147_200 at 1080p (was
+        // 173_703_564), desktop-ultra +29_491_200 (was 568_435_172).
+        ("desktop-high", QualityPreset::High, (2560, 1440), false, 269_902_724),
         ("desktop-mid", QualityPreset::Medium, (1920, 1080), false, 174_595_608),
-        ("desktop-ultra", QualityPreset::Ultra, (2560, 1440), false, 568_435_172),
+        ("desktop-ultra", QualityPreset::Ultra, (2560, 1440), false, 597_926_372),
         ("desktop-low", QualityPreset::Low, (1920, 1080), false, 67_314_108),
-        ("desktop-high", QualityPreset::High, (1920, 1080), false, 173_703_564),
+        ("desktop-high", QualityPreset::High, (1920, 1080), false, 177_850_764),
         ("mobile-high", QualityPreset::Medium, (786, 1704), true, 30_934_388),
         ("mobile-mid", QualityPreset::Low, (824, 1830), true, 20_721_524),
         ("mobile-mid", QualityPreset::Low, (1080, 2400), true, 33_284_588),

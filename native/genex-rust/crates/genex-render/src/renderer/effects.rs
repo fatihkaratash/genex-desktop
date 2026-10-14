@@ -34,6 +34,9 @@ pub(super) struct EffectFrame<'a> {
     pub(super) depth: &'a TextureView,
     /// The prepass's world-space octahedral normals.
     pub(super) normals: &'a TextureView,
+    /// The prepass's motion on frames that wrote it (render size, NDC current − previous): AO
+    /// finds its history along it; None: through the camera alone.
+    pub(super) motion: Option<&'a TextureView>,
     /// The render size.
     pub(super) render: (u32, u32),
     /// World to view.
@@ -235,6 +238,7 @@ impl ScreenEffects {
             camera: AoCamera { view: frame.view, proj: frame.proj },
             settings,
             facts,
+            motion: frame.motion,
             generation: frame.generation,
         };
         let Some(output) = node.encode(device, queue, encoder, input) else { return 0 };
