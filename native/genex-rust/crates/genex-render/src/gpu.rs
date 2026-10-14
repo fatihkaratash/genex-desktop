@@ -108,7 +108,22 @@ impl Gpu {
     /// device is opened with exactly those, or refused `native-feature-missing`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn headless_with(declared: Features) -> Result<Gpu, RenderError> {
-        let instance = core_instance();
+        Gpu::headless_on(core_instance(), declared)
+    }
+
+    /// [`Gpu::headless_with`] on an instance without wgpu's indirect-call validation (the compute
+    /// pass that checks every indirect draw's arguments before the draw runs): what that validation
+    /// costs is measured against it (the perf harness's A/B). Measurement only, never a game's
+    /// device: a game keeps the validation until the renderer proves its indirect arguments in range.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn headless_without_indirect_validation(declared: Features) -> Result<Gpu, RenderError> {
+        let mut descriptor = core_instance_descriptor();
+        descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+        Gpu::headless_on(Instance::new(descriptor), declared)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn headless_on(instance: Instance, declared: Features) -> Result<Gpu, RenderError> {
         pollster::block_on(async {
             let options =
                 wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() };

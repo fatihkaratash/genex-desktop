@@ -90,7 +90,8 @@ Mac Play, agent runs and embedding use `NativeRuns`: prepare, `spawnGame`, nonce
 `NativeGamePort`. Stop requests quit, then TERM/KILL; boot sweeps orphans; app death kills registered
 groups. A v2 game that misses a step or capture deadline, or goes silent owing one, is killed
 `gpu-hang`; one that restores a lost GPU device gets a new Live ring generation. Captures carry
-provenance (seq, digest, camera, run, build), saved as `<label>.provenance.json`; builder captures add `c<N>_<camera>.manifest.json` (run, worker, commit, build); a failed one `c<N>.refused.json`; links refused (`confinedCaptureDir`). Sessions clone Emscripten caches under `<scratch>/cpp-sessions/<game>/`.
+provenance (seq, digest, camera, run, build, the `render` settings the game answered with and the
+capture's `outputSize`; null where the path did not know them), saved as `<label>.provenance.json`; builder captures add `c<N>_<camera>.manifest.json` (run, worker, commit, build); a failed one `c<N>.refused.json`; links refused (`confinedCaptureDir`). Sessions clone Emscripten caches under `<scratch>/cpp-sessions/<game>/`.
 
 **Toolchain store.** Each compiled stack keeps its own current lock in one store
 (`LOCK_FILE_OF_STACK`). Locks made current are recorded (`lock-records/`), so a game keeps

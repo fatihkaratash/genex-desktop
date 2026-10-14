@@ -1768,3 +1768,75 @@ fn the_overhead_gate_holds_a_meshlet_path_to_five_percent_on_an_immediate_mode_g
     let ratio = compare(&instance, &slower_cpu, GeometryPath::Meshlets).cpu_p95_ratio.expect("a ratio");
     assert!((ratio - 1.3).abs() < 1e-9, "{ratio}");
 }
+
+/// Interleaved runs of each side in the indirect-validation A/B.
+const INDIRECT_AB_RUNS: u32 = 3;
+
+/// The median of `values` (nearest rank).
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(f64::total_cmp);
+    values[values.len() / 2]
+}
+
+/// Renderer pass 2 (prior art's "measure first"): what wgpu's indirect-call validation costs on
+/// this adapter. The same scenes at high, 1280x720, on a device with the validation (every game's)
+/// and one without it (`Gpu::headless_without_indirect_validation`, measurement only), interleaved
+/// [`INDIRECT_AB_RUNS`] times; the record keeps each side's median of the per-run p50s (GPU stamps
+/// and whole frame). A record, not a gate: the validation stays on until the renderer proves its
+/// indirect arguments in range.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_indirect_validation_cost_is_recorded() {
+    let Some((gpu, timestamp_problem)) = open() else { return };
+    let Ok(unvalidated) = Gpu::headless_without_indirect_validation(gpu.device_facts().features & wgpu::Features::TIMESTAMP_QUERY) else { return };
+    let (warmup, frames) = (env_u32("GENEX_PERF_WARMUP", DEFAULT_WARMUP), env_u32("GENEX_PERF_FRAMES", DEFAULT_FRAMES).max(1));
+    let class = classify(gpu.device_facts());
+    let profile = Profile::Preset(QualityPreset::High);
+    let size = [1280, 720];
+    let cells = [Cell::Lakeside("wide"), Cell::Bench(SceneId::City), Cell::Stress(StressId::Forest)];
+    let mut rows = Vec::new();
+    for cell in cells.into_iter().filter(|cell| kept(&cell.name())) {
+        let mut sides: [(Vec<f64>, Vec<f64>); 2] = Default::default();
+        for _ in 0..INDIRECT_AB_RUNS {
+            for (side, device) in [&gpu, &unvalidated].into_iter().enumerate() {
+                let stamps = timestamp_problem.is_none().then(|| Stamps::new(device));
+                let mut subject = cell.build(device, size, profile_options(profile, class));
+                apply_profile(subject.renderer(), profile, class);
+                let mut samples = measure(device, stamps.as_ref(), warmup, frames, subject.as_mut());
+                if !samples.gpu.is_empty() {
+                    sides[side].0.push(percentile_of(&mut samples.gpu, 0.5));
+                }
+                sides[side].1.push(percentile_of(&mut samples.frame, 0.5));
+            }
+        }
+        let [(mut gpu_on, mut frame_on), (mut gpu_off, mut frame_off)] = sides;
+        let gpu_ms = |values: &mut Vec<f64>| if values.is_empty() { Value::Null } else { json!(median(values)) };
+        let row = json!({
+            "row": cell.name(),
+            "profile": profile.name(),
+            "size": size,
+            "runs": INDIRECT_AB_RUNS,
+            "validated": { "gpuP50Ms": gpu_ms(&mut gpu_on), "frameP50Ms": median(&mut frame_on) },
+            "unvalidated": { "gpuP50Ms": gpu_ms(&mut gpu_off), "frameP50Ms": median(&mut frame_off) },
+        });
+        eprintln!("{row}");
+        rows.push(row);
+    }
+    let method = json!({
+        "warmupFrames": warmup,
+        "measuredFrames": frames,
+        "runs": INDIRECT_AB_RUNS,
+        "statistic": "median over interleaved runs of each run's nearest-rank p50",
+        "sides": "validated: InstanceFlags::VALIDATION_INDIRECT_CALL (every game's device); unvalidated: the flag cleared (measurement only)",
+    });
+    let head = header(&gpu, &timestamp_problem, "render-indirect-validation", method);
+    let record = merge(head.json, rows, Vec::new());
+    write_record(&out_path("indirect-validation", &head.sha, "GENEX_PERF_OUT"), &record);
+    println!("{record:#}");
+}
+
+/// The value at fraction `p` of `values` (nearest rank), sorting them.
+fn percentile_of(values: &mut [f64], p: f64) -> f64 {
+    values.sort_by(f64::total_cmp);
+    support::percentile(values, p)
+}

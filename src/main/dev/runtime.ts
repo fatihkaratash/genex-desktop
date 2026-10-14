@@ -53,7 +53,7 @@ import { errorMessage } from "../../shared/errors.ts";
 import { secretRedactor } from "../../shared/redact.ts";
 import { SECOND_MS } from "../../shared/duration.ts";
 import { HarnessState } from "../../shared/protocol.ts";
-import { NativeOp } from "../../shared/native-contract.ts";
+import { NativeCanvasPhase, NativeOp } from "../../shared/native-contract.ts";
 import type { RenderSettingsChange } from "../../shared/render-quality.ts";
 
 /** Why the developer runtime cannot start, or cannot reach a native run. */
@@ -62,7 +62,7 @@ const MESSAGE = {
   nativeUnsupported: (method: string) => `${method} has no native counterpart: a native game has no web contents`,
   noOpenGame: "open a C++ game in the studio first",
   noNativeRun: "start the open game first (Play, or an agent's run)",
-  nativeViewHidden: "show the game's Native view in Live to capture what it shows",
+  nativeViewHidden: "show the game's Native view in Live, playing, to capture what it shows",
   frameNotNative: "--frame names a native capture's frame; use it with --surface native",
 } as const;
 /** JPEG quality of a native surface capture. */
@@ -441,15 +441,30 @@ async function captureLiveNative(rt: NativeSurfaceRuntime, name: string) {
   };
 }
 
-/** The selector of Live's Native view canvas (`NativeLiveCanvas`), whose box a live capture crops to. */
-const NATIVE_CANVAS_SELECTOR = "[data-stage-native-canvas] canvas";
+/** The attribute Live's Native view (`NativeLiveCanvas`) writes its phase to; its canvas is what a live capture crops to. */
+const NATIVE_CANVAS_ATTRIBUTE = "data-stage-native-canvas";
 
-/** The studio window cropped to the Native view's canvas, or null when no Native view is shown. */
-async function liveNativeViewOf(win: BrowserWindow): Promise<LiveNativeView | null> {
+/**
+ * The page script answering the Native view canvas's box, or null unless the view is `playing` and
+ * shown (pass 2, TS-F2): a Starting or refused card, or a view hidden behind another stage view,
+ * still has a box, and the compositor would answer its pixels as the game's.
+ */
+const NATIVE_CANVAS_BOX = `(() => {
+  const host = document.querySelector(${JSON.stringify(`[${NATIVE_CANVAS_ATTRIBUTE}]`)});
+  const canvas = host ? host.querySelector("canvas") : null;
+  if (!host || !canvas || host.getAttribute(${JSON.stringify(NATIVE_CANVAS_ATTRIBUTE)}) !== ${JSON.stringify(NativeCanvasPhase.Playing)}) return null;
+  if (!canvas.checkVisibility({ visibilityProperty: true, opacityProperty: true })) return null;
+  const r = canvas.getBoundingClientRect();
+  return [r.x, r.y, r.width, r.height];
+})()`;
+
+/**
+ * The studio window cropped to the Native view's canvas, or null when no Native view is playing and
+ * shown (nothing is captured then).
+ */
+export async function liveNativeViewOf(win: BrowserWindow): Promise<LiveNativeView | null> {
   if (win.isDestroyed()) return null;
-  const box: unknown = await win.webContents.executeJavaScript(
-    `(() => { const r = document.querySelector(${JSON.stringify(NATIVE_CANVAS_SELECTOR)})?.getBoundingClientRect(); return r ? [r.x, r.y, r.width, r.height] : null; })()`,
-  );
+  const box: unknown = await win.webContents.executeJavaScript(NATIVE_CANVAS_BOX);
   if (!Array.isArray(box) || box.length !== 4 || !box.every((n) => typeof n === "number" && Number.isFinite(n)))
     return null;
   const [x, y, width, height] = box.map((n: number) => Math.round(n));

@@ -13,7 +13,7 @@
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { BuildIdentity, CaptureProvenance } from "../shared/build-preview.ts";
+import { type BuildIdentity, type CaptureProvenance, renderProvenanceCopy } from "../shared/build-preview.ts";
 import { SECOND_MS } from "../shared/duration.ts";
 import type { BuildTarget } from "../shared/game-project.ts";
 import {
@@ -525,7 +525,9 @@ export class NativeGamePort implements PreviewPort {
    * host reads exactly that many bytes from the path it derives itself, recomputes the digest on
    * the BGRA, measures it, and only then encodes the JPEG. The file stays: the run dir goes with the run.
    * Its provenance is the game's sequence number, the digest the host recomputed, the camera the
-   * game says it drew from (else the one it was last placed on), the run and the build, so a saved frame is never taken for another build's.
+   * game says it drew from (else the one it was last placed on), the run, the build, the render
+   * settings the game answered with and the capture's size, so a saved frame is never taken for
+   * another build's or another preset's.
    */
   async screenshotWithStats(quality = DEFAULT_CAPTURE_QUALITY): Promise<NativeCapture> {
     const camera = this.#camera;
@@ -541,6 +543,10 @@ export class NativeGamePort implements PreviewPort {
       camera: reply.camera ?? camera,
       runId: this.#io.runId ?? null,
       build: this.#io.build ? { ...this.#io.build } : null,
+      // The settings the game says it drew the frame with (a `renderSettings` change still in force
+      // reads `settingsSource: "verb"`), and the size the host read.
+      render: reply.render ? renderProvenanceCopy(reply.render) : null,
+      outputSize: { width: reply.width, height: reply.height },
     };
     return { jpeg, stats: { ...stats, canvas: true }, surface: CaptureSurface.Canvas, provenance };
   }

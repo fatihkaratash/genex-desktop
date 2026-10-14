@@ -300,7 +300,7 @@ function nativeSurface(
       jpeg: Buffer.from("jpeg-bytes"),
       stats: { ...computePixelStats(bgra, 2, 2), canvas: true },
       surface: CaptureSurface.Canvas,
-      provenance: { seq: 1, digest: null, camera: "default", runId: null, build: null },
+      provenance: { seq: 1, digest: null, camera: "default", runId: null, build: null, render: null, outputSize: null },
     }),
     consoleEntries: () =>
       Array.from({ length: options.console ?? 5 }, (_, line) => ({
@@ -545,4 +545,59 @@ test("source fingerprints re-read only files whose size or modification time cha
   assert.notEqual(after["edited.ts"], before["edited.ts"]);
   fs.writeFileSync(edited, "export const b = 1;\n");
   assert.equal(fingerprints(root, ["edited.ts"])["edited.ts"], before["edited.ts"]);
+});
+
+// Pass 2 (TS-F2): `capture --surface native --frame live` cropped the window to the Native view's
+// canvas in every phase and when the view was hidden, answering a Starting card or another stage
+// view as the game's frame. The page script answers a box only for a playing, shown canvas, and
+// nothing is captured otherwise.
+test("a live native capture is taken only of a playing, shown Native view", async () => {
+  const { liveNativeViewOf } = await runtimeModule();
+  const { runInNewContext } = await import("node:vm");
+  /** A studio window whose page holds a Native view in `phase`, its canvas `shown` or not. */
+  const windowWith = (phase: string | null, shown: boolean) => {
+    const captured: unknown[] = [];
+    const canvas = {
+      checkVisibility: () => shown,
+      getBoundingClientRect: () => ({ x: 10.2, y: 20.6, width: 320, height: 180 }),
+    };
+    const host = {
+      getAttribute: (name: string) => (name === "data-stage-native-canvas" ? phase : null),
+      querySelector: (selector: string) => (selector === "canvas" ? canvas : null),
+    };
+    const document = { querySelector: () => (phase === null ? null : host) };
+    const image = {
+      isEmpty: () => false,
+      toPNG: () => Buffer.from("png"),
+      getSize: () => ({ width: 320, height: 180 }),
+    };
+    const win = {
+      isDestroyed: () => false,
+      webContents: {
+        executeJavaScript: async (source: string) => runInNewContext(source, { document }),
+        capturePage: async (rect: unknown) => {
+          captured.push(rect);
+          return image;
+        },
+      },
+    };
+    return { win: win as unknown as Parameters<typeof liveNativeViewOf>[0], captured };
+  };
+  const playing = windowWith("playing", true);
+  assert.deepEqual(await liveNativeViewOf(playing.win), {
+    png: Buffer.from("png"),
+    dimensions: { width: 320, height: 180 },
+  });
+  assert.deepEqual(playing.captured, [{ x: 10, y: 21, width: 320, height: 180 }]);
+  for (const [phase, shown] of [
+    ["starting", true],
+    ["refused", true],
+    ["cant-draw", true],
+    ["playing", false],
+    [null, true],
+  ] as const) {
+    const { win, captured } = windowWith(phase, shown);
+    assert.equal(await liveNativeViewOf(win), null, `${phase} ${shown}`);
+    assert.deepEqual(captured, [], `${phase} ${shown}: nothing was captured`);
+  }
 });

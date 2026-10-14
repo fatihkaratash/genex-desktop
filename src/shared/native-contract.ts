@@ -218,6 +218,25 @@ export const NativeLifecycle = {
 } as const;
 export type NativeLifecycle = (typeof NativeLifecycle)[keyof typeof NativeLifecycle];
 
+/**
+ * Where Live's Native canvas stands: the wire values of its `data-stage-native-canvas` attribute,
+ * which the renderer writes and the dev control's live capture reads (a capture is taken only of a
+ * canvas that is `playing`).
+ */
+export const NativeCanvasPhase = {
+  /** Building, checking or starting the Mac build, or waiting for the host's answer. */
+  Starting: "starting",
+  /** The game runs (or waits, paused, while Live is hidden): its frames are drawn. */
+  Playing: "playing",
+  Refused: "refused",
+  Ended: "ended",
+  /** The embed call itself failed. */
+  Failed: "failed",
+  /** No WebGL2 to draw frames with. */
+  CantDraw: "cant-draw",
+} as const;
+export type NativeCanvasPhase = (typeof NativeCanvasPhase)[keyof typeof NativeCanvasPhase];
+
 /** Where a native run stands. Sent to the renderer: never rename a value. */
 export const NativeRunState = {
   Building: "building",

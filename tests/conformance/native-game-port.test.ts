@@ -35,6 +35,8 @@ import {
   type NativeTimers,
 } from "../../src/shared/native-contract.ts";
 import { BuildTarget } from "../../src/shared/game-project.ts";
+import { captureProvenanceOf } from "../../src/shared/build-preview.ts";
+import { CaptureExposure, SettingsSource } from "../../src/shared/render-quality.ts";
 import {
   fnv1a64Hex,
   NATIVE_LOG_REPEAT_FLUSH_MS,
@@ -1239,7 +1241,29 @@ describe("where a capture came from", () => {
       camera: "default",
       runId: "0123456789ab",
       build,
+      render: null,
+      outputSize: { width: 2, height: 2 },
     });
+  });
+
+  // Pass 2 (TS-F1): a builder capture kept no word of the settings that drew it, so a frame drawn
+  // after `renderSettings {set:{deviceClass:"mobile-mid", preset:"low"}}` read as a regression.
+  it("a capture keeps the render settings the game answered with, a verb change named as such", async () => {
+    const r = await rig({ io: { runId: "0123456789ab", build } });
+    const render = {
+      preset: "low",
+      deviceClass: "mobile-mid",
+      settingsSource: SettingsSource.Verb,
+      scale: 1,
+      settleFrames: 8,
+      historyReset: true,
+      exposure: CaptureExposure.Instant,
+    };
+    const taken = await shot(r, bgra([4, 5, 6, 255], 4), { render: { ...render, extra: "dropped" } });
+    assert.deepEqual(taken.provenance.render, render, "only the provenance's own fields are kept");
+    assert.equal(taken.provenance.render?.settingsSource, SettingsSource.Verb);
+    const saved = captureProvenanceOf(JSON.parse(JSON.stringify(taken.provenance)));
+    assert.deepEqual(saved?.render, render, "the saved sidecar reads it back");
   });
 
   it("the camera is the one the last answered debugCamera left the game on; a refused one changes nothing", async () => {
@@ -1286,6 +1310,8 @@ describe("where a capture came from", () => {
       camera: "default",
       runId: "0123456789ab",
       build,
+      render: null,
+      outputSize: { width: 2, height: 2 },
     });
   });
 

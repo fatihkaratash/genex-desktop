@@ -18,6 +18,7 @@ import {
   type NativeFrameMeta,
   type NativeGamepadAction,
   type NativeInputAction,
+  NativeCanvasPhase,
   NativeInputKind,
   NativeRefusal,
   NativeRunState,
@@ -289,20 +290,9 @@ export function resizeDue(sent: NativeEmbedSize | null, measured: NativeEmbedSiz
 
 // ── what the canvas says ────────────────────────────────────────────────────────────────────
 
-/** Where Live's canvas stands. Wire values of `data-stage-native-canvas`. */
-export const CanvasPhase = {
-  /** Building, checking or starting the Mac build, or waiting for the host's answer. */
-  Starting: "starting",
-  /** The game runs (or waits, paused, while Live is hidden): its frames are drawn. */
-  Playing: "playing",
-  Refused: "refused",
-  Ended: "ended",
-  /** The embed call itself failed. */
-  Failed: "failed",
-  /** No WebGL2 to draw frames with. */
-  CantDraw: "cant-draw",
-} as const;
-export type CanvasPhase = (typeof CanvasPhase)[keyof typeof CanvasPhase];
+/** Where Live's canvas stands. Wire values of `data-stage-native-canvas` (shared with the dev control). */
+export const CanvasPhase = NativeCanvasPhase;
+export type CanvasPhase = NativeCanvasPhase;
 
 /** The canvas card's buttons. Wire values of `data-stage-native-canvas-action` (the window card owns `data-stage-native-action`). */
 export const CanvasAction = {
