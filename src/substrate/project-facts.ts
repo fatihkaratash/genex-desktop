@@ -19,7 +19,10 @@ import {
   settleFacts,
 } from "../shared/project-facts.ts";
 import { isCompiledStack, isGameStack } from "../shared/game-project.ts";
-import { readJsonIfExists } from "./fsx.ts";
+import { readOwnJsonForUpdate } from "./fsx.ts";
+
+/** The most of a game's studio.json the studio reads; a bigger one reads as absent (and is never rewritten). */
+export const STUDIO_JSON_MAX_BYTES = 1024 * 1024;
 
 /** How deep and how wide one walk goes: deep enough for `a/ProjectSettings/…`, never a whole disk. */
 const WALK = { MaxDepth: 4, MaxEntries: 4000 } as const;
@@ -92,14 +95,22 @@ export async function projectFiles(dir: string, limits: WalkLimits = {}): Promis
 }
 
 /**
+ * A game's studio.json as an object, which any agent process can write: read never through a link,
+ * never blocking on a FIFO and never past {@link STUDIO_JSON_MAX_BYTES}. Null when it is missing,
+ * is not such a file, does not parse or is not an object: a listing never waits on it.
+ */
+export async function readStudioRecord(dir: string): Promise<Record<string, unknown> | null> {
+  const file = path.join(dir, "studio.json");
+  return readOwnJsonForUpdate<Record<string, unknown>>(file, STUDIO_JSON_MAX_BYTES).catch(() => null);
+}
+
+/**
  * Whether studio.json records the web starter (`contractVersion`, a number), as Genex writes it, or
  * a compiled game's stack (C++ · raylib, Rust · wgpu): Studio builds that game's page itself, so it
  * is served as a web game at the root though no page of its own is there.
  */
 async function recordsWebStarter(dir: string): Promise<boolean> {
-  const meta = await readJsonIfExists<{ contractVersion?: unknown; stack?: unknown }>(
-    path.join(dir, "studio.json"),
-  ).catch(() => null);
+  const meta = await readStudioRecord(dir);
   if (typeof meta?.contractVersion === "number") return true;
   return isGameStack(meta?.stack) && isCompiledStack(meta.stack);
 }

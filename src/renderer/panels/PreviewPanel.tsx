@@ -785,7 +785,8 @@ function useLiveStage(input: {
   visible: boolean;
   sidebarOverlay: boolean;
   onNotice: Notify;
-  flagsInput: Parameters<typeof stageFlags>[0];
+  /** `stageFlags`' input, with the whole live load: Play/Stop, the probe and the build trouble drive it. */
+  flagsInput: Omit<Parameters<typeof stageFlags>[0], "live"> & { live: ReturnType<typeof useLiveLoad> };
 }) {
   const { slot, loaded, preview, visible, sidebarOverlay, onNotice, flagsInput } = input;
   const { project, live } = flagsInput;

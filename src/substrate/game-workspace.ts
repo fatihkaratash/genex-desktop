@@ -106,7 +106,7 @@ import {
 import { bundleIdOf, isBundleId } from "./native-bundle.ts";
 import { ensureFactIgnoreRules, ensureIgnoreRules, ignoreRulesToWrite, nestedRepos } from "./nested-repos.ts";
 import { isBelow, isInside, samePath, throughClaudeFolder, toPosixRelative } from "./paths.ts";
-import { detectFacts } from "./project-facts.ts";
+import { detectFacts, readStudioRecord, STUDIO_JSON_MAX_BYTES } from "./project-facts.ts";
 import type { HookEvent } from "../shared/plugin-hooks.ts";
 import {
   COMPILED_SHAPES,
@@ -126,7 +126,6 @@ import {
   readProjectShape,
   readStudioJson,
   recordsShape,
-  STUDIO_JSON_MAX_BYTES,
   webGameSignal,
 } from "./project-shape.ts";
 import { ensureRepo } from "./snapshots.ts";
@@ -670,7 +669,7 @@ interface FactRecord {
 
 /** A game's studio.json as an object, or null when it is missing or does not parse. */
 async function readStudioMeta(dir: string): Promise<Record<string, unknown> | null> {
-  return readJsonIfExists<Record<string, unknown>>(path.join(dir, "studio.json")).catch(() => null);
+  return readStudioRecord(dir);
 }
 
 /** The scaffold a game's studio.json records (`ScaffoldRecord`), or null when it records none that parses. */

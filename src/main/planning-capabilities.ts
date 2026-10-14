@@ -44,13 +44,15 @@ function toolFacts(manifest: PluginManifest, reach: PluginReach) {
  * never a skill that serves another stack (`manifestForStack`).
  */
 function pluginFact(p: PluginInfo, connections: ConnectionSnapshot, game: GameKind, stack: GameStack | null) {
-  const reach = pluginReach(manifestForStack(p.manifest, stack), game);
+  // The skill tool's own description lists the skills it reads: the stack's, never another's.
+  const manifest = manifestForStack(p.manifest, stack);
+  const reach = pluginReach(manifest, game);
   return {
     id: p.manifest.id,
     name: p.manifest.name,
     description: p.manifest.description,
     account: connections.sources.find((s) => s.kind === "plugin" && s.id === p.manifest.id)?.account,
-    tools: toolFacts(p.manifest, reach),
+    tools: toolFacts(manifest, reach),
     // A file skill's body is never serialized: the builders read it on demand.
     skills: reach.skills.map((s) => skillFact(p.manifest.id, s)),
   };

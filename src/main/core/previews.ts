@@ -154,7 +154,7 @@ const COMMIT_HASH = /^[0-9a-f]{7,40}$/i;
 const REFERENCE_NOTE = /\.(md|txt|json)$/i;
 /** How long the stand-in stays open once the harness stops using it: a game in it keeps running. */
 const STAND_IN_IDLE_MS = 2 * MINUTE_MS;
-/** How long a builder's Mac capture waits for a native lease (the night's checks share them) before it says so. */
+/** How long a builder's Mac capture waits for a native lease (a Loop's checks share them) before it says so. */
 export const MAC_CAPTURE_LEASE_WAIT_MS = 30 * SECOND_MS;
 /** The runs a Live action ends for the game it showed: the person's Play window and the ones drawn in Live. */
 const LIVE_TIED_MODES = [NativeRunMode.Window, NativeRunMode.Embedded] as const;
@@ -195,7 +195,7 @@ const MESSAGE = {
   captureCannotRun: (target: string) =>
     `This computer cannot run the ${target} build: capture checks the destinations it can run, and says so here.`,
   macBusy:
-    "No Mac run is free right now (the night's checks share them): look at the web build now and capture macos again later.",
+    "No Mac run is free right now (the Loop's checks share them): look at the web build now and capture macos again later.",
   macBuildFailed: (reason: string) => `your Mac build did not run: ${reason} — fix that before polishing anything.`,
   captureFolderRefused: (reason: string) => `capture refused: ${reason}`,
   capturedMac: (workspace: string) =>
@@ -1432,7 +1432,7 @@ export class PreviewService {
 
   /**
    * A native lease for a builder's session, waiting at most `MAC_CAPTURE_LEASE_WAIT_MS` by the
-   * core's clock (the night's checks share the runs) or until the session ends.
+   * core's clock (a Loop's checks share the runs) or until the session ends.
    */
   async #nativeLease(
     pool: PreviewPool,

@@ -27,7 +27,7 @@ import { hostTarget, TargetRefusal } from "../shared/game-targets.ts";
 import { CoreFact, FolderHolds, hasFact } from "../shared/project-facts.ts";
 import { entryExists, isJsonObject, pathExists, readRegularFile } from "./fsx.ts";
 import { isRemoteSrc, pageScripts, projectRelative } from "./game-page.ts";
-import { detectFacts } from "./project-facts.ts";
+import { detectFacts, STUDIO_JSON_MAX_BYTES } from "./project-facts.ts";
 import { declaredBootMs } from "./preview-ready.ts";
 import { isInstallCommand, packageCommands } from "./toolchain.ts";
 
@@ -39,8 +39,6 @@ const MAX_NATIVE_SOURCE_BYTES = 4 * 1024 * 1024;
 /** The most entries a studio.json `targets` list may hold before the studio ignores the whole list. */
 const MAX_RECORDED_TARGETS = 16;
 
-/** The most of a game's studio.json the studio reads; a bigger one reads as absent (and is never rewritten). */
-export const STUDIO_JSON_MAX_BYTES = 1024 * 1024;
 /** The most of a game's page or main entry read to tell what it is; a single-file game inlines its assets. */
 const MAX_PAGE_BYTES = 64 * 1024 * 1024;
 /** The most of a package.json or bundler config read to tell how a game builds. */
