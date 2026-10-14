@@ -5,7 +5,7 @@ import { ModelCatalogState } from "../shared/model-catalog.ts";
  */
 import { EngineKind, isEngineReady, needsSignIn } from "../shared/engine-descriptor.ts";
 import { ReasoningEffort } from "../shared/model-preferences.ts";
-import { crossesTo, resolveRoles } from "../shared/model-roles.ts";
+import { crossesTo, resolveRoles, roleEffortCap } from "../shared/model-roles.ts";
 import { EngineId, isMetered } from "../shared/providers.ts";
 import { modelKey, parseModelKey } from "./model-key.ts";
 import { modelBase, modelName, offersLineup, runnableModels, shownModels } from "./model-lineup.ts";
@@ -347,7 +347,8 @@ function wantedModel(picked: string | undefined, onOrchestratorEngine: boolean, 
 }
 
 /**
- * Use the same named models in the picker and the send payload. One effort serves every role:
+ * Use the same named models in the picker and the send payload. One effort serves every role —
+ * the lead at it, the workers and reviewers at most high (shared/model-roles.ts `roleEffortCap`):
  * each model runs at the closest level it accepts, or at its own default when none is chosen.
  */
 export function withRoleEfforts(
@@ -367,7 +368,8 @@ export function withRoleEfforts(
     if (picked.engine !== provider) continue;
     // An alias is still what the run asks its CLI for; only the picker shows it as the model.
     next[role] = picked.model === DEFAULT_MODEL ? undefined : picked.model || undefined;
-    next.efforts[role] = nearestEffort(effort, model.efforts) ?? effectiveEffort(model, null);
+    const chosen = roleEffortCap(role, effort || undefined) ?? roleEffortCap(role, effectiveEffort(model, null));
+    next.efforts[role] = nearestEffort(chosen, model.efforts);
   }
   return next;
 }

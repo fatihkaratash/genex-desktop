@@ -16,8 +16,10 @@ import { GENEX_PLUGIN_ID, GENEX_PUBLISH_PANEL } from "../../shared/genex.ts";
 import type { FactRef, FolderHolds } from "../../shared/project-facts.ts";
 import {
   type PluginToolbarEntry,
+  shownToolbarStatus,
   toolbarReaction,
   toolbarStatusFrom,
+  toolbarTip,
   toolbarUpdateStatus,
 } from "../../shared/plugin-toolbar.ts";
 import {
@@ -33,6 +35,7 @@ import { Button } from "../ui/Button.tsx";
 import { OPEN_PLUGINS_EVENT } from "../ui/ComposerAddMenu.tsx";
 import { DialogSurface } from "../ui/dialog.tsx";
 import { Icon } from "../ui/icons.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { GENEX_WORDS, PLUGIN_TOOLBAR_WORDS, problemWords } from "../words.ts";
 import { GenexPublishDialog, GenexSetupDialog } from "./plugins/genex/GenexPublish.tsx";
 import { isGenexPublish, stripEntries, studioPublishButton } from "./plugins/genex/genex-publish-view.ts";
@@ -51,6 +54,13 @@ const TONE_CLASS: Record<NonNullable<PluginToolbarStatus["tone"]>, string> = {
   warn: "text-orange",
   err: "text-red",
   info: "text-ink-2",
+};
+/** Each tone's dot, for a badge drawn as one: green, amber, red, and the third ink for the quiet grey. */
+const DOT_CLASS: Record<NonNullable<PluginToolbarStatus["tone"]>, string> = {
+  ok: "bg-green",
+  warn: "bg-orange",
+  err: "bg-red",
+  info: "bg-ink-3",
 };
 
 interface Props {
@@ -167,10 +177,29 @@ function ToolbarIcon({ icon }: { icon: string | undefined }): JSX.Element | null
   return icon ? <span aria-hidden="true">{icon}</span> : null;
 }
 
+/** A status's badge: its word in its tone, or (`dot`) a dot in that tone whose word only screen readers hear. */
+function ToolbarBadge({ id, status }: { id: string; status: PluginToolbarStatus | undefined }): JSX.Element | null {
+  if (!status?.badge) return null;
+  if (status.dot) {
+    const tone = status.tone ?? "info";
+    return (
+      <span id={id} data-plugin-badge data-dot={tone} className={`size-1.5 shrink-0 rounded-full ${DOT_CLASS[tone]}`}>
+        <span className="sr-only">{status.badge}</span>
+      </span>
+    );
+  }
+  return (
+    <span id={id} data-plugin-badge className={`text-micro ${status.tone ? TONE_CLASS[status.tone] : "text-ink-2"}`}>
+      {status.badge}
+    </span>
+  );
+}
+
 /**
  * A plugin's button: the accent while its status says its action is due (Publish with something
  * to publish), the quiet pill otherwise — two looks only. While its plugin is behind the bundled
  * version it wears the Update badge instead, and then it opens Plugins at the plugin, game or not.
+ * Its title, and a dot's word, show in the strip's own tooltip.
  */
 function ToolbarButton({
   entry,
@@ -189,13 +218,14 @@ function ToolbarButton({
 }): JSX.Element {
   const badgeId = useId();
   const update = toolbarUpdateStatus(entry.plugin, PLUGIN_TOOLBAR_WORDS.update);
-  const status = update ? { ...own, ...update } : own;
+  const status = shownToolbarStatus(own, update);
   const needsGame = entry.item.requiresProject !== false && !project;
   // Updating needs no game and isn't the plugin's own action, so nothing the plugin says holds it back.
   const blocked = update ? false : Boolean(status?.disabled) || needsGame;
   const disabled = blocked || busy;
   const press = update ? () => openPluginsAt(entry.plugin.manifest.id) : onPress;
-  return (
+  const [heading, ...lines] = toolbarTip(status);
+  const button = (
     <Button
       variant={due ? "default" : "pill"}
       data-due={due ? "" : undefined}
@@ -203,22 +233,28 @@ function ToolbarButton({
       aria-label={entry.item.ariaLabel}
       // The label names the button; the badge, its state, is read after it ("Unreal Editor, Ready").
       aria-describedby={status?.badge ? badgeId : undefined}
-      title={status?.title}
       disabled={disabled}
       onClick={press}
     >
       <ToolbarIcon icon={entry.item.icon} />
       <span>{entry.item.label}</span>
-      {status?.badge ? (
-        <span
-          id={badgeId}
-          data-plugin-badge
-          className={`text-micro ${status.tone ? TONE_CLASS[status.tone] : "text-ink-2"}`}
-        >
-          {status.badge}
-        </span>
-      ) : null}
+      <ToolbarBadge id={badgeId} status={status} />
     </Button>
+  );
+  if (!heading) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      {/* Beside, not below: a tooltip under the strip would sit behind the native game view. */}
+      <TooltipContent side="left" sideOffset={6} data-plugin-toolbar-tip={entry.key}>
+        {heading}
+        {lines.map((line) => (
+          <span key={line} className="block max-w-72 opacity-75">
+            {line}
+          </span>
+        ))}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -5,6 +5,7 @@
  * re-briefed from the last line alone, and a chat never guesses a different game folder.
  */
 import { launchRules, RESUME_LOOP_CHAT, type LaunchGrant } from "./launch-prompts.ts";
+import { UNTIL_DONE_WORDS } from "./until-done-prompts.ts";
 import { GameEngine } from "./game-engine.ts";
 import { handoverSection } from "./session-compact-prompts.ts";
 import { toolCall } from "./model-roles.ts";
@@ -736,7 +737,7 @@ function resumePickup(afterLoopRun: string | null, launch: LaunchGrant | null): 
 function budgetLine(mode: string | undefined, hours: number | null | undefined): string {
   if (mode === InterviewMode.Loop) return `The user committed ${hours ?? "?"} hours of unattended building.`;
   if (hours) return `The run is capped at ${hours} hours.`;
-  return "The run goes until the critics are satisfied (24h safety ceiling).";
+  return `The run goes ${UNTIL_DONE_WORDS} (24h safety ceiling).`;
 }
 
 /**

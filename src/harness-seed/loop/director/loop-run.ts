@@ -47,6 +47,7 @@ import type { LeaseGame } from "../native-contract.ts";
 import type { EngineLimit } from "../outage.ts";
 import type { WorkerMode, WorkerState } from "../outcomes.ts";
 import type { RunInbox } from "../run-inbox.ts";
+import type { FinishAsk } from "./wrap-up.ts";
 import type { FacetSpec } from "../spec.ts";
 import type { RoundRecord } from "./digests.ts";
 import type { LoopRunClock, PriorWorker } from "./journal.ts";
@@ -108,6 +109,8 @@ export interface Worker {
   keptCommit?: string | null;
   /** That kept work is on the record as in the build (kept-work.ts `noteKeptWork`). */
   keptInBuild?: boolean;
+  /** The kept commit a judge preferred to the integration branch: `integrate` may take it (kept-work.ts). */
+  keptJudged?: string | null;
   iterationsCap: number | undefined;
   steering: string[];
   iterations: RoundRecord[];
@@ -209,10 +212,16 @@ export interface LoopRunState {
   integrationWorktree: string;
   integrationHead: string | null;
   /**
-   * The head the last wave closed on (integrate.ts): what running loop workers merge, so they take
-   * the integration branch once per wave and not after every commit. Absent until a wave closes.
+   * The head the last healthy wave closed on (integrate.ts): what running loop workers merge while
+   * the newest integration head is one a health pass saw fail to load (workers.ts `freshBase`).
+   * Absent until a wave closes.
    */
   waveHead?: string | null;
+  /**
+   * The integration head before a worker's merge no health pass has answered yet (integrate.ts):
+   * what running loop workers keep taking until one does (workers.ts `freshBase`). Null otherwise.
+   */
+  headBeforeMerge?: string | null;
   /** The module contract loop workers are held to (contract-gate.ts), once committed. */
   contract?: LoopRunContract | null;
   /** Why the last contract could not be committed, until one is. */
@@ -267,6 +276,11 @@ export interface LoopRunState {
   lastShip?: LastShip | null;
   /** A goal build's finish was turned back once for the art director's defects: never again. */
   shipFinishRefused?: boolean;
+  /**
+   * The user's ask to finish, as the lead recorded it with `wrap_up` (wrap-up.ts): its own ask is no
+   * news to it. Not journaled: a resume voids the ask. Absent: the lead recorded none.
+   */
+  finishAsk?: FinishAsk | null;
 }
 
 /**
@@ -758,6 +772,7 @@ export async function evidenceOf(
     maxDemos = Infinity,
     requiredDemos = [],
     challenge = false,
+    camerasOwned = true,
   }: {
     handle?: string | null;
     label: string;
@@ -778,6 +793,8 @@ export async function evidenceOf(
     requiredDemos?: string[];
     /** Race the throttle-only bot after the demos (evidence.ts): the art director's whole-game look. */
     challenge?: boolean;
+    /** Does this build answer for the camera wiring (evidence.ts `camerasOwned`): a part that does not own the entry does not. */
+    camerasOwned?: boolean;
   },
 ): Promise<Evidence> {
   const { ctx, run } = loopRun;
@@ -800,6 +817,7 @@ export async function evidenceOf(
     setup: setup === undefined ? run.setup : setup,
     scaffold,
     inheritedConsole,
+    camerasOwned,
   });
 }
 

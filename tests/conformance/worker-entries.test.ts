@@ -1,12 +1,14 @@
 /**
- * Workers in the chat: every worker a lead starts, in a run or in a chat turn, is one line naming
- * its task, rewritten in place when it ends and when the lead marks it, in plain words. A line
- * never names an id or how the worker stands in the game.
+ * Workers in the chat: every worker a chat turn starts is one line naming its task, rewritten in
+ * place when it ends and when the lead marks it, in plain words. A run's workers are rows of its
+ * Building card's list instead (chat/build-checklist.ts), never lines. A line never names an id or
+ * how the worker stands in the game.
  */
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import { EntryAction, EntryKind, toEntries } from "../../src/renderer/chat-entries.ts";
 import { transcriptEntries } from "../../src/renderer/chat/transcript.ts";
+import { buildChecklist, PartMark } from "../../src/renderer/chat/build-checklist.ts";
 import { buildRunGraph } from "../../src/renderer/run-graph.ts";
 import { partRows, StepState, stepWord } from "../../src/renderer/run-steps.ts";
 import { buildsLayout, LeadFace, leadFace } from "../../src/renderer/run-tree.ts";
@@ -77,11 +79,11 @@ it("one line per worker, naming it, rewritten when it ends", () => {
     "the end rewrites its own worker's line and leaves the other working",
   );
   assert.deepEqual(
-    workerLines([started(1, "unreal-track", "Build the track", inRun, { isolation: "lock", in: "unreal" })]),
+    workerLines([started(1, "unreal-track", "Build the track", inTurn, { isolation: "lock", in: "unreal" })]),
     ["Build the track in Unreal…"],
   );
   assert.deepEqual(
-    workerLines([started(1, "pool.w3", "Tune the menu", inRun, { isolation: "lock", in: "web" })]),
+    workerLines([started(1, "pool.w3", "Tune the menu", inTurn, { isolation: "lock", in: "web" })]),
     ["Tune the menu…"],
     "a worker in the web game's own folder just works",
   );
@@ -89,7 +91,7 @@ it("one line per worker, naming it, rewritten when it ends", () => {
 
 it("says where an in-place worker works by the lock it holds, before the engine an older record names", () => {
   const line = (extra: Record<string, unknown>) =>
-    workerLines([started(1, "pool.w1", "Build the track", inRun, { isolation: "lock", ...extra })]);
+    workerLines([started(1, "pool.w1", "Build the track", inTurn, { isolation: "lock", ...extra })]);
   assert.deepEqual(line({ where: "Unreal" }), ["Build the track in Unreal…"]);
   assert.deepEqual(
     line({ where: "Toy editor", in: "unreal" }),
@@ -103,8 +105,8 @@ it("says where an in-place worker works by the lock it holds, before the engine 
 it("says how the worker ended: added, done with its summary, not used with the note, didn't finish with why in the app's words, stopped", () => {
   const ending = (...rest: Array<Record<string, unknown>>) =>
     workerLines([
-      started(1, "pool.w1", "Port the car", inRun),
-      ...rest.map((payload, index) => finished(2 + index, "pool.w1", "Port the car", inRun, payload)),
+      started(1, "pool.w1", "Port the car", inTurn),
+      ...rest.map((payload, index) => finished(2 + index, "pool.w1", "Port the car", inTurn, payload)),
     ]);
   const cases: Array<[string, string[], string]> = [
     [
@@ -203,8 +205,8 @@ it("a worker record's fields are read only from their own words: a hostile one r
     ["a verdict that is an object", { verdict: {} }, "verdict"],
     ["a summary that is a number", { state: "done", summary: 42 }, "summary"],
   ];
-  const before = finished(2, "pool.w1", "Port the car", inRun, { state: "done", summary: "Ported the car." });
-  const resumed = started(4, "pool.w1", "Port the car", inRun);
+  const before = finished(2, "pool.w1", "Port the car", inTurn, { state: "done", summary: "Ported the car." });
+  const resumed = started(4, "pool.w1", "Port the car", inTurn);
   // Around the record: alone, after an end it must not undo, and before a start that resumes a worker it did not end.
   const around: Array<[string, EventEnvelope[], EventEnvelope[]]> = [
     ["alone", [], []],
@@ -216,9 +218,9 @@ it("a worker record's fields are read only from their own words: a hostile one r
     for (const [where, prior, after] of around) {
       const lines = (end: Record<string, unknown>): string[] =>
         workerLines([
-          started(1, "pool.w1", "Port the car", inRun),
+          started(1, "pool.w1", "Port the car", inTurn),
           ...prior,
-          finished(3, "pool.w1", "Port the car", inRun, end),
+          finished(3, "pool.w1", "Port the car", inTurn, end),
           ...after,
         ]);
       assert.doesNotThrow(() => lines(payload), `${name}, ${where}`);
@@ -230,9 +232,9 @@ it("a worker record's fields are read only from their own words: a hostile one r
 it("the line is never folded into the activity row", () => {
   const entries = toEntries([
     custom(1, CustomEvent.RunStarted, { runId: RUN }),
-    started(2, "pool.w1", "Study the web game", inRun, { isolation: "read" }),
+    started(2, "pool.w1", "Study the web game", inTurn, { isolation: "read" }),
     custom(3, CustomEvent.RunStarted, { runId: "r-next" }),
-    finished(4, "pool.w1", "Study the web game", inRun, { state: "done" }),
+    finished(4, "pool.w1", "Study the web game", inTurn, { state: "done" }),
   ]);
   const folded = entries.flatMap((entry) => (entry.kind === EntryKind.Activity ? entry.rows.map((r) => r.text) : []));
   assert.ok(folded.length > 0, "the run's own narration folds");
@@ -246,40 +248,40 @@ it("the line is never folded into the activity row", () => {
 it("a resumed worker's second start and an end with no start on the page make one line each", () => {
   assert.deepEqual(
     workerLines([
-      started(1, "pool.w1", "Port the car", inRun),
-      started(2, "pool.w1", "Port the car", inRun),
-      finished(3, "pool.w1", "Port the car", inRun, { state: "done", summary: "Ported the car." }),
+      started(1, "pool.w1", "Port the car", inTurn),
+      started(2, "pool.w1", "Port the car", inTurn),
+      finished(3, "pool.w1", "Port the car", inTurn, { state: "done", summary: "Ported the car." }),
     ]),
     ["Ported the car."],
   );
   assert.deepEqual(
     workerLines([
-      finished(1, "pool.w2", "Build the track", inRun, { state: "done", summary: "Built the track." }),
-      finished(2, "pool.w2", "Build the track", inRun, { verdict: "used", merged: true }),
-      finished(3, "pool.w2", "Build the track", inRun, { state: "done" }),
+      finished(1, "pool.w2", "Build the track", inTurn, { state: "done", summary: "Built the track." }),
+      finished(2, "pool.w2", "Build the track", inTurn, { verdict: "used", merged: true }),
+      finished(3, "pool.w2", "Build the track", inTurn, { state: "done" }),
     ]),
     ["Built the track. Added to your game."],
     "the end draws its line once; the verdict and a repeated end rewrite it",
   );
   assert.deepEqual(
-    workerLines([started(1, "", "Nameless", inRun), finished(2, "pool.w9", "", inRun, { state: "done" })]),
+    workerLines([started(1, "", "Nameless", inTurn), finished(2, "pool.w9", "", inTurn, { state: "done" })]),
     [],
     "a record with no id, or an end with no title and no start, draws nothing",
   );
 });
 
 it("a worker started again after it ended is a new attempt: a line of its own, nothing of the old end carried over", () => {
-  const sword = (id: number, extra: Record<string, unknown>) => finished(id, "sword", "Sword", inRun, extra);
+  const sword = (id: number, extra: Record<string, unknown>) => finished(id, "sword", "Sword", inTurn, extra);
   const firstAttempt = [
-    started(1, "sword", "Sword", inRun),
+    started(1, "sword", "Sword", inTurn),
     sword(2, { state: "stopped" }),
     sword(3, { verdict: "rejected", note: "the blade clips the hand" }),
   ];
-  assert.deepEqual(workerLines([...firstAttempt, started(4, "sword", "Sword", inRun)]), [
+  assert.deepEqual(workerLines([...firstAttempt, started(4, "sword", "Sword", inTurn)]), [
     "Sword. Not used: the blade clips the hand",
     "Sword…",
   ]);
-  const secondEnded = [...firstAttempt, started(4, "sword", "Sword", inRun), sword(5, { state: "done" })];
+  const secondEnded = [...firstAttempt, started(4, "sword", "Sword", inTurn), sword(5, { state: "done" })];
   const lines = toEntries(secondEnded).filter(isWorkerLine);
   assert.deepEqual(
     lines.map((line) => [line.text, line.workerDone]),
@@ -295,7 +297,7 @@ it("a worker started again after it ended is a new attempt: a line of its own, n
   );
 });
 
-it("a run's and a chat turn's workers get lines; a lead's milestone rows get none; the same id in two turns is two lines", () => {
+it("a chat turn's workers get lines, a run's none (they are its Building card's rows); a lead's milestone rows get none; the same id in two turns is two lines", () => {
   assert.deepEqual(
     workerLines([
       custom(1, CustomEvent.DirectorWorker, {
@@ -315,7 +317,8 @@ it("a run's and a chat turn's workers get lines; a lead's milestone rows get non
       started(5, "pool.w1", "Check the brakes", { turn: "m-later" }),
       finished(6, "pool.w1", "Check the physics", inTurn, { state: "done" }),
     ]),
-    ["Model the bike…", "Check the physics.", "Check the brakes…"],
+    // Flipped: a run's worker ("Model the bike") had a line of its own.
+    ["Check the physics.", "Check the brakes…"],
   );
 });
 
@@ -329,7 +332,7 @@ it("a worker starting in a run leaves that run's held plan card waiting for the 
   assert.deepEqual(waiting([held, started(2, "pool.w1", "Port the car", inRun)]), [true]);
 });
 
-it("a run that closes leaves none of its workers working: their lines read stopped and stay unpinned", () => {
+it("a run's workers draw no lines, running or once it closes; a chat turn's worker keeps its line, pinned while it works", () => {
   const log = [
     custom(1, CustomEvent.RunStarted, { runId: RUN, project: "valley", mode: "director" }),
     started(2, "port-car", "Port the car", inRun),
@@ -338,11 +341,8 @@ it("a run that closes leaves none of its workers working: their lines read stopp
     finished(5, "trim-menu", "Trim the menu", inRun, { state: "done", summary: "Trimmed the menu." }),
     custom(6, CustomEvent.RunFinished, { runId: RUN, project: "valley", interrupted: true, victory: false }),
   ];
-  assert.deepEqual(
-    workerLines(log),
-    ["Port the car: stopped.", "Check the physics…", "Trimmed the menu."],
-    "the run's open worker stops with it; a chat turn's worker and an ended one keep their words",
-  );
+  // Flipped: the run's workers had lines ("Port the car: stopped.", "Trimmed the menu.").
+  assert.deepEqual(workerLines(log), ["Check the physics…"], "only the chat turn's worker has a line");
   const replies = Array.from({ length: CHAT_PAGE_SIZE + 10 }, (_, index) =>
     event(10 + index, { type: "messages", messages: [{ role: "assistant", content: `step ${index}` }] }),
   );
@@ -359,7 +359,7 @@ it("a run that closes leaves none of its workers working: their lines read stopp
   assert.deepEqual(pinned, ["Check the physics…"], "only the chat turn's worker still working stays pinned");
 });
 
-it("a closed run's open workers read stopped on their rows and on their lines alike, from the same log", () => {
+it("a closed run's open workers read stopped on their rows, and draw no line in the transcript", () => {
   const closes: Array<[string, Record<string, unknown>]> = [
     ["interrupted", { interrupted: true, victory: false }],
     ["the director's paused close", { mode: "director", paused: true, landed: false }],
@@ -403,11 +403,8 @@ it("a closed run's open workers read stopped on their rows and on their lines al
       `${name}: each row stopped, a ghost`,
     );
     assert.notEqual(leadFace(graph, summary, rows), LeadFace.Waiting, `${name}: the lead waits for nobody`);
-    assert.deepEqual(
-      workerLines(log),
-      ["Port the car: stopped.", "Check the physics: stopped."],
-      `${name}: the lines say what the rows say`,
-    );
+    // Flipped: the lines said what the rows say; a run's workers have no lines now.
+    assert.deepEqual(workerLines(log), [], `${name}: the rows say it, not the transcript`);
   }
 });
 
@@ -494,30 +491,20 @@ it("a rewind keeps a worker's end whose start stays, and the start of a worker s
   assert.deepEqual(workerLines(withoutRewound(log, [planned.rewind])), ["Checked the physics.", "Dig the moat…"]);
 });
 
-it("a builder its run's lead integrates says it is in the game, as its row does; a conflict or another run's merge does not", () => {
-  const merge = (id: number, facetId: string, runId: string, extra: Record<string, unknown> = {}) =>
-    custom(id, CustomEvent.IntegrationMerge, { runId, facetId, commit: "c1", head: "h1", conflict: false, ...extra });
+it("a builder its run's lead integrates draws no line: its row on the run's card says it is in the game", () => {
+  const merge = (id: number, facetId: string, runId: string) =>
+    custom(id, CustomEvent.IntegrationMerge, { runId, facetId, commit: "c1", head: "h1", conflict: false });
   const builder = [
     started(1, "sky", "Make the sky", inRun),
     finished(2, "sky", "Make the sky", inRun, { state: "done", summary: "Made the sky." }),
   ];
-  assert.deepEqual(workerLines([...builder, merge(3, "sky", RUN)]), ["Made the sky. Added to your game."]);
-  assert.deepEqual(
-    workerLines([builder[0], merge(2, "sky", RUN), builder[1]]),
-    ["Made the sky. Added to your game."],
-    "integrated before its end reached the log",
-  );
-  assert.deepEqual(workerLines([...builder, merge(3, "sky", RUN, { conflict: true })]), ["Made the sky."]);
-  assert.deepEqual(workerLines([...builder, merge(3, "sky", "r-other")]), ["Made the sky."]);
-  assert.deepEqual(workerLines([...builder, merge(3, "sea", RUN)]), ["Made the sky."]);
-  assert.deepEqual(
-    workerLines([...builder, merge(3, "sky", RUN), finished(4, "sky", "Make the sky", inRun, { verdict: "rejected" })]),
-    ["Made the sky. Added to your game."],
-    "a rejection after it went in changes nothing",
-  );
+  // Flipped: the line said "Made the sky. Added to your game."
+  assert.deepEqual(workerLines([...builder, merge(3, "sky", RUN)]), []);
+  const summary = summarizeRun([...builder, merge(3, "sky", RUN)], "valley", RUN);
+  assert.equal(summary.tasks.find((task) => task.id === "sky")?.integrations, 1, "the card's row reads added");
 });
 
-it("work in the game reads added once its worker is over, however it ended, as on its row: stopped, failed, or cut off by its run's end", () => {
+it("work in the game reads added on its card's row once its worker is over, however it ended; at work on a next round, working", () => {
   const merge = (id: number) =>
     custom(id, CustomEvent.IntegrationMerge, {
       runId: RUN,
@@ -526,37 +513,20 @@ it("work in the game reads added once its worker is over, however it ended, as o
       head: "h1",
       conflict: false,
     });
-  const lines = (...events: EventEnvelope[]) =>
-    toEntries(events)
-      .filter(isWorkerLine)
-      .map((line) => [line.text, line.workerDone]);
-  const added = [["Raise the land. Added to your game.", true]];
+  const rowOf = (...events: EventEnvelope[]) =>
+    buildChecklist({ summary: summarizeRun(events, "valley", RUN), plan: [], finishing: false, now: Date.now() })
+      ?.rows[0];
   const begun = [
     custom(1, CustomEvent.RunStarted, { runId: RUN, project: "valley", mode: "director" }),
     started(2, "land", "Raise the land", inRun),
     merge(3),
   ];
-  assert.deepEqual(
-    lines(...begun),
-    [["Raise the land…", false]],
-    "added once, still at work on its next round: working, as its row says",
-  );
-  assert.deepEqual(
-    lines(...begun, finished(4, "land", "Raise the land", inRun, { state: "stopped" })),
-    added,
-    "added, then stopped",
-  );
-  assert.deepEqual(
-    lines(...begun, finished(4, "land", "Raise the land", inRun, { state: "failed", stopCode: "error" })),
-    added,
-    "added, then failed",
-  );
-  assert.deepEqual(
-    lines(
-      ...begun,
-      custom(4, CustomEvent.RunFinished, { runId: RUN, project: "valley", interrupted: true, victory: false }),
-    ),
-    added,
-    "added, then its run ended before its end reached the log",
-  );
+  // Flipped: these were the worker's own line ("Raise the land. Added to your game.").
+  assert.deepEqual(workerLines(begun), [], "a run's worker draws no line");
+  assert.equal(rowOf(...begun)?.mark, PartMark.Working, "added once, still at work on its next round");
+  for (const [name, end] of [
+    ["stopped", { state: "stopped" }],
+    ["failed", { state: "failed", stopCode: "error" }],
+  ] as const)
+    assert.equal(rowOf(...begun, finished(4, "land", "Raise the land", inRun, end))?.mark, PartMark.Added, name);
 });

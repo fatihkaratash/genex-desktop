@@ -6,6 +6,7 @@
  * became a seventeen-hour build of a title card.
  */
 import { MAX_RUN_HOURS } from "./config.ts";
+import { UNTIL_DONE_WORDS } from "./until-done-prompts.ts";
 import { LoopProfile } from "./folder-facts.ts";
 import { GameEngine } from "./game-engine.ts";
 import { askUser } from "./interview-question.ts";
@@ -16,7 +17,7 @@ import { OPEN_QUICK_IS_A_BUILD, openBuildWords, openStillsWords } from "./open-l
 /** The build a Loop chat may start: its launch tool, the composer's hours, stills and folder. */
 export interface LaunchGrant {
   toolName: string;
-  /** The composer's hours for a build; none runs it until its judges are satisfied. */
+  /** The composer's hours for a build; none runs it until what was asked is verified (`UNTIL_DONE_WORDS`). */
   hours?: number | null;
   /** How many stills the commission carries (its mood board). */
   frameCount?: number;
@@ -62,7 +63,7 @@ const UNREAL_GOAL_LOOK_FIRST =
 /** How long a build may run, as the chat reads it. */
 function budgetWords(hours: number | null | undefined): string {
   if (typeof hours === "number" && hours > 0) return `up to ${hours} h`;
-  return `until its judges are satisfied, ${MAX_RUN_HOURS} h at most`;
+  return `${UNTIL_DONE_WORDS}, ${MAX_RUN_HOURS} h at most`;
 }
 
 /** How long an Unreal Loop runs, as the chat reads it: no judge ends it, its hours do. */

@@ -8,15 +8,14 @@ names is a link: game Markdown and images open beside it, others in their app (p
 only shown). Empty chat is blank. Only the prompt bar writes and sends; a pasted image
 adds the picture, not its file name.
 
-Chat work shows a short status and elapsed time; waiting is static. A running build is one card
-(time used, what happens now, Builds) with nothing under it.
+Chat work shows a short status and elapsed time; waiting is static. A running build is one card,
+its parts counted; it opens to their checklist and Open in Builds. Run workers get no lines.
 
 Neighboring tools group under **Worked on N steps** (or **Worked in Unreal**);
-failures stay visible. Play views and assets sit under the work
-that made them. Build updates use a short status and See it;
-a finished build is that card with Play, opening Builds; checks stay in Builds and Studio.
-A build that taught nothing adds no learned line.
-The [design specification](../agent/design.md#chat-reading-and-activity) owns exact values.
+failures stay visible. Play views and assets sit under their work. Build updates use a short
+status and See it; a finished build is that card with Play; checks stay in Builds and Studio.
+A build that taught nothing adds no learned line. Exact values:
+[design specification](../agent/design.md#chat-reading-and-activity).
 
 ## Questions and plans
 
@@ -41,8 +40,8 @@ quits; agents may [look at apps](projects-engines.md#plugins-on-or-off) in any m
 ## Sending, waiting and history
 
 A sent message shows at once: idle, as the next bubble, **Sending** until saved.
-While the chat works it joins that turn, **Sending…** until the agent reads it, then sits where
-read. During a build its lead takes and answers it at once.
+While the chat works it joins that turn, **Sending…** until read, then sits where read. During a
+build its lead answers it at once; asked to finish, it wraps up.
 Otherwise (a picture, another model) it waits **Queued**, removable. During work a
 sendable draft shows Send, else Stop; Stopping shows until it ends, and Stop works
 again after five seconds. Stop hands over to
@@ -56,7 +55,7 @@ files** returns the folder to before it, off at first if files changed outside t
 line says why only the conversation rewinds). Files too large to save stay, named in dialog and chat.
 Outside Unreal projects' changes stay ([Unreal](projects-engines.md#unreal)).
 
-History is paged; reading older messages stops following output.
+History is paged; reading older ones stops following output.
 
 ## Where to work
 

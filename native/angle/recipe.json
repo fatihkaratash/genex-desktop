@@ -1,5 +1,5 @@
 {
-  "$comment": "Genex's pinned ANGLE builds (plan D9 = A, D17 = B). One ANGLE commit for every destination: the angle_revision in the DEPS of the Chromium that Electron 43.7.6 ships. build_angle.py reads this file locally and in .github/workflows/angle.yml; change the pin here and nowhere else.",
+  "$comment": "Genex's pinned ANGLE builds (plan D9 = A, D17 = B). One ANGLE commit for every destination: the angle_revision in the DEPS of the Chromium that Electron 43.7.6 ships. build_angle.py reads this file locally and in .github/workflows/angle.yml; change the pin here and nowhere else. Built in this public repository from the same pin; bundle-lock.json names that run.",
   "angle": {
     "repo": "https://chromium.googlesource.com/angle/angle.git",
     "commit": "c5bf49e78850a5335a8fa2a7bfb53b559fbfc927",

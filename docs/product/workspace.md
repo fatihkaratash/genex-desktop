@@ -33,7 +33,7 @@ commands to copy, Retry.
 - **Create game** offers Three.js or Rust · wgpu (not C++ · raylib), starting on Rust where it
   builds ([rollback](../release-operations.md#default-stack-and-rollback)).
 - **Settings → Games** moves new games to an empty folder (default `~/AI Games`);
-  **Storage** frees older builds, keeping paused and latest ones.
+  **Storage** frees older builds, keeping paused and latest.
 - **Settings → Privacy**: Share build metrics (off by default), See what would be sent and
   Delete what I shared ([PRIVACY](../../PRIVACY.md)).
 - Home's **Open a folder…** inspects before writing (Claude settings and hooks trusted unless

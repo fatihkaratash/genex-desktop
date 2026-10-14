@@ -151,6 +151,14 @@ test("one effort serves every role at the closest level each model accepts", () 
   );
   assert.equal(mixed.efforts?.planner, "medium");
 });
+test("one effort runs the lead at it and the workers and reviewers at most high; a lower one is every role's", () => {
+  const choices = toChoices(engines);
+  const picks = { planner: "bonsai-pq", builder: "bonsai-pq", judge: "bonsai-pq" };
+  const max = withRoleEfforts(picks, choices, "bonsai", "max");
+  assert.deepEqual(max.efforts, { planner: "max", builder: "high", judge: "high" });
+  const medium = withRoleEfforts(picks, choices, "bonsai", "medium");
+  assert.deepEqual(medium.efforts, { planner: "medium", builder: "medium", judge: "medium" });
+});
 test("an effort a model lacks becomes its nearest level, the faster one on a tie", () => {
   assert.equal(nearestEffort("ultra", ["low", "medium", "high", "max"]), "max");
   assert.equal(nearestEffort("xhigh", ["low", "medium", "high", "max"]), "high");

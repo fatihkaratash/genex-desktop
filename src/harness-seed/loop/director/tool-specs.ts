@@ -30,6 +30,8 @@ export const DirectorTool = {
   Integrate: "integrate",
   Show: "show",
   Note: "note",
+  /** The user asked to finish: no worker or round starts after it, and the run wraps up once no loop worker runs (wrap-up.ts). */
+  WrapUp: "wrap_up",
   Finish: "finish",
   /** Not a director tool: the studio asking where a target lives (it is in no schema below). */
   ResolveRoot: "resolve_root",
@@ -425,6 +427,18 @@ export const DIRECTOR_TOOLS: LiveToolSpec[] = [
     },
   },
   {
+    name: DirectorTool.WrapUp,
+    description:
+      "The user asked to finish or wrap up: call this first. No worker or round starts after it; running workers end the round they are in, you integrate what they keep, then the wrap-up starts. To stop at once: finish user_asked.",
+    parameters: {
+      type: "object",
+      properties: {
+        user_asked: { type: "string", description: "Their words asking to finish, quoted exactly." },
+      },
+      required: ["user_asked"],
+    },
+  },
+  {
     name: DirectorTool.Finish,
     description:
       "Close the run: stop workers, land the integration branch in the live game folder when it is healthy (land=no keeps it unlanded), write the report. Call it before your deadline; an unfinished run lands nothing.",
@@ -447,8 +461,7 @@ export const DIRECTOR_TOOLS: LiveToolSpec[] = [
         },
         user_asked: {
           type: "string",
-          description:
-            "Timed build with working time left: the user's words asking to stop or finish now, quoted exactly from their message to this run.",
+          description: "To stop now with working time left: the user's words asking for it, quoted exactly.",
         },
       },
       required: ["summary"],

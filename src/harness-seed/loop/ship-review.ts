@@ -52,13 +52,6 @@ const WARNING_CHARS = 1_200;
 const ERROR_LINES = 6;
 /** The frame of the page as the user sees it: the art director judges the game's own frames. */
 const USER_VIEW = "user:view";
-/**
- * How hard the art director thinks at most: its look must end inside its few minutes
- * (director/art-direction.ts `ART_DIRECTION_JUDGE_MS`), which the deepest efforts outlast.
- */
-const SHIP_REVIEW_EFFORT = "high";
-/** The composer's efforts past the art director's (shared/model-preferences.ts `ReasoningEffort`). */
-const PAST_SHIP_REVIEW_EFFORT: ReadonlySet<string> = new Set(["xhigh", "max", "ultra"]);
 
 /** How much a defect stands in the way of shipping. Persisted in verdicts and the journal: never rename a value. */
 export const DefectSeverity = { Blocker: "blocker", Visible: "visible", Nit: "nit" } as const;
@@ -113,10 +106,13 @@ type AskJudgeFor = (
   ask: { run: Run; systemPrompt: string; userContent: string; images?: MessageImage[]; effort?: string },
 ) => Promise<{ raw: AnyRecord; judged: AnyRecord }>;
 
-/** The effort the art director is asked at: the run's judge effort, brought down to the look's own. */
+/**
+ * The effort the art director is asked at: the run's judge effort, which a reviewer's ceiling holds
+ * to a look that ends inside its few minutes (director/art-direction.ts `ART_DIRECTION_JUDGE_MS`;
+ * model-roles.ts `WORKER_EFFORT_CEILING`).
+ */
 export function shipReviewEffort(run: Run): string | undefined {
-  const effort = roleEffort(run, RoleKey.Judge);
-  return effort && PAST_SHIP_REVIEW_EFFORT.has(effort) ? SHIP_REVIEW_EFFORT : effort;
+  return roleEffort(run, RoleKey.Judge);
 }
 
 /** One frame as an image block for the judge. */

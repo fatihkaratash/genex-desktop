@@ -1,7 +1,7 @@
 /**
- * Where the user's Unreal stands for Genex, in one word for the Unreal toolbar button and the
- * panel: Set up, Not open, Starting or Ready, Add for an open game that isn't made in Unreal, and
- * Get while no Unreal Genex works with is installed.
+ * Where the user's Unreal stands for Genex, in one word for the Unreal toolbar button's dot and
+ * the panel: Set up, Not open, Starting or Ready, Add for an open game that isn't made in Unreal,
+ * and Not installed while no Unreal Genex works with is installed.
  * Ready needs both the project's own port answering as Epic's server and an editor process
  * running. The toolbar asks every so often, so its status is cheap: the plugin's own records, one
  * check that the editor process runs, and one MCP handshake on the project's own port; no folder
@@ -89,22 +89,31 @@ const MESSAGE = {
   GetUnreal: (version: string) => `Get Unreal Engine ${version} to make games in Unreal.`,
 } as const;
 
-/** The one tone of the Unreal button's word: the toolbar draws `info` in the muted text colour, never amber or green. */
+/** The Unreal button's grey: the toolbar draws `info` in the muted ink. */
 const MUTED = "info" as const satisfies PluginToolbarStatus["tone"];
 
-/** The toolbar's badge and tone for each connection: where the project stands, as a state, never a verb. */
+/**
+ * The toolbar's badge for each connection, drawn as a dot: green once Ready, amber while Starting,
+ * grey otherwise. Its word, where the project stands as a state and never a verb, is the tooltip's
+ * first line.
+ */
 const BADGE = {
-  [Connection.SetUp]: { badge: "Not set up", tone: MUTED },
-  [Connection.NotOpen]: { badge: "Not open", tone: MUTED },
-  [Connection.Starting]: { badge: "Starting", tone: MUTED },
-  [Connection.Ready]: { badge: "Ready", tone: MUTED },
+  [Connection.SetUp]: { badge: "Not set up", tone: MUTED, dot: true },
+  [Connection.NotOpen]: { badge: "Not open", tone: MUTED, dot: true },
+  [Connection.Starting]: { badge: "Starting", tone: "warn", dot: true },
+  [Connection.Ready]: { badge: "Ready", tone: "ok", dot: true },
 } as const satisfies Record<Connection, PluginToolbarStatus>;
 
-/** What an open game with no Unreal project says: no badge on every web game, only that the button can start one. */
+/** What an open game with no Unreal project says: no dot on every web game, only that the button can start one. */
 const ADD = { tone: MUTED, title: MESSAGE.AddToGame } as const satisfies PluginToolbarStatus;
 
 /** What the button says while no Unreal Genex works with is installed: the panel shows how to get it. */
-const GET: PluginToolbarStatus = { badge: "Get", tone: MUTED, title: MESSAGE.GetUnreal(installEngineVersion()) };
+const GET: PluginToolbarStatus = {
+  badge: "Not installed",
+  tone: MUTED,
+  dot: true,
+  title: MESSAGE.GetUnreal(installEngineVersion()),
+};
 
 /**
  * Where a project stands, from what is known about it. An answer on its port counts only while an
@@ -249,10 +258,10 @@ async function gameSubject(storage: string, game: string): Promise<Subject> {
 }
 
 /**
- * The Unreal toolbar button's status: Get while no Unreal Genex works with is installed. Otherwise,
- * with a game open it is that game's: Add while the game has
- * no Unreal project, else its own project's state, named. With no game open it is the project
- * chosen in the panel (else the first set-up one). Only a port from Genex's own setup records is
+ * The Unreal toolbar button's status: Not installed while no Unreal Genex works with is installed.
+ * Otherwise, with a game open it is that game's: Add while the game has no Unreal project, else its
+ * own project's state, named. With no game open it is the project chosen in the panel (else the
+ * first set-up one). Only a port from Genex's own setup records is
  * ever asked. The one write is removing this project's own Starting record once it answers.
  */
 export async function toolbarStatus(

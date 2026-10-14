@@ -148,6 +148,13 @@ const glyphs = {
       <ellipse className="a-meridian" cx="12" cy="12" rx="3.7" ry="8.5" />
     </>
   ),
+  // Unreal's U in its ring, as the Unreal plugin's own picture draws it, in line.
+  unreal: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M9 7.75v5a3 3 0 0 0 6 0v-5" />
+    </>
+  ),
   reload: (
     <g className="a-spin">
       <path d="M20 12a8 8 0 1 1-8-8c2.2 0 4.2.9 5.7 2.3L20 8.5" />

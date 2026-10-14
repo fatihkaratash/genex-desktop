@@ -17,6 +17,7 @@ import { BuildTarget, GameStack } from "../loop/native-contract.ts";
 import { nightStack, scaffoldFor } from "../loop/native-loop.ts";
 import { LoopProfile, loopProfileOf, ProjectStarter, ProjectTool } from "../loop/folder-facts.ts";
 import { OPEN_LAUNCH_WORDS } from "../loop/open-loop-prompts.ts";
+import { UNTIL_DONE_WORDS } from "../loop/until-done-prompts.ts";
 import { scopeItems } from "../loop/scope.ts";
 
 /**
@@ -556,8 +557,8 @@ export const tools: HarnessTool[] = [
       // outrank the binding, and the run then built in a second, empty folder while the user
       // typed into the chat attached to the first.
       const project = slugProject(args.project || args.direction || args.goal);
-      // No cap set means run until the critics are satisfied — with a 24h safety ceiling so a
-      // wedged run can never hold the machine forever.
+      // No cap set means run until what was asked is verified and nothing blocks it — with a 24h
+      // safety ceiling so a wedged run can never hold the machine forever.
       const capped = typeof autopilot.hours === "number" && autopilot.hours > 0;
       const hours = capped ? clampRunHours(autopilot.hours) : MAX_RUN_HOURS;
       const notes = criticNotes(args);
@@ -599,16 +600,14 @@ export const tools: HarnessTool[] = [
   },
 ];
 
-/** How an ∞ build runs, as the launch tool answers: a web game's until its critics are satisfied, any other project's until a reviewer's yes. */
+/** How an ∞ build runs, as the launch tool answers: a web game's until what was asked is verified, any other project's until a reviewer's yes. */
 async function untilDoneWords(ctx: ToolCtx, project: string): Promise<string> {
   // A game list Genex can't read leaves the web words, as before.
   const listed = await Promise.resolve()
     .then(() => ctx.call(HostMethod.GameList, {}))
     .catch(() => null);
   const game = Array.isArray(listed) ? listed.find((one) => one?.name === project) : undefined;
-  return game && loopProfileOf(game) === LoopProfile.Open
-    ? OPEN_LAUNCH_WORDS.building
-    : "Building until the critics are satisfied";
+  return game && loopProfileOf(game) === LoopProfile.Open ? OPEN_LAUNCH_WORDS.building : `Building ${UNTIL_DONE_WORDS}`;
 }
 
 /** The reference stills the composer attached, without empty slots. */

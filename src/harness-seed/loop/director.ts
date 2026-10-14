@@ -90,6 +90,7 @@ import { reopenMarkOf } from "./director/reopen.ts";
 import { reopenNote } from "./director/reopen-prompts.ts";
 import { timedWorkRemaining } from "./director/budgets.ts";
 import { continuationPrompt, directorBrief, limitResumePrompt, resumeNote, wrapUpPrompt } from "./director/briefs.ts";
+import { finishAsked } from "./director/wrap-up.ts";
 import { DIRECTOR_TOOLS, directors } from "./director/tool-specs.ts";
 import {
   LIMIT_WAIT_MARGIN_MS,
@@ -581,6 +582,7 @@ async function wrapUp(loopRun: LoopRun, talk: DirectorTalk, result: Partial<Dele
         integrationHealthy: state.integrationHealthy,
         workers: [...state.workers.values()],
         fromScratch: state.fromScratch,
+        userAsked: await finishAsked(loopRun),
       }),
       talk.sessionId,
       left - WRAP_UP_MARGIN_MS,

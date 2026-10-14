@@ -24,6 +24,7 @@ import { hasText } from "./text.ts";
 import { DEFAULT_CAMERA } from "./cameras.ts";
 import { demoOfFrame, isPassFrame } from "./pass-frames.ts";
 import { ProbeAfter } from "./throttle-bot.ts";
+import { HUD_LAYOUT_CHECKS } from "./hud-layout.ts";
 // A namespace for what kinds.ts gained later: a seed upgrade keeps a kinds.ts the agent edited, and
 // a named import it lacks would stop this file loading.
 import * as kinds from "./kinds.ts";
@@ -79,7 +80,7 @@ function stackBoard(stack: GameStack | null | undefined): StackBoard {
   return known ? BOARD_OF_STACK[stack] : BOARD_OF_STACK[Stack.ThreeJs];
 }
 /** The harness-owned checks about the three.js page's one screen: DOM UI, a second HUD, and the HUD's coverage and overlap. */
-const SCREEN_CHECKS: readonly string[] = ["no-dom-ui", "single-hud", "hud-coverage", "hud-overlap"];
+const SCREEN_CHECKS: readonly string[] = ["no-dom-ui", "single-hud", ...HUD_LAYOUT_CHECKS];
 
 /** The most checks one facet's board carries. */
 export const MAX_CHECKS = 16;
@@ -1121,13 +1122,18 @@ function deltaPathsIn(expr: unknown): string[] {
 }
 
 /** The harness checks a board of this game carries, by id, before the front-end owner's are left off. */
-function harnessCheckIds(game: AnyRecord | null, { owner, screen }: { owner: boolean; screen: boolean }): string[] {
+function harnessCheckIds(
+  game: AnyRecord | null,
+  { owner, screen, drawsHud }: { owner: boolean; screen: boolean; drawsHud: boolean },
+): string[] {
   const traits = normalizeGameTraits(game);
   // `screen: false` — a game the user brought with its own UI (DOM menus, its own HUD) keeps
   // it; the one-screen checks describe the template's screen, not this game's.
   const driven = traits.keyboardMove || traits.mouseLook;
+  // Any part can paint a second HUD; only the part that draws the HUD answers for its size and layout.
+  const layoutOff: ReadonlySet<string> = new Set(drawsHud ? [] : HUD_LAYOUT_CHECKS);
   return [
-    ...(screen && traits.hud ? SCREEN_CHECKS : []),
+    ...(screen && traits.hud ? SCREEN_CHECKS.filter((id) => !layoutOff.has(id)) : []),
     ...(owner && traits.mouseLook ? ["look-turns-camera"] : []),
     ...(owner && traits.keyboardMove ? ["keys-move-player"] : []),
     ...(owner && driven ? ["reaches-play"] : []),
@@ -1153,6 +1159,8 @@ function harnessCheckIds(game: AnyRecord | null, { owner, screen }: { owner: boo
  * `keepsFrontEnd` is the worker that owns the front-end (`setup {"begin":false}`): its evidence
  * and judges stay on the title (evidence.ts reachPlay), so the checks that only hold in play —
  * in play, the controls move the player, the in-play HUD budget — are left off its board.
+ * `drawsHud` false is a part another part draws the HUD for: it is never failed for the HUD's
+ * coverage or overlap, which it cannot change.
  */
 export function withHarnessChecks<S extends { checks?: Check[] }>(
   spec: S,
@@ -1162,6 +1170,7 @@ export function withHarnessChecks<S extends { checks?: Check[] }>(
     game = null,
     screen = true,
     keepsFrontEnd = false,
+    drawsHud = true,
     stack = null,
   }: {
     ownsMain?: boolean;
@@ -1169,6 +1178,7 @@ export function withHarnessChecks<S extends { checks?: Check[] }>(
     game?: AnyRecord | null;
     screen?: boolean;
     keepsFrontEnd?: boolean;
+    drawsHud?: boolean;
     stack?: GameStack | null;
   } = {},
 ): S & { checks: Check[] } {
@@ -1178,7 +1188,7 @@ export function withHarnessChecks<S extends { checks?: Check[] }>(
   // A compiled game (C++ · raylib, Rust · wgpu) has no DOM and no three.js page HUD to count or
   // measure: the one-screen checks are off its board altogether.
   const compiled = !stackBoard(stack).domScreen;
-  const wanted = harnessCheckIds(game, { owner, screen: screen && !compiled }).filter(
+  const wanted = harnessCheckIds(game, { owner, screen: screen && !compiled, drawsHud }).filter(
     (id) => !keepsFrontEnd || !IN_PLAY_CHECKS.has(id),
   );
   const overrides: Record<string, AnyRecord> = {

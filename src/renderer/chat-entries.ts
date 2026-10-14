@@ -5,8 +5,7 @@ import { parseSuggestion } from "./chat/plugin-suggestion.ts";
 import { type JobHandle, type JobStart, jobEndLine, jobStart, missingPanes } from "./chat/job-lines.ts";
 import { type AppLookAccessKind, JobTool } from "../shared/jobs.ts";
 import { type WorkerLine, workerEndLine, workerLineEnded, workerStartLine } from "./chat/worker-lines.ts";
-import { isWorkerOfGraph, workerKeyOf } from "../shared/run-graph-events.ts";
-import { WorkerEnd } from "../shared/workers.ts";
+import { workerKeyOf } from "../shared/run-graph-events.ts";
 import { type FinishRecord, FinishCheckStep, finishRecordOf } from "../shared/finish-check.ts";
 /**
  * The chat transcript as entries: the thread's event log read once, oldest first, into the
@@ -919,6 +918,8 @@ function settleDelegatedTools(chat: ChatDraft, scope: string, payload: Delegated
 }
 
 function readDelegatedTurn(chat: ChatDraft, eventId: string, scope: string, payload: DelegatedRecord): void {
+  // A provider's own error text (a limit, a lost sign-in) is never a reply: the run says it in its words.
+  if (payload.data?.apiError) return;
   for (const [i, part] of (payload.data?.parts ?? []).entries()) {
     const key = `${eventId}-${i}`;
     if (readDelegatedWords(chat, key, part, payload)) continue;
@@ -1169,13 +1170,19 @@ function narrateJobEnded(chat: ChatDraft, event: EventEnvelope): void {
 }
 
 /**
- * A worker's line: "Port the car…". A start for a worker still working on the page (a resume)
- * changes nothing; one after its end (a builder started again under its id) is a new attempt, a
- * line of its own that carries nothing of the old end.
+ * A run's worker is a row of its Building card's list (chat/build-checklist.ts), added or working
+ * there: never a line of the transcript. A chat turn's worker, which has no card, keeps its line.
+ */
+const ofRun = (payload: { runId?: unknown }): boolean => typeof payload.runId === "string" && payload.runId !== "";
+
+/**
+ * A chat turn's worker's line: "Port the car…". A start for a worker still working on the page (a
+ * resume) changes nothing; one after its end (a builder started again under its id) is a new
+ * attempt, a line of its own that carries nothing of the old end.
  */
 function narrateWorkerStarted(chat: ChatDraft, event: EventEnvelope): void {
   const payload = customPayload(event.data, CustomEvent.WorkerStarted);
-  const key = payload ? workerKeyOf(payload) : null;
+  const key = payload && !ofRun(payload) ? workerKeyOf(payload) : null;
   if (!payload || !key) return;
   const known = chat.workerLines.get(key)?.line;
   if (known && !workerLineEnded(known)) return;
@@ -1189,7 +1196,7 @@ function narrateWorkerStarted(chat: ChatDraft, event: EventEnvelope): void {
  */
 function narrateWorkerFinished(chat: ChatDraft, event: EventEnvelope): void {
   const payload = customPayload(event.data, CustomEvent.WorkerFinished);
-  const key = payload ? workerKeyOf(payload) : null;
+  const key = payload && !ofRun(payload) ? workerKeyOf(payload) : null;
   if (!payload || !key) return;
   const known = chat.workerLines.get(key);
   const line = workerEndLine(payload, known?.line);
@@ -1206,34 +1213,6 @@ function rewriteWorkerLine(known: { entry: ActionEntry; line: WorkerLine }, line
   known.line = line;
   known.entry.text = line.text;
   known.entry.workerDone = line.done;
-}
-
-/**
- * A run's lead merged a worker's work cleanly into its build (the director's `integrate`): the
- * worker's line says it is in the game, as its row on the run's graph does. A conflict adds nothing.
- */
-function narrateWorkerIntegrated(chat: ChatDraft, event: EventEnvelope): void {
-  const merge = customRecord(event.data);
-  if (merge?.event_type !== CustomEvent.IntegrationMerge || merge.payload.conflict === true) return;
-  const key = workerKeyOf({ runId: merge.payload.runId, workerId: merge.payload.facetId });
-  const known = key ? chat.workerLines.get(key) : undefined;
-  const line = known ? workerEndLine({ merged: true }, known.line) : null;
-  if (known && line) rewriteWorkerLine(known, line);
-}
-
-/**
- * A run finished: a worker of it whose line still works (no end reached the log, as when the app
- * closed the run at its start) stopped with it, as its row on the run's graph says; one whose work
- * is in the game reads added.
- */
-function narrateRunWorkersStopped(chat: ChatDraft, event: EventEnvelope): void {
-  const runId = customPayload(event.data, CustomEvent.RunFinished)?.runId;
-  if (!runId) return;
-  for (const [key, known] of chat.workerLines) {
-    if (!isWorkerOfGraph(key, runId) || known.line.ended || known.line.done) continue;
-    const line = workerEndLine({ state: WorkerEnd.Stopped }, known.line);
-    if (line) rewriteWorkerLine(known, line);
-  }
 }
 
 /** A worker's own line, remembered by its key: never routine, so it never folds into activity. */
@@ -1945,8 +1924,6 @@ const NARRATORS: readonly Narrator[] = [
   narrateJobEnded,
   narrateWorkerStarted,
   narrateWorkerFinished,
-  narrateWorkerIntegrated,
-  narrateRunWorkersStopped,
   narrateFinishCheck,
   narrateRunFinishSettled,
   narrateAppAccess,

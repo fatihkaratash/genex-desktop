@@ -238,7 +238,7 @@ describe("the run's working time survives a Resume (journal.ts)", () => {
       return { ok: true, sessionId: "lead-1" };
     });
     await runWakeLoop(two, talk, BRIEF, fakeClock(morning));
-    assert.doesNotMatch(turns[0]!.prompt, /your session reached its deadline/, "not only a wrap-up");
+    assert.doesNotMatch(turns[0]!.prompt, /the working time is over/, "not only a wrap-up");
     assert.equal(turns[0]!.timeoutMs, clock.softDeadline - morning, "the working time it had left");
 
     // …and the count goes on from there: an hour into the morning, four hours worked.
@@ -416,7 +416,7 @@ describe("a resumed run reads its journal back (journal.ts restoreLoopRun, wake.
     await runWakeLoop(loopRun, talk, BRIEF, fakeClock(late));
 
     assert.equal(turns.length, 1);
-    assert.match(turns[0]!.prompt, /your session reached its deadline/, "the wrap-up, in the first message");
+    assert.match(turns[0]!.prompt, /the working time is over/, "the wrap-up, in the first message");
     assert.equal(turns[0]!.timeoutMs, clock.finalDeadline - WRAP_UP_MARGIN_MS - late, "the wrap-up's own time");
   });
 

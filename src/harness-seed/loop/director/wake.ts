@@ -42,6 +42,7 @@ import {
 } from "../outage.ts";
 import { isProviderLoss, lostSignIn, noteProviderLoss, pauseDecision } from "../provider-loss.ts";
 import { CLIP_DETAIL } from "../text.ts";
+import { WorkerMode } from "../outcomes.ts";
 import { RunEvent } from "../run-events.ts";
 import { SteerDelivery } from "../steer-delivery.ts";
 import { MINUTE_MS, minutes, SECOND_MS, sleep } from "../time.ts";
@@ -448,17 +449,22 @@ async function turnFacts(
 ): Promise<TurnFacts> {
   const { inbox, runningWorkers, state } = loopRun;
   const finishRequested = await inbox.finishing().catch(() => false);
+  const open = leadsOpenLoop(loopRun);
+  // An open Loop's lead is busy while its pool's workers or the run's jobs run.
+  const running = open ? await activeWork(loopRun, now) : runningWorkers().length;
+  // Only a loop worker has a round to end: a single session is stopped by the wrap-up's finish.
+  const roundsRunning = !open && runningWorkers().some((worker) => worker.mode === WorkerMode.Loop);
   return {
     ok: result?.ok === true,
     closed: loopRunOver(loopRun) || wake.wrapping,
     providerLost: Boolean(state.limit) || (await pauseOnLostSignIn(loopRun, now)),
-    // An open Loop's lead is busy while its pool's workers or the run's jobs run.
-    running: leadsOpenLoop(loopRun) ? await activeWork(loopRun, now) : runningWorkers().length,
+    running,
     planWindowOpen: planWindowOpen(state, now),
     workersLimitPending: workersLimitPending(state, now),
     idleAsked: wake.idleAsked,
     workingTimeLeft: now < loopRun.softDeadline && !finishRequested,
     finishRequested,
+    lastRoundsRunning: finishRequested && roundsRunning && now < loopRun.softDeadline,
     artDirectionOwed: artDirectionOwed(loopRun, wake),
     capped: cutByItsCap(wake, result),
     // An open Loop's lead builds by itself: a turn that did something is never idle.
@@ -504,10 +510,12 @@ function finishMarkView(loopRun: LoopRun, wake: WakeState, now: number): number 
 /**
  * When the art director's regular look at the whole game wakes the lead (art-direction.ts
  * `shipLookAt`) — whatever the lead is doing, so a lead kept busy by its workers is still told —
- * or never: in the wrap-up, or on a run without the art director's regular look.
+ * or never: in the wrap-up or once the user asked to finish (no round would take its blockers), or
+ * on a run without the art director's regular look.
  */
 function shipLookView(loopRun: LoopRun, wake: WakeState, now: number): number | null {
-  if (wake.wrapping || typeof loopRun.shipLookAt !== "function" || leadsOpenLoop(loopRun)) return null;
+  const finishing = wake.wrapping || wake.finishSaid;
+  if (finishing || typeof loopRun.shipLookAt !== "function" || leadsOpenLoop(loopRun)) return null;
   const finishMarkAt = finishMarkView(loopRun, wake, now);
   return loopRun.shipLookAt({ nextAtWorkedMs: wake.nextShipLookWorkedMs, now, finishMarkAt });
 }
@@ -575,7 +583,11 @@ async function collect(loopRun: LoopRun, wake: WakeState, now: number): Promise<
   if (leadsOpenLoop(loopRun)) await collectOpen(loopRun, now);
   const untold = await inbox.steering(undefined, false, { onlyNew: true }).catch(() => []);
   wake.userWaiting = wake.owed.length > 0 || unheard(wake, untold).length > 0;
-  wake.finishNew = !wake.finishSaid && (await inbox.finishing().catch(() => false));
+  const finishing = await inbox.finishing().catch(() => false);
+  // An ask the lead recorded itself (`wrap_up`) is said already: no news to it. An open Loop's wrap-up starts on its wake.
+  const ownAsk = finishing && Boolean(state.finishAsk) && !leadsOpenLoop(loopRun);
+  if (ownAsk) wake.finishSaid = true;
+  wake.finishNew = !wake.finishSaid && finishing;
   // Before the first worker there is no monitor to hand a worker's steer over.
   if (!state.monitor) await routeUserSteers().catch(() => {});
 }
@@ -707,6 +719,7 @@ function closingFor(loopRun: LoopRun, wake: WakeState, reasons: readonly WakeRea
       integrationHealthy: state.integrationHealthy,
       workers: [...state.workers.values()],
       fromScratch: state.fromScratch,
+      userAsked: wake.wrapCause === WrapCause.Finish || Boolean(state.finishAsk),
     });
     return wrapLead(wake.wrapCause ?? WrapCause.Deadline, wrapUp);
   }

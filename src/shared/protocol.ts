@@ -73,7 +73,7 @@ export interface LoopCommission {
 
 /**
  * Composer Autopilot on a chat turn. Hours are the optional "stop after N hours" cap — absent
- * means run until the critics are satisfied (A2). Frames are the mood board.
+ * means run until what was asked is verified and nothing blocks it (A2). Frames are the mood board.
  */
 /** Who plans, builds and judges — one model id per job; `undefined`/"default" is the engine's own default. */
 export interface RunRoles {
@@ -346,7 +346,7 @@ export interface RunSpec {
   /** observationDelays: backoff (ms) before re-trying a blind camera — a test/ops knob. */
   budgets: {
     wallClockMs: number;
-    /** The composer's ∞: run until the judge is satisfied; `wallClockMs` is then only the safety ceiling. */
+    /** The composer's ∞: run until what was asked is verified and nothing blocks it; `wallClockMs` is then only the safety ceiling. */
     untilSatisfied?: boolean;
     /** Genex credits the run's paid jobs may commit; an open Loop records 600 when none is given. */
     creditCap?: number;

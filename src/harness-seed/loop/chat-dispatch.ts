@@ -122,7 +122,7 @@ const MESSAGE = {
   stoppedBeforeTurn: "Stopped before it started — nothing was done. Send a message to go on.",
   turnFailed: (failure: unknown) => `turn failed: ${failure}`,
   // What the user is owed before they walk away: when to come back, that the machine has to
-  // stay awake, and that a paused run is not a lost one. "until the critics are satisfied"
+  // stay awake, and that a paused run is not a lost one. "until satisfied" alone
   // answered none of those — the first real run ended on the plan's five-hour window at 105
   // of 180 minutes and nobody had been told that could happen.
   buildPromised: (end: string) => `Building until about ${end} — keep the app open and the Mac awake. `,
@@ -1023,7 +1023,7 @@ function intakeProject(action: QueueAction, spec: AnyRecord, games: readonly { n
 
 /**
  * The time a commissioned run is given: its hours (held to the run limits), and whether the
- * composer asked for ∞, which runs until the judge is satisfied with those hours as the ceiling.
+ * composer asked for ∞, which runs until what was asked is verified, with those hours as the ceiling.
  * The app reads these back (`src/shared/run-state.ts` `recordedRunLoop`).
  */
 export function intakeBudgets(spec: AnyRecord): RunSpec["budgets"] {

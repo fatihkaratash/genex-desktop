@@ -39,6 +39,7 @@ import {
 } from "./folder-facts.ts";
 import { factsReadyPrompt } from "./project-prompts.ts";
 import { toolCall } from "./model-roles.ts";
+import { effortCap } from "./effort-cap.ts";
 import {
   endOfTurnCheckpoint,
   fireHooks,
@@ -266,7 +267,8 @@ function chatWorkersSeat(options: DelegatedOptions, handoff: Handoff): ChatWorke
     ...(options.text ? { ask: options.text } : {}),
     engine,
     ...(model ? { model } : {}),
-    ...(effort ? { effort } : {}),
+    // A worker thinks at most as hard as any run's worker (effort-cap.ts).
+    ...(effort ? { effort: effortCap(effort, false) } : {}),
     commission,
     project,
     gameDir: projectDir,

@@ -23,7 +23,9 @@ export interface FrameShot {
  * the `problems` and `warnings` it owes the judge, `emptyScene` (the base is empty by
  * inspection), the `declaredViewpoints` the game names, what the page paints outside the canvas
  * (`uiEntries`, `uiPrimary`) and the game's `entry` file a fix goes in (`main.js` unless named:
- * a C++ game's is `src/main.cpp`). The verdicts leave their counts on it for the phases after them.
+ * a C++ game's is `src/main.cpp`), and `camerasOwned` (false for a part that does not own the
+ * entry: a dead camera wiring is a warning for it). The verdicts leave their counts on it for the
+ * phases after them.
  */
 // biome-ignore lint/suspicious/noExplicitAny: each phase of a look adds the readings the phases after it read.
 export type FrameLook = Record<string, any>;
@@ -89,11 +91,17 @@ export function weighBlackness(look: FrameLook, statBearing: Shot[]): void {
 /** When every camera returned the same frame: an overlay, a dead camera contract, a stale picture, or one viewpoint. */
 export function sameFrameEverywhere(look: FrameLook): void {
   const { canvasSourced, declaredViewpoints, problems, uiEntries, uiPrimary, warnings } = look;
+  // Several viewpoints drawn on the canvas, all one picture: the camera wiring switches nothing.
+  const wiringDead = declaredViewpoints.length > 1 && canvasSourced;
   if (uiPrimary) {
     warnings.push(
       `a full-screen overlay covers the game (${uiEntries.slice(0, MAX_UI_ENTRIES).join(", ") || "the page"}) — every camera frame is the same picture behind it; judge user:view`,
     );
-  } else if (declaredViewpoints.length > 1 && canvasSourced) {
+  } else if (wiringDead && look.camerasOwned === false) {
+    warnings.push(
+      "every camera returned the same frame — the camera wiring is the entry owner's, not this part's: judge it on its other evidence",
+    );
+  } else if (wiringDead) {
     problems.push("every camera returned the same frame — debugCamera switches nothing, the cameras contract is dead");
   } else if (declaredViewpoints.length > 1) {
     warnings.push(

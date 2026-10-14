@@ -35,6 +35,7 @@ import { CALL_MARGIN_MS } from "../../src/harness-seed/loop/finish-check.ts";
 import { LEAD_CALL_MS } from "../../src/harness-seed/loop/finish-contract.ts";
 import { buildRunGraph } from "../../src/renderer/run-graph.ts";
 import { EntryAction, EntryKind, toEntries } from "../../src/renderer/chat-entries.ts";
+import { summarizeRun } from "../../src/shared/run-summary.ts";
 import {
   DIRECTOR_TOOLS,
   MAX_DIRECTOR_MEMORY,
@@ -178,6 +179,7 @@ describe("the director's tools and brief", () => {
       "integrate",
       "show",
       "note",
+      "wrap_up",
       "finish",
     ])
       assert.ok(names.includes(name), name);
@@ -1976,7 +1978,8 @@ describe("the loop the director can see, and the thresholds it may set", () => {
   it("syncs the head on every declared tool, and only spares the studio's own resolve_root", () => {
     for (const tool of DIRECTOR_TOOLS)
       assert.equal(headSynced(tool.name), true, `${tool.name} starts at the real head`);
-    assert.equal(DIRECTOR_TOOLS.length, 15, "fifteen tools, all of them synced");
+    // Flipped from 15: `wrap_up`, the user's ask to finish, is a declared tool too.
+    assert.equal(DIRECTOR_TOOLS.length, 16, "sixteen tools, all of them synced");
     // `resolve_root` is the studio asking where a target lives, not a director's decision: it
     // must not touch git. plan, worker_status, worker_steer, worker_stop and note used to be
     // outside the set, and note/worker_status are exactly what a director calls right after
@@ -3512,7 +3515,10 @@ describe("a director's run through the real core and harness", () => {
     const plazaLines = toEntries(events).flatMap((entry) =>
       entry.kind === EntryKind.Action && entry.action === EntryAction.Worker ? [entry.text] : [],
     );
-    assert.deepEqual(plazaLines, ["Painted the plaza red. Added to your game."]);
+    // Flipped: the run's worker had a line ("Painted the plaza red. Added to your game."); it is a row of the run's card now.
+    assert.deepEqual(plazaLines, []);
+    const plazaTask = summarizeRun(events as never, project.name, runId).tasks.find((task) => task.id === "plaza");
+    assert.equal(plazaTask?.integrations, 1, "the card's row reads added");
     const merges = customEvents(events, "integration_merge").filter((e) => e.runId === runId);
     assert.equal(merges.length, 1);
     assert.equal(merges[0]!.stage, "director");
@@ -3591,6 +3597,9 @@ describe("a director's run through the real core and harness", () => {
         "genex__asset",
         "genex__cli",
         "genex__cli-paid",
+        // Genex's cover tools (`genex-cover`), which a lead checks before it publishes.
+        "genex__cover",
+        "genex__cover-set",
         "genex__package",
         "genex__publish",
         "genex__publish-status",
@@ -3618,6 +3627,8 @@ describe("a director's run through the real core and harness", () => {
         "worker_status",
         "worker_steer",
         "worker_stop",
+        // Flipped: the user's ask to finish is recorded by the lead, quoting them.
+        "wrap_up",
       ],
       "the web lead's tools",
     );

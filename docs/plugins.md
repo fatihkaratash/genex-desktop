@@ -282,7 +282,8 @@ tools (`delegation-prompts.ts`).
 - `id` unique within the plugin; `label` 1–24 characters, not one of Studio's reserved labels
   (`Retry`, `Ready`, `Live`, `Builds`, `Assets`, `Export`, `Plugins`, `Reload`, `State`,
   `Close plugins`, compared case-insensitively); `ariaLabel` 1–60 characters, unique, not reserved;
-  `icon` at most 4 characters.
+  `icon` a glyph of at most 4 characters or a host icon (`globe`, `export`, `play`, `image`, `box`,
+  `boxes`, `unreal`).
 - `target` is either `{kind: "action", name, args?}` naming a declared action (scalar args, at
   most 16 keys) — pressed, it runs the same review → ticket → native approval sequence as the
   Plugins page — or `{kind: "panel", id}` naming a declared panel, which opens as a dialog over
@@ -298,13 +299,16 @@ arguments (and the current project binding) when the toolbar mounts, on every `p
 debounced to once per second, whenever the open game's own record changes (`game.changed` without a
 file, as a link to an engine project does), and every 30 s while a project is open; switching games
 clears the old game's words at once. It returns a
-`PluginToolbarStatus` — `{badge?, disabled?, title?, tone?: ok | warn | err | info, attention?}` —
-sanitized by `toolbarStatusFrom` (badge ≤ 16 characters, title ≤ 120, unknown tones dropped,
-`attention` a boolean). A button is drawn in the prompt bar's quiet pill fill, or in the accent while
-its status sets `attention` (the action is due) and the game is not empty; Genex's Publish uses
-only `title` and `attention`. A backend can also push a status without being asked through
-`events.emit` with `{kind: "toolbar", item, badge, tone, title, attention}`; the renderer applies it
-to that item, or re-asks the status action when the item is not named.
+`PluginToolbarStatus` — `{badge?, disabled?, title?, tone?: ok | warn | err | info, attention?, dot?}`
+— sanitized by `toolbarStatusFrom` (badge ≤ 16 characters, title ≤ 120, unknown tones dropped,
+`attention` and `dot` booleans). The badge is a word in its tone, or with `dot` a 6 px dot in it
+(green, amber, red, grey) whose word leads the tooltip. The title shows in the strip's own tooltip.
+A button is drawn in the prompt bar's quiet pill fill, or in the accent while its status sets
+`attention` (the action is due) and the game is not empty; Genex's Publish uses only `title` and
+`attention`. An offered update's Update badge is always a word in the quiet tone. A backend can also
+push a status without being asked through `events.emit` with
+`{kind: "toolbar", item, badge, tone, title, attention, dot}`; the renderer applies it to that item,
+or re-asks the status action when the item is not named.
 
 ### MCP servers
 
@@ -1000,17 +1004,18 @@ https://www.unrealengine.com/download. Windows console tools (`tasklist`, `taskk
 run by full path under `SystemRoot` with no window. These four actions are `native`, so a fixture
 profile refuses them.
 
-**Toolbar.** The item `editor` ("Unreal", aria-label "Unreal Editor", `requiresProject: false`)
-opens the setup panel and stays while the plugin is on, also before any game exists and for a web
-game. Its `toolbar-status` is per game. While no Unreal 5.8 or newer is installed (Epic's launcher
-list, read on every ask) the badge is Get, whatever the game. With a game open and no link (`links/<game>.json` missing,
+**Toolbar.** The item `editor` ("Unreal" after the host's `unreal` glyph, aria-label "Unreal
+Editor", `requiresProject: false`) opens the setup panel and stays while the plugin is on, also
+before any game exists and for a web game. Its `toolbar-status` is per game. While no Unreal 5.8 or
+newer is installed (Epic's launcher list, read on every ask) the badge is Not installed, whatever
+the game. With a game open and no link (`links/<game>.json` missing,
 undone or not trusted: a symlink, not JSON, another engine, a `.uproject` that is gone or not a
 plain file) there is no badge, only the title "Make this game in Unreal"; linked, it is that game's
 own project's state, named in the title: Not set up, Not open, Starting or Ready. Closing the panel
 asks again at once. With no game open it reports the
-project chosen in the panel. Every badge uses the `info` tone, which the toolbar draws in the second
-ink (4.5:1 on the pill in every theme), never amber or green; a screen reader hears it after the
-button's name (`aria-describedby`). The plugin page's Editor connection, once the plugin is on,
+project chosen in the panel. Every badge is a `dot`: Ready `ok` (green), Starting `warn` (amber),
+every other state `info` (grey). Its word leads the tooltip, above the title, and a screen reader
+hears it after the button's name (`aria-describedby`). The plugin page's Editor connection, once the plugin is on,
 shows the same word in place of the bridge's own Ready (`PluginConnections.tsx`). The state comes from Genex's records, one process check and the
 project's identity check on its port (remembered like the panel's), plus the project's own log only
 while Unreal runs unanswered. It scans no folders, and the only thing it writes is removing its own

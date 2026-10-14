@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { customEvents, startRig, waitForLog } from "../helpers/studio-rig.ts";
+import { errorMessage } from "../../src/shared/errors.ts";
 import type { McpConnector } from "../../src/shared/mcp.ts";
 import type { DelegateRequest } from "../../src/substrate/engines/types.ts";
 import { createToolRegistry } from "../../src/harness-seed/tools/index.ts";
@@ -56,6 +57,24 @@ async function approveFixtureConnector(
   assert.ok(ask);
   rig.core.resolveConsent(String(ask.consentId), true);
   return pending;
+}
+
+/**
+ * A plugin connector's call that needs no card (a tool its manifest says only reads, or any of its
+ * tools in an Auto chat): how it settled, an answer or an error, with no `plugin_consent` row added.
+ */
+async function runsUnasked(
+  rig: Awaited<ReturnType<typeof startRig>>,
+  invoke: () => Promise<unknown>,
+): Promise<{ value: unknown } | { error: unknown }> {
+  const cards = async () => customEvents(await rig.core.listAllEvents(), "plugin_consent").length;
+  const before = await cards();
+  const outcome = await invoke().then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  assert.equal(await cards(), before, "it ran with no card");
+  return outcome;
 }
 
 it("connection status tracks a delegated response through revocation and clears when it settles", async () => {
@@ -598,10 +617,10 @@ it("bundled main Genex MCP joins an existing chat after account unlock on every 
           );
           const tools = request.liveTools?.filter((t) => t.name.startsWith("genex-creator__")) ?? [];
           assert.equal(tools.length, 4);
-          assert.equal(
-            await approveFixtureConnector(rig, () => request.onLiveTool!("genex-creator__generation_status", {})),
-            "Genex fixture: generation_status",
-          );
+          // A new chat is in Auto, where a plugin's connector runs with no card.
+          assert.deepEqual(await runsUnasked(rig, () => request.onLiveTool!("genex-creator__generation_status", {})), {
+            value: "Genex fixture: generation_status",
+          });
           assert.doesNotMatch(JSON.stringify(request.liveTools), /creator-fixture-credential/);
           assert.ok(
             !request.liveTools?.some((t) => t.name === "genex-creator__generate"),
@@ -711,7 +730,7 @@ it("bundled Unreal Editor starts off, then finds the set-up project's editor fro
         JSON.stringify({ project: drift, uproject: { added: [], enabled: [] }, port: unreal.port }),
       );
     };
-    const answers: unknown[] = [];
+    const answers: Array<Awaited<ReturnType<typeof runsUnasked>>> = [];
     rig.core.engines.register({
       id: "claude-code",
       label: "fixture",
@@ -727,10 +746,8 @@ it("bundled Unreal Editor starts off, then finds the set-up project's editor fro
         ]);
         const onLiveTool = request.onLiveTool;
         assert.ok(onLiveTool, "the studio injects live tools");
-        const list = () =>
-          approveFixtureConnector(rig, () => onLiveTool("unreal-editor__list_toolsets", {})).catch(
-            (error: unknown) => error,
-          );
+        // The manifest says `list_toolsets` only reads: it never asks.
+        const list = () => runsUnasked(rig, () => onLiveTool("unreal-editor__list_toolsets", {}));
         answers.push(await list());
         await setUp();
         answers.push(await list());
@@ -739,7 +756,9 @@ it("bundled Unreal Editor starts off, then finds the set-up project's editor fro
     } as never);
     await api["engine.delegate"]({ engine: "claude-code", project, threadId, prompt: "Look at the Unreal project" });
     // A failed tool call reaches the engine as an Error; an answer as the tool's result.
-    const [none, found] = answers.map((answer) => (answer instanceof Error ? answer.message : JSON.stringify(answer)));
+    const [none, found] = answers.map((answer) =>
+      "error" in answer ? errorMessage(answer.error) : JSON.stringify(answer.value),
+    );
     assert.match(none, /set up/i, "with no project set up the agent learns what to do");
     assert.match(none, /Unreal button/);
     assert.match(found, /21 toolsets/, "the bridge reached the set-up project's own port");

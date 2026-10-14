@@ -17,6 +17,7 @@ import { askVisionBoard, blindCompare, Side, visionCheck } from "../judge.ts";
 import { failedObservationRule } from "../native-verdict.ts";
 import { EngineFailure, outageDelays, withProviderPatience } from "../outage.ts";
 import { isRunning, WorkerMode } from "../outcomes.ts";
+import { isCommit } from "../shell.ts";
 import { runPlaytest } from "../playtester.ts";
 import { attemptRef } from "../repo.ts";
 import { RunEvent, SteeringSource } from "../run-events.ts";
@@ -24,6 +25,9 @@ import { CheckKind, CheckWeight, MoveOwner, normalizeFacetSpec, normalizeMilesto
 import { FacetStage, isFinishing, stageArg } from "../facet/stage.ts";
 import { playtestStepWords } from "../facet/beyond.ts";
 import { withOpenRung } from "../facet/growth.ts";
+import { ownsCameraWiring } from "../facet/camera-wiring.ts";
+import { headLooked } from "./merge-hold.ts";
+import { FacetRole } from "../facet/state.ts";
 import {
   STEER_BACK_TO_BUILD,
   STEER_EMPTY_REFUSAL,
@@ -62,6 +66,8 @@ import {
   unrejected,
   waitingBuilders,
 } from "../workers/director-pool.ts";
+import { wrapUp } from "./wrap-up.ts";
+import { noteKeptJudged } from "./kept-judge.ts";
 import type { LastJudge, LoopRun, Worker } from "./loop-run.ts";
 import type { LastShip } from "./art-direction.ts";
 import type { CheckResult } from "../checks.ts";
@@ -273,7 +279,11 @@ interface JudgePass extends JudgeAsk {
 async function judgedHead(loopRun: LoopRun, target: JudgeAsk["target"]): Promise<string | null> {
   const { baseCommit, ctx, integrationWorktree, projectDir, state } = loopRun;
   if (target.root === integrationWorktree) return headOf(ctx, integrationWorktree).catch(() => state.integrationHead);
-  return target.worker?.lastCommit ?? (target.root === projectDir ? baseCommit : null);
+  // An ended worker's worktree stands on its stopped round when it kept one: that is what is judged.
+  const worker = target.worker;
+  const kept = worker && !isRunning(worker) ? worker.keptCommit : null;
+  if (isCommit(kept)) return String(kept);
+  return worker?.lastCommit ?? (target.root === projectDir ? baseCommit : null);
 }
 
 /** The judge's answer before anything is scored: what it saw of the build. */
@@ -297,6 +307,7 @@ function rememberJudgedHead(loopRun: LoopRun, head: string | null, evidence: Evi
   const { errorsLogged, rememberEvidence, state } = loopRun;
   if (!head) return;
   if (evidence.ok === true) state.healthByHead.set(head, true);
+  headLooked(state, head, evidence.ok === true);
   state.consoleByHead.set(head, errorsLogged(evidence));
   rememberEvidence(head, evidence);
 }
@@ -442,6 +453,7 @@ async function otherBuild(
     cameras: cameras.length ? cameras : null,
     setup: against.worker?.setup ?? run.setup ?? null,
     inheritedConsole: consoleInheritedBy(against.worker),
+    camerasOwned: judgedOwnsCameras(against.worker),
   }).catch(() => null);
   return { other, worker: against.worker ?? null };
 }
@@ -669,6 +681,11 @@ async function recordJudgement(loopRun: LoopRun, pass: JudgePass, scored: CheckR
     }).catch(() => {});
 }
 
+/** Does the judged build answer for its camera wiring: the integration's does, a part's only when it owns the entry (camera-wiring.ts). */
+function judgedOwnsCameras(worker: Worker | null | undefined): boolean {
+  return !worker || ownsCameraWiring({ ownsMain: Boolean(worker.ownsMain), role: FacetRole.Facet });
+}
+
 /** One judge pass on the window it leased: look, score, ask, compare, and write it all down. */
 async function judgeOnWindow(loopRun: LoopRun, ask: JudgeAsk, handle: string | null): Promise<string> {
   const { consoleInheritedBy, ctx, integrationWorktree, journal, note, patientEvidence, run, saveJournal, state } =
@@ -682,6 +699,7 @@ async function judgeOnWindow(loopRun: LoopRun, ask: JudgeAsk, handle: string | n
     setup: target.worker?.setup ?? run.setup ?? null,
     scaffold: state.baseHeads.has(head),
     inheritedConsole: consoleInheritedBy(target.worker),
+    camerasOwned: judgedOwnsCameras(target.worker),
     // The art director looks at a real screen's size; the window is 960×600 again once released.
     // Its whole-game look also races the throttle-only bot, so it is told how hard the race is.
     ...(ask.ship ? { viewport: SHIP_VIEW, challenge: true } : {}),
@@ -711,6 +729,12 @@ async function judgeOnWindow(loopRun: LoopRun, ask: JudgeAsk, handle: string | n
   await askJudgeQuestion(loopRun, pass);
   /** The worker whose build this one was put beside, when it was put beside one. */
   const againstWorker = await compareJudged(loopRun, pass);
+  // A stopped round a judge preferred to the integration branch may go into it (kept-work.ts).
+  if (target.worker) {
+    const pick = pass.out.verdict?.pick ?? null;
+    const preferred = ask.againstKey === BuildTarget.Integration && pick === Side.Challenger;
+    noteKeptJudged(target.worker, head, pick === null ? null : preferred);
+  }
   await shipStep(loopRun, pass);
   pass.out.head = head ?? null;
   if (keepsJudgement) journal.director.lastJudge = judgement;
@@ -1256,7 +1280,7 @@ async function stopWorkerTool(loopRun: LoopRun, args: AnyRecord): Promise<string
     worker.mode === WorkerMode.Loop
       ? `Its unfinished edits are committed in ${worker.worktree}, kept on ${attemptRef(run.runId, worker.id, at, { stopped: true })} — nothing is reset, and that round is recorded as stopped, not judged.`
       : `Whatever it had written is committed in ${worker.worktree} as its last commit.`,
-    `Its last accepted commit${worker.lastCommit ? ` (${shortSha(worker.lastCommit)})` : ""} is what integrate would take; worker_status once it settles.`,
+    `Its last accepted commit${worker.lastCommit ? ` (${shortSha(worker.lastCommit)})` : ""} is what integrate would take; the stopped round goes in only once judge target=${worker.id} against=integration prefers it. worker_status once it settles.`,
   ].join(" ");
 }
 
@@ -1368,6 +1392,7 @@ const ANSWERED_HERE = {
   [DirectorTool.WorkerStop]: stopWorkerTool,
   [DirectorTool.Note]: noteTool,
   [DirectorTool.GoalUpdate]: updateGoal,
+  [DirectorTool.WrapUp]: wrapUp,
 } satisfies Record<Exclude<DirectorTool, keyof typeof HANDED_OFF>, Tool>;
 
 /** The worker tools of Genex's one model the director answers beside its own (no `DirectorTool` key of theirs). */

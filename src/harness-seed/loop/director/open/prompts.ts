@@ -360,6 +360,16 @@ const WRAP_OPENING = {
   [WrapCause.Finish]: "THE PERSON ASKED THE LOOP TO FINISH",
 } as const satisfies Record<WrapCause, string>;
 
+/**
+ * How the wrap-up's finish goes: a claim a reviewer checks, or — once the person asked to finish —
+ * a close with no check (finish.ts `claimFinish`), so no claim is invited.
+ */
+const WRAP_FINISH = {
+  claim: `Only if the goal is reached, call finish with your summary and proof, at least ${CLAIM_BEFORE_END_MINUTES} minutes before the end: a reviewer needs that long to check your claim.`,
+  asked:
+    "Then call finish with your summary: the person asked to finish, so the Loop closes as it stands, with no reviewer's check.",
+} as const;
+
 /** How an open wake message ends: the wrap-up (saying why), the question of what next, or carry on. */
 export function openClosing(how: {
   wrapping: boolean;
@@ -367,8 +377,11 @@ export function openClosing(how: {
   idleAsk: boolean;
   minutesLeft: number;
 }): string {
-  if (how.wrapping)
-    return `${WRAP_OPENING[how.wrapCause ?? WrapCause.Deadline]}: this is your last turn. Keep a last ${OpenTool.SavePoint} of what works, and end with honest words: what you built, and what remains or you did not test. Only if the goal is reached, call finish with your summary and proof, at least ${CLAIM_BEFORE_END_MINUTES} minutes before the end: a reviewer needs that long to check your claim.`;
+  if (how.wrapping) {
+    const cause = how.wrapCause ?? WrapCause.Deadline;
+    const finish = cause === WrapCause.Finish ? WRAP_FINISH.asked : WRAP_FINISH.claim;
+    return `${WRAP_OPENING[cause]}: this is your last turn. Keep a last ${OpenTool.SavePoint} of what works, and end with honest words: what you built, and what remains or you did not test. ${finish}`;
+  }
   if (how.idleAsk)
     return `Nothing of yours is at work. Decide what next: build on yourself, start workers, or call finish when the goal is reached. About ${how.minutesLeft} minutes of working time left.`;
   return "Carry on: act, then end your turn.";

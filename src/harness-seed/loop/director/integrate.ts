@@ -38,6 +38,7 @@ import { skipOptimization } from "../optimization.ts";
 import { EventKind, ExecutionStatus, JournalPhase, RunEvent, writeRunArtifact } from "../run-events.ts";
 import { isCommit } from "../shell.ts";
 import { CheckOrigin, loadCatalogue, recordCatalogueOutcomes, saveCatalogue } from "../spec.ts";
+import { blockersOf } from "../ship-blockers.ts";
 import { CLIP_DETAIL, CLIP_REASON } from "../text.ts";
 import { minutes, SECOND_MS, sleep } from "../time.ts";
 import { againstWords, NotLandedReason, observedFrom, VerdictPass, VerdictRule } from "../verdict.ts";
@@ -57,6 +58,7 @@ import { BuildTarget, WindowLease } from "./loop-run.ts";
 import { LandingHow, landingWords } from "./rules.ts";
 import { closeReaders } from "../workers/director-pool.ts";
 import { shipFinishLine } from "./art-direction-prompts.ts";
+import { shipClaimRefusal } from "./blocker-prompts.ts";
 import { closeUnderWay, holdFinish, latchClose, releaseFinish } from "./close-latch.ts";
 import { FINISH_REPORT } from "../finish-check.ts";
 import {
@@ -71,7 +73,10 @@ import {
 } from "./finish-claim.ts";
 import { GIT_WITHOUT_PROOF } from "./proof-git.ts";
 import type { LastJudge, LoopRun, Worker } from "./loop-run.ts";
+import { holdBaseForMerge, releaseMergeHold, unlookedAfterMerge } from "./merge-hold.ts";
 import { noteKeptWork } from "./kept-work.ts";
+import { keptLeftOut, keptToMerge } from "./kept-judge.ts";
+import { userQuoted } from "./wrap-up.ts";
 import type { LastShip } from "./art-direction.ts";
 import type { Evidence } from "../evidence.ts";
 import type { AnyRecord, HarnessCtx } from "../../types/harness.d.ts";
@@ -157,8 +162,6 @@ const NOTHING_BEYOND_THE_START = "the integration branch has nothing beyond the 
 
 /** At most this many paths are named in a sentence about them. */
 const PATHS_NAMED = 8;
-/** The fewest characters of the user's own words that stand for their message (`userQuoted`). */
-const MIN_USER_QUOTE_CHARS = 8;
 
 /**
  * A file name or git's own words in a reason, with brackets for parentheses: the clock's close
@@ -283,7 +286,8 @@ async function resolveWorkerCommit(
   worker: Worker,
 ): Promise<{ commit: string; refusal?: undefined } | { refusal: string }> {
   const { ctx, integrationWorktree, workerCommit } = loopRun;
-  const commit = await workerCommit(worker);
+  // A stopped round goes in only once a judge preferred it to this branch; else the accepted one.
+  const commit = keptToMerge(worker) ?? (await workerCommit(worker));
   if (!commit) return { refusal: INTEGRATE_REFUSAL.noCommit(worker.id) };
   if (!isCommit(commit)) return { refusal: INTEGRATE_REFUSAL.notACommit(worker.id) };
   if (commit === worker.from) return { refusal: INTEGRATE_REFUSAL.nothingNew(worker.id, commit) };
@@ -395,8 +399,8 @@ async function mergeWorker(
     union: merge.union,
     stage: MergeStage.Director,
   });
-  // A worker started from another's kept work brings that work in too.
-  await noteKeptWork(loopRun, state.integrationHead);
+  // A worker started from another's kept work brings that work in too, judged on top of it.
+  await noteKeptWork(loopRun, state.integrationHead, true);
   return { ok: true, union: merge.union };
 }
 
@@ -438,6 +442,8 @@ async function healthPass(
     health.ok = false;
   }
   state.integrationHealthy = health.ok === true;
+  // The head has its answer: running loop workers read it from here (workers.ts `freshBase`).
+  releaseMergeHold(state);
   // Kept with the setup it was taken under: the next merge compares state paths only with a look
   // like its own (lostByMerge).
   rememberEvidence(head, health, { setup: setupKey(loopRun.run.setup) });
@@ -585,7 +591,7 @@ function integrationAnswer(
   });
 }
 
-/** A healthy merge closes the wave: running loop workers take this head at their next round. */
+/** A healthy merge closes the wave: this head is the one running loop workers fall back to while a newer one does not load. */
 function closeWaveIfHealthy(loopRun: LoopRun, health: Evidence): void {
   const { state } = loopRun;
   if (health.ok === true) state.waveHead = state.integrationHead;
@@ -596,6 +602,7 @@ async function closeWave(loopRun: LoopRun): Promise<string> {
   const { note, saveJournal, state } = loopRun;
   const head = state.integrationHead;
   state.waveHead = head;
+  releaseMergeHold(state);
   await saveJournal();
   if (head) note(WAVE_WORDS.closed(head));
   return JSON.stringify({
@@ -642,6 +649,7 @@ async function integrateWave(loopRun: LoopRun, ids: readonly string[]): Promise<
   const ready = await checkpointAssets(loopRun, label);
   if (ready.refusal) return ready.refusal;
   const previousHead = state.integrationHead;
+  const held = holdBaseForMerge(state, previousHead);
   const merged: Worker[] = [];
   const skipped: Record<string, string> = {};
   let union = false;
@@ -649,8 +657,7 @@ async function integrateWave(loopRun: LoopRun, ids: readonly string[]): Promise<
     const taken = await takeIntoWave(loopRun, id, label);
     if ("skipped" in taken) skipped[id] = taken.skipped;
     else if (!taken.merged.ok) {
-      // What merged before the conflict is on the branch, and nobody has looked at it yet.
-      if (merged.length) state.integrationHealthy = null;
+      unlookedAfterMerge(state, held, merged.length > 0);
       const wave = { merged: merged.map((worker) => worker.id), notTried: ids.slice(at + 1), skipped };
       return withFields(taken.merged.answer, { wave });
     } else {
@@ -658,7 +665,10 @@ async function integrateWave(loopRun: LoopRun, ids: readonly string[]): Promise<
       union = union || taken.merged.union;
     }
   }
-  if (!merged.length) return JSON.stringify({ merged: false, skipped });
+  if (!merged.length) {
+    unlookedAfterMerge(state, held, false);
+    return JSON.stringify({ merged: false, skipped });
+  }
   const pass = await healthPass(loopRun, merged, label, previousHead);
   closeWaveIfHealthy(loopRun, pass.health);
   await recordHealth(loopRun, merged, pass);
@@ -680,19 +690,28 @@ async function integrateOne(loopRun: LoopRun, args: AnyRecord): Promise<string> 
   const ready = await checkpointAssets(loopRun, label);
   if (ready.refusal) return ready.refusal;
   const previousHead = state.integrationHead;
+  const held = holdBaseForMerge(state, previousHead);
   const merged = await mergeWorker(loopRun, worker, resolved.commit, label);
-  if (!merged.ok) return merged.answer;
+  if (!merged.ok) {
+    unlookedAfterMerge(state, held, false);
+    return merged.answer;
+  }
   const pass = await healthPass(loopRun, [worker], label, previousHead);
   closeWaveIfHealthy(loopRun, pass.health);
   await recordHealth(loopRun, [worker], pass);
-  return integrationAnswer(loopRun, pass.health, merged.union, ready.setAside, { lost: pass.lost });
+  const leftOut = keptLeftOut(worker);
+  return integrationAnswer(loopRun, pass.health, merged.union, ready.setAside, {
+    lost: pass.lost,
+    ...(leftOut ? { extra: { keptLeftOut: leftOut } } : {}),
+  });
 }
 
 /**
  * `integrate`: one worker's accepted commit, or a wave of them (`worker=a,b,c`), merged into the
- * integration branch with one health pass. A healthy integrate closes the wave — running loop
- * workers take the integration branch once per wave, not after every commit — and `wave=close`
- * closes it by hand, after the lead's own commits (with or without workers to merge first).
+ * integration branch with one health pass. Running loop workers take the newest head at each round
+ * once its merge is seen to load (workers.ts `freshBase`); a healthy integrate closes the wave — the
+ * head they fall back to while a newer one does not load — and `wave=close` closes it by hand, after
+ * the lead's own commits (with or without workers to merge first), letting go any hold on the head.
  */
 export async function integrate(loopRun: LoopRun, args: AnyRecord) {
   // A run whose close has started lands the head its reviewer read: nothing more is merged into it.
@@ -917,17 +936,6 @@ function finishAnswer(loopRun: LoopRun, landed: AnyRecord): string {
 }
 
 /**
- * Did the user write `quote` in a message delivered into this run? The lead reads what they meant;
- * this only checks the words are theirs, as `plan`'s scope_instruction is checked (goals.ts).
- */
-async function userQuoted(inbox: LoopRun["inbox"], quote: unknown): Promise<boolean> {
-  const words = typeof quote === "string" ? quote.trim() : "";
-  if (words.length < MIN_USER_QUOTE_CHARS) return false;
-  const said = await inbox.steering(undefined, false);
-  return said.some((text) => text.includes(words));
-}
-
-/**
  * Close the run with the lead's summary. A timed build spends its working time unless the goal is
  * reached: a finish that claims nothing ends it early only for the user — Finish, or their own words
  * in a message to this run, which the lead quotes as `user_asked`, so a request to stop is never
@@ -1034,12 +1042,15 @@ function finishRefusal(loopRun: LoopRun, finishing: { userEnds: boolean; victory
   const { ctx, run, softDeadline, state } = loopRun;
   const waits = { softDeadline, now: Date.now(), userEnds: finishing.userEnds, claims: finishing.victory };
   if (!ctx.cancelled && finishWaitsForCap(run, waits)) {
-    return `finish refused: ${minutes(softDeadline - Date.now())} working minutes remain in this timed build. Call run_status, plan and delegate the next concrete improvement, then test and integrate it. Keep working until the wrap-up window; do not idle or repeat finish. Only the user ends it early: when they asked you in a message to stop or finish now, call finish again with user_asked quoting their words exactly.`;
+    return `finish refused: ${minutes(softDeadline - Date.now())} working minutes remain in this timed build. Call run_status, plan and delegate the next concrete improvement, then test and integrate it. Keep working until the wrap-up window; do not idle or repeat finish. Only the user ends it early: when they asked you in a message to finish, call wrap_up quoting their words exactly (the running rounds end first); to stop now, call finish again with user_asked quoting them.`;
   }
   const unverified = state.goals && goalDecision(state.goals, state.integrationHead) !== GoalStatus.Passed;
   if (finishing.victory && unverified) {
     return "finish cannot claim victory: required acceptance is not verified on the integrated revision. Run playtest goal=<id>, or finish with victory=no and explain the gaps.";
   }
+  // The goal is reached when its outcomes are verified and the art director names no blocker on the head.
+  const review = shipOnHead(loopRun);
+  if (finishing.victory && review && blockersOf(review.defects).length) return shipClaimRefusal(review);
   return null;
 }
 

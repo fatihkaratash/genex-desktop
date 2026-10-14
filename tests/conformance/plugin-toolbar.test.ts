@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  shownToolbarStatus,
   toolbarItems,
   toolbarReaction,
   toolbarStatusFrom,
+  toolbarTip,
   toolbarUpdateStatus,
 } from "../../src/shared/plugin-toolbar.ts";
 import { PLUGIN_TOOLBAR_WORDS } from "../../src/renderer/words.ts";
@@ -150,4 +152,43 @@ test("toolbarStatusFrom keeps attention as a boolean", () => {
   assert.deepEqual(toolbarStatusFrom({ attention: 0, title: "Up to date" }), { attention: false, title: "Up to date" });
   assert.deepEqual(toolbarStatusFrom({ kind: "toolbar", item: "publish", attention: "yes" }), { attention: true });
   assert.deepEqual(toolbarStatusFrom({ badge: "Draft" }), { badge: "Draft" });
+});
+test("toolbarStatusFrom keeps dot as a boolean", () => {
+  assert.deepEqual(toolbarStatusFrom({ badge: "Ready", tone: "ok", dot: true }), {
+    badge: "Ready",
+    tone: "ok",
+    dot: true,
+  });
+  assert.deepEqual(toolbarStatusFrom({ badge: "Not open", dot: 0 }), { badge: "Not open", dot: false });
+  assert.deepEqual(toolbarStatusFrom({ kind: "toolbar", item: "editor", dot: "yes" }), { dot: true });
+});
+test("a dot's tooltip says its word first, then the plugin's title; a word badge's says the title alone", () => {
+  assert.deepEqual(toolbarTip({ badge: "Not open", tone: "info", dot: true, title: "Drift isn't open in Unreal." }), [
+    "Not open",
+    "Drift isn't open in Unreal.",
+  ]);
+  assert.deepEqual(toolbarTip({ badge: "Starting", dot: true }), ["Starting"]);
+  assert.deepEqual(toolbarTip({ badge: "Draft", title: "Draft is online" }), ["Draft is online"]);
+  assert.deepEqual(toolbarTip({ title: "Make this game in Unreal" }), ["Make this game in Unreal"]);
+  assert.deepEqual(toolbarTip({ dot: true }), [], "a dot with no word draws nothing to say");
+  assert.deepEqual(toolbarTip(undefined), []);
+});
+test("Update takes the badge's place as a word in the quiet tone, whatever dot or tone the plugin's own had", () => {
+  const own = { badge: "Ready", tone: "ok", dot: true, title: "Connected to Drift." } as const;
+  const update = toolbarUpdateStatus(
+    plugin("unreal", [item()], { availableVersion: "0.3.0" }),
+    PLUGIN_TOOLBAR_WORDS.update,
+  );
+  assert.deepEqual(shownToolbarStatus(own, update), {
+    badge: "Update",
+    title: PLUGIN_TOOLBAR_WORDS.update.title("unreal", "0.3.0"),
+  });
+  assert.deepEqual(shownToolbarStatus({ ...own, disabled: true, attention: true }, update), {
+    disabled: true,
+    attention: true,
+    badge: "Update",
+    title: PLUGIN_TOOLBAR_WORDS.update.title("unreal", "0.3.0"),
+  });
+  assert.equal(shownToolbarStatus(own, null), own, "up to date: the plugin's own status");
+  assert.equal(shownToolbarStatus(undefined, null), undefined);
 });

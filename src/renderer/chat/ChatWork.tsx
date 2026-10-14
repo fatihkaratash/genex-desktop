@@ -8,6 +8,7 @@ import { leadFrameOf } from "../state/agent-screens.ts";
 import { useAgentScreens } from "../state/hooks.ts";
 import { LoadingState } from "../ui/LoadingState.tsx";
 import { Presence, type PresenceChild } from "../ui/Presence.tsx";
+import type { BuildParts } from "./build-checklist.ts";
 import { BuildStatus } from "./BuildStatus.tsx";
 import type { ActivityItem } from "./conversation-entries.ts";
 import { WorkLogContent } from "./WorkLog.tsx";
@@ -24,8 +25,10 @@ export interface ChatWorkProps {
   workKey: Key | null | undefined;
   /** What the busy line says (`busyLabel`). */
   label: string;
-  /** The running build's one line (`buildCaption`): what is happening now, one thing at a time. */
+  /** The running build's one line: its parts counted (`checklistCaption`), else what is happening now (`buildCaption`). */
   caption: string;
+  /** What the running build's card lists its parts from (`build-checklist.ts`), once it has a plan or a worker. */
+  parts: BuildParts | null;
   /** The busy line waits on the user rather than working. */
   waiting: boolean;
   busySince: number | null;
@@ -53,9 +56,11 @@ const WorkKind = {
 
 /**
  * The line reads the lead's screen itself (a frame of the store's), so a new frame from any worker
- * re-renders at most this line, never the chat around it. A running build is one card with one
- * line: the parts' detail lives on Builds, not in a list under it. The line opens and closes in
- * place, and a work line becoming the build card (or back) closes one as the other opens.
+ * re-renders at most this line, never the chat around it. A running build is one card: one line
+ * counting its parts, and the card opens to their list — added, working, still to come — in place
+ * of a line for each worker in the transcript; every detail of a part lives on Builds. The line
+ * opens and closes in place, and a work line becoming the build card (or back) closes one as the
+ * other opens.
  */
 export function ChatWork(props: ChatWorkProps): JSX.Element {
   const { activeRunId, project } = props;
@@ -111,6 +116,7 @@ function workLine(props: ChatWorkProps, leadFrame: AgentScreenFrame | undefined)
               budgetMs={props.budgetMs}
               {...(leadFrame ? { frame: leadFrame } : {})}
               {...(props.onShowBuilds ? { onOpenBuilds: props.onShowBuilds } : {})}
+              parts={props.parts}
               caption={props.caption}
             />
           </div>

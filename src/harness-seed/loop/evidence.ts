@@ -147,6 +147,11 @@ export interface GatherOptions {
   keepPaths?: string[];
   /** Look at this size: a leased window is sized before it loads (`preview.viewport`), never the live view. */
   viewport?: { width: number; height: number } | null;
+  /**
+   * The build's camera wiring is this look's to answer for (default): a part that does not own the
+   * entry cannot rewire the cameras, so a dead cameras contract is a warning for it, never a failure.
+   */
+  camerasOwned?: boolean;
 }
 
 /** The pass's own state, phase to phase: its arguments, then what each phase found. */
@@ -809,6 +814,7 @@ async function webEvidence(
     inheritedConsole = [],
     keepPaths = [],
     viewport = null,
+    camerasOwned = true,
   }: GatherOptions,
 ): Promise<Evidence> {
   const kept = Array.isArray(keepPaths) ? keepPaths.map(String) : [];
@@ -838,6 +844,7 @@ async function webEvidence(
     // The bot's race is read by its position and finish: cut last, like the board's own paths.
     keepPaths: challenge === true ? [...new Set([...kept, ...RACE_PATHS])] : kept,
     viewport,
+    camerasOwned,
   };
   for (const phase of LOOK_OPENING) {
     const done = await phase(look);

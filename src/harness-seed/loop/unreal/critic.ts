@@ -13,7 +13,8 @@ import type { MessageImage } from "../../types/host-api.d.ts";
 import { HostMethod } from "../host-methods.ts";
 import { isPlainRecord } from "../json.ts";
 import { CompletionRole, readJudgeJson } from "../judge-provenance.ts";
-import { modelOn, RoleKey, roleEngine } from "../model-roles.ts";
+import { modelOn, RoleKey, roleEffort, roleEngine } from "../model-roles.ts";
+import { boundedEffort } from "../effort-cap.ts";
 import { CLIP_DETAIL, CLIP_REASON, clip, hasText } from "../text.ts";
 import { MINUTE_MS } from "../time.ts";
 import {
@@ -38,7 +39,7 @@ import {
 import { criticAdvice } from "./lead-graph.ts";
 import { type Lead, milestoneNow, saveLead } from "./lead-journal.ts";
 
-/** The critic thinks hard: it is asked rarely, and its eyes are the lead's check on itself. */
+/** The critic thinks hard (a lower effort the person chose holds): it is asked rarely, and its eyes are the lead's check on itself. */
 const CRITIC_EFFORT = "high";
 /** One critic call takes at most this long. */
 const CRITIC_MS = 5 * MINUTE_MS;
@@ -222,7 +223,7 @@ async function lookOnce(
     ...(model ? { model } : {}),
     systemPrompt,
     stream: false,
-    effort: CRITIC_EFFORT,
+    effort: boundedEffort(CRITIC_EFFORT, roleEffort(run, RoleKey.Judge)),
     timeoutMs: CRITIC_MS,
     threadId,
     provenance: { role: CompletionRole.Judge, runId: run.runId },

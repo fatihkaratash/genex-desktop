@@ -661,6 +661,62 @@ describe("integration in waves", () => {
     assert.equal(loopRun.state.waveHead, fix);
   });
 
+  it("a running worker keeps the head before a merge until the merge's health pass answers, and never takes one that failed it", async () => {
+    const { repo, head } = await integrationRepo();
+    const { loopRun } = stubLoopRun(repo, head, null);
+    const hook = loopIntegration(loopRun as never);
+    const car = await workerBranch(repo, head, "car", { "src/car.js": "export const car = 1;\n" });
+    const city = await workerBranch(repo, head, "city", { "src/city.js": "export const city = 1;\n" });
+    loopRun.state.workers.set("car", { id: "car", title: "car", from: head, lastCommit: car, merging: null });
+    loopRun.state.workers.set("city", { id: "city", title: "city", from: head, lastCommit: city, merging: null });
+    const taken: Array<string | null> = [];
+    const look = loopRun.patientEvidence;
+    let loads = true;
+    loopRun.patientEvidence = async (root: string, options: Record<string, any>) => {
+      // A round starting while the health pass looks.
+      taken.push(await hook.head());
+      const seen = await look(root, options);
+      return { ...seen, ok: loads, problems: loads ? [] : ["the page threw on load"] };
+    };
+    await integrate(loopRun as never, { worker: "car" });
+    const carHead = loopRun.state.integrationHead;
+    assert.deepEqual(taken, [head], "the merged head is not taken while its health pass looks");
+    assert.equal(await hook.head(), carHead, "a merge that loads is taken");
+
+    loads = false;
+    await integrate(loopRun as never, { worker: "city" });
+    assert.deepEqual(taken, [head, carHead]);
+    assert.notEqual(loopRun.state.integrationHead, carHead);
+    assert.equal(await hook.head(), carHead, "a merge that does not load is never taken");
+  });
+
+  it("a wave a conflict stopped holds running workers on the head before it until a look or the lead's wave=close lets them go", async () => {
+    const { headLooked } = await import("../../src/harness-seed/loop/director/merge-hold.ts");
+    const { repo, head } = await integrationRepo();
+    const { loopRun } = stubLoopRun(repo, head, null);
+    const hook = loopIntegration(loopRun as never);
+    const car = await workerBranch(repo, head, "car", { "src/car.js": "export const car = 1;\n" });
+    const rival = await workerBranch(repo, head, "rival", { "src/car.js": "export const car = 2;\n" });
+    loopRun.state.workers.set("car", { id: "car", title: "car", from: head, lastCommit: car, merging: null });
+    loopRun.state.workers.set("rival", { id: "rival", title: "rival", from: head, lastCommit: rival, merging: null });
+    const answer = JSON.parse(await integrate(loopRun as never, { worker: "car,rival" }));
+    assert.deepEqual(answer.wave?.merged, ["car"], JSON.stringify(answer));
+    const merged = loopRun.state.integrationHead;
+    assert.notEqual(merged, head);
+    assert.equal(await hook.head(), head, "what merged before the conflict waits for a look");
+
+    headLooked(loopRun.state as never, head, true);
+    assert.equal(await hook.head(), head, "a look at another head lets nothing go");
+    headLooked(loopRun.state as never, merged, false);
+    assert.equal(await hook.head(), head, "nor one that saw it fail");
+    await integrate(loopRun as never, { wave: "close" });
+    assert.equal(await hook.head(), merged, "the lead's wave=close: workers take the head as it stands");
+
+    loopRun.state.headBeforeMerge = head;
+    headLooked(loopRun.state as never, merged, true);
+    assert.equal(await hook.head(), merged, "a judge or a fork gate that saw it load lets them take it");
+  });
+
   it("a clean merge brings each merged loop worker into the first wave the art director waits for", async () => {
     const { repo, head } = await integrationRepo();
     const { loopRun } = stubLoopRun(repo, head, null);
@@ -1077,7 +1133,7 @@ describe("a contract written on the run's starting point (review)", () => {
 });
 
 describe("running loop workers follow the wave, not every commit (review)", () => {
-  it("a loop worker's integration head stays on the wave's head after a lead commit until the wave closes", async () => {
+  it("a loop worker takes a lead's commit at its next round, not once its wave closes", async () => {
     const { repo, head } = await integrationRepo();
     const { loopRun } = stubLoopRun(repo, head, null);
     const hook = loopIntegration(loopRun as never);
@@ -1085,7 +1141,8 @@ describe("running loop workers follow the wave, not every commit (review)", () =
     loopRun.state.waveHead = head;
     const fix = await commitFiles(repo, { "src/main.js": "// FACET WIRING\n// lead\n" }, "lead fix");
     loopRun.state.integrationHead = fix;
-    assert.equal(await hook.head(), head, "the lead's commit waits for the wave");
+    // Flipped: the lead's commit waited for the wave, and every merge landed behind it.
+    assert.equal(await hook.head(), fix, "the lead's commit is the next round's base");
     await integrate(loopRun as never, { wave: "close" });
     assert.equal(await hook.head(), fix);
   });

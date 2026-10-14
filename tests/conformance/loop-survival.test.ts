@@ -167,6 +167,8 @@ describe("the run tools each lead is offered", () => {
       "worker_steer",
       "worker_stop",
       "worker_wait",
+      // Flipped: the user's ask to finish is recorded by the lead, quoting them.
+      "wrap_up",
     ]);
   });
 
