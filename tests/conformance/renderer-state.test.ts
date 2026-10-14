@@ -1329,6 +1329,11 @@ describe("Live's Web | Native view: the Mac build inside Live", () => {
     assert.equal(nativeCanvasShown(cover({ native: true, project: null })), false, "no game, no canvas");
   });
 
+  it("Stop takes the canvas away, so its run ends, and Play brings it back", () => {
+    assert.equal(nativeCanvasShown(cover({ native: true, stopped: true })), false, "stopped: no canvas holds the run");
+    assert.equal(nativeCanvasShown(cover({ native: true, stopped: false })), true, "played again: the canvas holds it");
+  });
+
   it("the toggle is hidden when embedding is unsupported", () => {
     const game = [Web, Mac];
     assert.equal(nativeToggleShown(game, StudioPlatform.Mac, true, null), true, "a Browser + Mac game on a Mac");

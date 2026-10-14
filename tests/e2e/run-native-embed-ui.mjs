@@ -10,6 +10,7 @@
  * - a window resize reaches `nativeResize` at the slot's new size; a click captures, a key press
  *   reaches `nativeInput` as a keydown, Esc releases, and nothing is sent while released;
  * - Assets hides Live and the fixture records the pause, Live shows it again;
+ * - Stop in Native ends the embedded run and the stage says the game is stopped; Play embeds again;
  * - light and dark screenshots at 1440 and 1100 px;
  * - Pop out unembeds and asks for the Mac window (the fixture policy refuses Play on Mac, so the
  *   refusal toast is the proof it was asked), and Live is back on Web;
@@ -327,6 +328,38 @@ async function hiddenLivePauses(ctx) {
   );
 }
 
+/** Stop in Native ends the embedded run and says the game is stopped; Play embeds it again. */
+async function stopEndsNative(ctx) {
+  const { check } = ctx;
+  const ended = async () =>
+    (await ctx.statuses("pong-cpp")).filter((s) => ["stopping", "stopped"].includes(s.state)).length;
+  const readies = async () => (await ctx.statuses("pong-cpp")).filter((s) => s.state === "ready").length;
+  const endedBefore = await ended();
+  const readyBefore = await readies();
+  await ctx.click('button[aria-label="Stop game"]');
+  check(
+    "Stop in Native ends the embedded run",
+    await ctx.until(async () => (await ended()) > endedBefore),
+    await ctx.statuses("pong-cpp"),
+  );
+  check(
+    "Stop takes Live's canvas away",
+    await ctx.until(async () => !(await ctx.present("[data-stage-native-canvas]"))),
+  );
+  check("the stage says the game is stopped", await ctx.until(() => ctx.present('[data-stage-empty="stopped"]')));
+  await ctx.click('button[aria-label="Play game"]');
+  check("Play mounts the canvas again", await ctx.until(() => ctx.present("[data-stage-native-canvas]")));
+  check(
+    "Play embeds a new run",
+    await ctx.until(async () => (await readies()) > readyBefore),
+    await ctx.statuses("pong-cpp"),
+  );
+  check(
+    "Click to play is back on the new run",
+    await ctx.until(() => ctx.present('[data-stage-native-canvas="playing"] [data-stage-native-capture]')),
+  );
+}
+
 /** Native in both themes at the two supported widths. */
 async function screenshots(ctx) {
   for (const width of [1440, 1100]) {
@@ -391,11 +424,21 @@ async function macOnlyDefaultsToNative(ctx) {
   );
 }
 
-/** A Three.js game, created from the dialog, has no Web | Native. */
+/**
+ * A Three.js game, created from the dialog, has no Web | Native. New game is Home; the dialog is
+ * Home's compiled entry, on Three.js when it offers a choice of stacks (a browser game otherwise).
+ */
 async function threeJsHasNoToggle(ctx) {
   const { check } = ctx;
   await ctx.click('[aria-keyshortcuts="Meta+N Control+N"]');
+  await ctx.until(() => ctx.present("[data-home-cpp]"));
+  await ctx.click("[data-home-cpp]");
   await ctx.until(() => ctx.present('[data-testid="create-game-dialog"]'));
+  if (await ctx.until(() => ctx.present("[data-toolchain-sheet]"), 2_000)) {
+    await ctx.key({ key: "Escape", code: "Escape", keyCode: 27 });
+    await ctx.until(async () => !(await ctx.present("[data-toolchain-sheet]")));
+  }
+  if (await ctx.present('[data-create-game-stack="three-js"]')) await ctx.click('[data-create-game-stack="three-js"]');
   await ctx.click('[aria-label="Game name"]');
   await ctx.wc.debugger.sendCommand("Input.insertText", { text: THREE_GAME });
   await ctx.click('[data-testid="create-game-dialog"] button[type="submit"]');
@@ -481,6 +524,7 @@ async function drive() {
     await resizeReachesGame(ctx);
     await captureAndRelease(ctx);
     await hiddenLivePauses(ctx);
+    await stopEndsNative(ctx);
     await screenshots(ctx);
     await popOut(ctx);
     await macOnlyDefaultsToNative(ctx);

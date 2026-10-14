@@ -104,12 +104,13 @@ export function webViewBounds(cover: StageCover, slot: Box, overlays: readonly O
 }
 
 /**
- * Whether Live's canvas for the Mac build stays mounted: Native chosen for a game. Overlays, Builds
- * and a hidden stage never take it away (they draw over it, and main pauses the game unwatched);
- * unmounting would end the run.
+ * Whether Live's canvas for the Mac build stays mounted: Native chosen for a game the person has
+ * not stopped. Overlays, Builds and a hidden stage never take it away (they draw over it, and main
+ * pauses the game unwatched); unmounting ends the run, which is what Stop asks for, and Play mounts
+ * it again.
  */
-export function nativeCanvasShown(cover: Pick<StageCover, "native" | "project">): boolean {
-  return cover.native && Boolean(cover.project);
+export function nativeCanvasShown(cover: Pick<StageCover, "native" | "project" | "stopped">): boolean {
+  return cover.native && Boolean(cover.project) && !cover.stopped;
 }
 
 /** The overlays on the page right now, each with where it is. */

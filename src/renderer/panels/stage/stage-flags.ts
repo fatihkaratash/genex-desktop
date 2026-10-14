@@ -92,8 +92,9 @@ export function stageFlags({
 /**
  * The flags for a compiled game (C++ · raylib, Rust · wgpu), whose Live may show no page of its
  * own: the card for a game without Browser among its destinations (`noLivePage`), or its Mac build
- * in Live's canvas (`native`). Either takes the web page's place, so the page's empty scene, loader
- * and stopped state are not on show; the card covers the stage like the empty scene does.
+ * in Live's canvas (`native`). Either takes the web page's place, so the page's empty scene and
+ * loader are not on show; the card covers the stage like the empty scene does. Stop ends the Mac
+ * build in Live as well (its canvas lets the run go), so Native says the game is stopped as Web does.
  */
 export function compiledStageFlags(
   flags: ReturnType<typeof stageFlags>,
@@ -108,6 +109,6 @@ export function compiledStageFlags(
     emptyScene: flags.emptyScene && !native,
     showEmpty: flags.showEmpty && !pageAway,
     liveLoading: flags.liveLoading && !pageAway,
-    gameStopped: flags.gameStopped && !pageAway,
+    gameStopped: flags.gameStopped && !statusCard,
   };
 }
