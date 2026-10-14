@@ -1,7 +1,8 @@
-//! The processing step of the lakeside's fetched CC0 assets (`scripts/showcase-assets.ts` downloads
-//! and verifies them; `showcase-assets fetched <raw> <out> <manifest>` runs this): the four terrain
-//! layers packed into the two atlases the terrain material samples, and every other map and the
-//! sky map copied under the names the scene asks for. Everything lands in `<out>/fetched/`.
+//! The processing step of a showcase scene's fetched CC0 assets (`scripts/showcase-assets.ts`
+//! downloads and verifies them; `showcase-assets fetched <raw> <out> <manifest>` runs this): the
+//! lakeside's four terrain layers packed into the two atlases the terrain material samples (a scene
+//! without terrain, Harbour Street, packs none), and every other map and sky map copied under the
+//! names the scene asks for. Everything lands in `<out>/fetched/`.
 //!
 //! The terrain material is a Level-2 v2 source, whose game textures are sRGB RGBA8: the albedo
 //! atlas holds colour (RGB) and the layer's height (A, never sRGB-decoded); the detail atlas holds
@@ -127,18 +128,65 @@ pub fn process(raw: &Path, out: &Path, manifest: &Path) -> Result<(), Failure> {
     let assets = manifest["assets"].as_array().ok_or_else(|| fail("the manifest lists no assets"))?;
     let fetched = out.join("fetched");
     std::fs::create_dir_all(&fetched).map_err(|error| fail(format!("{}: {error}", fetched.display())))?;
-    let (albedo, detail) = terrain_atlases(raw, assets)?;
-    for (name, atlas) in [(ALBEDO_ATLAS, albedo), (DETAIL_ATLAS, detail)] {
-        atlas.save(fetched.join(name)).map_err(|error| fail(format!("{name}: {error}")))?;
-    }
+    // A scene without terrain (Harbour Street) has no layers to pack: only its maps are copied.
+    let atlases = if has_terrain(assets) {
+        let (albedo, detail) = terrain_atlases(raw, assets)?;
+        for (name, atlas) in [(ALBEDO_ATLAS, albedo), (DETAIL_ATLAS, detail)] {
+            atlas.save(fetched.join(name)).map_err(|error| fail(format!("{name}: {error}")))?;
+        }
+        2
+    } else {
+        0
+    };
     let copied = copy_maps(raw, assets, &fetched)?;
-    println!("fetched: 2 terrain atlases ({ATLAS} x {ATLAS}) and {copied} maps in {}", fetched.display());
+    println!("fetched: {atlases} terrain atlases ({ATLAS} x {ATLAS}) and {copied} maps in {}", fetched.display());
     Ok(())
+}
+
+/// Whether `assets` names any terrain layer (then [`terrain_atlases`] needs all four).
+fn has_terrain(assets: &[Value]) -> bool {
+    assets.iter().any(|asset| asset["output"].as_str().is_some_and(|output| TERRAIN_LAYERS.contains(&output)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fresh, empty folder under the system's temporary folder for one test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("genex-fetched-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch folder");
+        dir
+    }
+
+    // Harbour Street's manifest (renderer pass 2, A.13) has material maps and a sky map but no
+    // terrain: processing it used to stop at "no terrain-grass asset" and copy nothing.
+    #[test]
+    fn a_manifest_without_terrain_layers_copies_its_maps_and_packs_no_atlas() {
+        let dir = scratch("no-terrain");
+        let (raw, out) = (dir.join("raw"), dir.join("out"));
+        let maps = [("asphalt_02", "asphalt_02_diff_1k.jpg", "diff"), ("asphalt_02", "asphalt_02_arm_1k.jpg", "arm"), ("kloppenheim_01_puresky", "sky_2k.hdr", "hdr")];
+        for (id, name, _) in maps {
+            std::fs::create_dir_all(raw.join(id)).expect("an asset folder");
+            std::fs::write(raw.join(id).join(name), name.as_bytes()).expect("a cached map");
+        }
+        let manifest = genex::json!({ "assets": [
+            { "id": "asphalt_02", "output": "asphalt", "files": [{ "map": "diff", "name": maps[0].1 }, { "map": "arm", "name": maps[1].1 }] },
+            { "id": "kloppenheim_01_puresky", "output": "dusk-sky", "files": [{ "map": "hdr", "name": maps[2].1 }] },
+        ]});
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, manifest.to_string()).expect("the manifest");
+        process(&raw, &out, &manifest_path).expect("a manifest without terrain layers processes");
+        let fetched = out.join("fetched");
+        for (name, from) in [("asphalt-albedo.jpg", maps[0].1), ("asphalt-orm.jpg", maps[1].1), ("dusk-sky.hdr", maps[2].1)] {
+            assert_eq!(std::fs::read(fetched.join(name)).expect(name), from.as_bytes(), "{name} is the cached map");
+        }
+        for atlas in [ALBEDO_ATLAS, DETAIL_ATLAS] {
+            assert!(!fetched.join(atlas).exists(), "{atlas}: no terrain, no atlas");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_data_byte_stored_srgb_encoded_decodes_back_to_itself() {

@@ -28,6 +28,8 @@ glam = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 gltf = { workspace = true }
+# KTX2 textures in fixed GPU formats (BC7, ASTC 4x4, ETC2): the container read and checked here.
+ktx2 = { workspace = true }
 # Every CPU transcendental that reaches a capture (sphere mesh, sRGB curve, cascades, mips) is
 # libm's, the same bits on every target (clippy.toml).
 libm = { workspace = true }

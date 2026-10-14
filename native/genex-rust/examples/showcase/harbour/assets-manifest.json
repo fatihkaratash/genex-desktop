@@ -1,0 +1,272 @@
+{
+  "about": "Harbour Street's fetched assets (renderer pass 2, owner decision D6: fetched by sha256, never committed): CC0 only, from the pinned official URLs, sha256-verified. `node scripts/showcase-assets.ts fetch --scene harbour-street` downloads them into .studio-dev/assets-cache/harbour-street/raw/ and writes the maps the scene reads (fetched/*) into .studio-dev/assets-cache/harbour-street/assets/ (`--install` also copies them into harbour/assets/fetched/, which Git ignores, for a Studio run). Without them the blockout draws its untextured stand-ins.",
+  "licence": "CC0-1.0",
+  "assets": [
+    {
+      "id": "asphalt_02",
+      "kind": "texture",
+      "use": "the street and the crossing, wet after the rain (its roughness lowered in code)",
+      "output": "asphalt",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/asphalt_02",
+      "authors": ["Rob Tuytel"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": 3,
+      "resolution": "1k jpg source, used as it is",
+      "files": [
+        {
+          "map": "diff",
+          "name": "asphalt_02_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_diff_1k.jpg",
+          "bytes": 731707,
+          "sha256": "1aa5ce99f58a625c71d48cfc3e68b65ca85ccb00f39e045c0a928608a0ea25ed"
+        },
+        {
+          "map": "nor_gl",
+          "name": "asphalt_02_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_nor_gl_1k.jpg",
+          "bytes": 1240122,
+          "sha256": "42a1c381b53204e83a982db2864479a30bc127bbdeebb1006f8ee51bff099df3"
+        },
+        {
+          "map": "arm",
+          "name": "asphalt_02_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_arm_1k.jpg",
+          "bytes": 296770,
+          "sha256": "56bd8e591a3db579846fcb5185f60b0651e0bd4ea85c3529c339e6746243c9cf"
+        }
+      ]
+    },
+    {
+      "id": "concrete_pavement",
+      "kind": "texture",
+      "use": "the pavements either side of the street",
+      "output": "pavement",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/concrete_pavement",
+      "authors": ["Charlotte Baglioni"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": 1.8,
+      "resolution": "1k jpg source, used as it is",
+      "files": [
+        {
+          "map": "diff",
+          "name": "concrete_pavement_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement/concrete_pavement_diff_1k.jpg",
+          "bytes": 926197,
+          "sha256": "70d3ff969a7421c7ae057b5d16386d11f5e59c6740db643352e1039413f419c4"
+        },
+        {
+          "map": "nor_gl",
+          "name": "concrete_pavement_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement/concrete_pavement_nor_gl_1k.jpg",
+          "bytes": 1184345,
+          "sha256": "a5009e409ff0f7b2d19e1316fe5e2b2b4f28e4a6b79990a664be69d4e8a0e690"
+        },
+        {
+          "map": "arm",
+          "name": "concrete_pavement_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement/concrete_pavement_arm_1k.jpg",
+          "bytes": 802384,
+          "sha256": "2895506708adad25d64c3d7c3d0f922a6df0468af4a9afe3d5d3a0fb35bb3afd"
+        }
+      ]
+    },
+    {
+      "id": "brick_wall_001",
+      "kind": "texture",
+      "use": "the street facades and the alley walls",
+      "output": "brick",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/brick_wall_001",
+      "authors": ["Rob Tuytel", "Dimitrios Savva"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": 3,
+      "resolution": "1k jpg source, used as it is",
+      "files": [
+        {
+          "map": "diff",
+          "name": "brick_wall_001_diffuse_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_diffuse_1k.jpg",
+          "bytes": 574381,
+          "sha256": "6a1233ec0186703de830354d89f122991e61e67fb67e0846c7eaf6c5aefea902"
+        },
+        {
+          "map": "nor_gl",
+          "name": "brick_wall_001_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_nor_gl_1k.jpg",
+          "bytes": 295279,
+          "sha256": "8afbe3919308b168a6b7235fe7b930f670cfffa1a34de39ee790d55c9d7bda09"
+        },
+        {
+          "map": "arm",
+          "name": "brick_wall_001_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_arm_1k.jpg",
+          "bytes": 123384,
+          "sha256": "8e6ab4cecd82c4305c9511065b0795bd579df89df8364a76a7359c1278bed38d"
+        }
+      ]
+    },
+    {
+      "id": "plastered_wall",
+      "kind": "texture",
+      "use": "the cafe's front, its inner walls and ceiling",
+      "output": "plaster",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/plastered_wall",
+      "authors": ["Amal Kumar"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": 2,
+      "resolution": "1k jpg source, used as it is",
+      "files": [
+        {
+          "map": "diff",
+          "name": "plastered_wall_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plastered_wall/plastered_wall_diff_1k.jpg",
+          "bytes": 617080,
+          "sha256": "73312ebb6eabc8e0a55addd8a82a8924bcd1e717b9488a887cc77f14b6ea554e"
+        },
+        {
+          "map": "nor_gl",
+          "name": "plastered_wall_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plastered_wall/plastered_wall_nor_gl_1k.jpg",
+          "bytes": 1072153,
+          "sha256": "504e1f7baf4b68714c64b6670e7954bebe99efe31c49f7ce5a2089e4b76023b5"
+        },
+        {
+          "map": "arm",
+          "name": "plastered_wall_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plastered_wall/plastered_wall_arm_1k.jpg",
+          "bytes": 624131,
+          "sha256": "cd927f46fa85b7e5c1a9747b90258c505529d7347d5f4dd356ae0ed2bda34d4f"
+        }
+      ]
+    },
+    {
+      "id": "large_red_bricks",
+      "kind": "texture",
+      "use": "the cafe's red wall (the interior's colour-bleed source)",
+      "output": "red-brick",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/large_red_bricks",
+      "authors": ["Rob Tuytel"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": 2,
+      "resolution": "1k jpg source, used as it is",
+      "files": [
+        {
+          "map": "diff",
+          "name": "large_red_bricks_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/large_red_bricks/large_red_bricks_diff_1k.jpg",
+          "bytes": 616870,
+          "sha256": "f9f1f0f2c0302c13741b92e2382c5c0e34beee32628fb1d6853a27a3071e05a9"
+        },
+        {
+          "map": "nor_gl",
+          "name": "large_red_bricks_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/large_red_bricks/large_red_bricks_nor_gl_1k.jpg",
+          "bytes": 887814,
+          "sha256": "a8f3f10c0a2625a5291bf86a581e618c920fb2d29189bf29f75d842078164a4e"
+        },
+        {
+          "map": "arm",
+          "name": "large_red_bricks_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/large_red_bricks/large_red_bricks_arm_1k.jpg",
+          "bytes": 207608,
+          "sha256": "ccc903e5e18a3f64d8e782dd39150071e938dd5f2bcb7f7e4554e70562b386cd"
+        }
+      ]
+    },
+    {
+      "id": "herringbone_parquet",
+      "kind": "texture",
+      "use": "the cafe's polished floor",
+      "output": "parquet",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/herringbone_parquet",
+      "authors": ["Jenelle van Heerden", "Sergej Majboroda"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": 3.4,
+      "resolution": "1k jpg source, used as it is",
+      "files": [
+        {
+          "map": "diff",
+          "name": "herringbone_parquet_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/herringbone_parquet/herringbone_parquet_diff_1k.jpg",
+          "bytes": 829046,
+          "sha256": "d6c66492a6c4cfd4e8ed18c9cdd4e0303f3de4e04613d2adca8bc2b8f2dd2350"
+        },
+        {
+          "map": "nor_gl",
+          "name": "herringbone_parquet_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/herringbone_parquet/herringbone_parquet_nor_gl_1k.jpg",
+          "bytes": 373438,
+          "sha256": "af6a822100fd6369bb75e43bb764f4a71ca41f521538ac796e92e681e3ad38f5"
+        },
+        {
+          "map": "arm",
+          "name": "herringbone_parquet_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/herringbone_parquet/herringbone_parquet_arm_1k.jpg",
+          "bytes": 554910,
+          "sha256": "64ded181ebe84df02998929e95b5a9a4b613f268a5355f7ef56cd91da879b207"
+        }
+      ]
+    },
+    {
+      "id": "painted_metal_shutter",
+      "kind": "texture",
+      "use": "the closed shops' shutters",
+      "output": "shutter",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/painted_metal_shutter",
+      "authors": ["Dario Barresi", "Rico Cilliers", "Charlotte Baglioni"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": 2,
+      "resolution": "1k jpg source, used as it is",
+      "files": [
+        {
+          "map": "diff",
+          "name": "painted_metal_shutter_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_metal_shutter/painted_metal_shutter_diff_1k.jpg",
+          "bytes": 627333,
+          "sha256": "278394aabcb5a5bd560d9904358682acc5af23666b22bd1f12558789da4aa4d2"
+        },
+        {
+          "map": "nor_gl",
+          "name": "painted_metal_shutter_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_metal_shutter/painted_metal_shutter_nor_gl_1k.jpg",
+          "bytes": 730726,
+          "sha256": "7545d778669c55e3e9bdc89355ce7190077c3ffdfb324e988ff9803a5bae5a46"
+        },
+        {
+          "map": "arm",
+          "name": "painted_metal_shutter_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_metal_shutter/painted_metal_shutter_arm_1k.jpg",
+          "bytes": 606809,
+          "sha256": "26a49a8b60dd2e1fdb325c1488d55d2e6e7362f4505e400ac2243bf0ec67ca56"
+        }
+      ]
+    },
+    {
+      "id": "kloppenheim_01_puresky",
+      "kind": "hdri",
+      "use": "the overcast dusk sky map (B switches to it): image-based light and the backdrop",
+      "output": "dusk-sky",
+      "source": "Poly Haven",
+      "page": "https://polyhaven.com/a/kloppenheim_01_puresky",
+      "authors": ["Greg Zaal", "Jarod Guest"],
+      "licence": "CC0-1.0",
+      "worldSizeMetres": null,
+      "resolution": "2k (2048 x 1024) Radiance HDR, used as it is",
+      "files": [
+        {
+          "map": "hdr",
+          "name": "kloppenheim_01_puresky_2k.hdr",
+          "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/kloppenheim_01_puresky_2k.hdr",
+          "bytes": 3187954,
+          "sha256": "93ca2257ab8e20f71c1ae4680b015e6748af27c909bd3228fb7cd0fdd369611e"
+        }
+      ]
+    }
+  ]
+}

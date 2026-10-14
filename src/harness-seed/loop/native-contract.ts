@@ -566,6 +566,10 @@ export const RendererFeature = {
   TimestampQuery: "timestamp-query",
   Rg11b10UfloatRenderable: "rg11b10ufloat-renderable",
   DepthClipControl: "depth-clip-control",
+  /** Compressed material textures (BC7, ASTC 4x4, ETC2 RGBA8). */
+  TextureCompressionBc: "texture-compression-bc",
+  TextureCompressionAstc: "texture-compression-astc",
+  TextureCompressionEtc2: "texture-compression-etc2",
 } as const;
 export type RendererFeature = (typeof RendererFeature)[keyof typeof RendererFeature];
 

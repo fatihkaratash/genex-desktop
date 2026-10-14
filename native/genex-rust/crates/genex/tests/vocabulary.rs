@@ -84,6 +84,28 @@ fn the_meshlet_extras_schema_is_the_fixtures() {
 }
 
 #[test]
+fn the_lod_extras_schema_is_the_fixtures() {
+    use genex_render::mesh::{self, LodExtrasKey, LodFault, LodLevelKey};
+    let pinned = fixture();
+    let schema = &pinned["lods"];
+    assert_eq!(schema["extrasKey"].as_str(), Some(mesh::LODS_EXTRAS_KEY));
+    let numbers = [
+        ("schemaVersion", mesh::LOD_SCHEMA_VERSION),
+        ("maxLevels", mesh::LOD_MAX_LEVELS),
+        ("minTriangles", mesh::LOD_MIN_TRIANGLES),
+    ];
+    for (key, value) in numbers {
+        assert_eq!(schema[key].as_u64(), Some(u64::from(value)), "{key}");
+    }
+    let keys: Vec<&str> = LodExtrasKey::ALL.iter().map(|key| key.wire()).collect();
+    assert_eq!(names(&schema["extrasKeys"]), keys);
+    let levels: Vec<&str> = LodLevelKey::ALL.iter().map(|key| key.wire()).collect();
+    assert_eq!(names(&schema["levelKeys"]), levels);
+    let faults: Vec<&str> = LodFault::ALL.iter().map(|fault| fault.wire()).collect();
+    assert_eq!(names(&schema["faults"]), faults);
+}
+
+#[test]
 fn the_environment_calls_and_their_wire_spellings_are_the_fixtures() {
     use genex::render::{EnvironmentKind, HdriSun};
     let pinned = fixture();

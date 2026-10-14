@@ -83,5 +83,14 @@
       "meshlets-local-index-out-of-meshlet",
       "meshlets-triangles-differ"
     ]
+  },
+  "lods": {
+    "extrasKey": "genex_lods",
+    "schemaVersion": 1,
+    "maxLevels": 4,
+    "minTriangles": 512,
+    "extrasKeys": ["version", "indices", "levels"],
+    "levelKeys": ["first", "count", "error"],
+    "faults": ["lods-unknown-version", "lods-over-limit", "lods-range-out-of-bounds", "lods-vertex-out-of-mesh", "lods-not-coarser"]
   }
 }

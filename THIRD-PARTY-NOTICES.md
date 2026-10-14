@@ -132,6 +132,11 @@ exceptions: Genex ships them (below).
 - zig (MIT) for the Windows and Linux cross-builds, and llvm-mingw (LLVM under Apache-2.0 with
   LLVM exception; the mingw-w64 runtime and headers under ZPL-2.1 and public-domain terms) as its
   pinned fallback.
+- The Basis Universal v2.50 WebAssembly encoder (`basis_encoder.js` and `basis_encoder.wasm`,
+  Apache-2.0 with its NOTICE, the text under [Basis Universal](#basis-universal)), which the Rust ·
+  wgpu asset import step encodes textures with (`src/substrate/asset-import/basis-encoder.ts`,
+  pinned by sha256 at the `v2_50` release commit). So far only a development fetch
+  (`scripts/toolchains/basis-encoder.ts fetch`) downloads it; it is not committed or shipped.
 - The Rust crate checker, installed on the first crate approval: cargo-deny (MIT OR Apache-2.0)
   and cargo-vet (MIT OR Apache-2.0) from their official GitHub releases, and the RustSec
   advisory-db (CC0-1.0) at the commit `native/genex-rust/crate-policy.json` pins. The trusted
@@ -184,7 +189,7 @@ notice; the toolchain store compiles it into the headless raylib library on the 
 
 The `genex` workspace in `native/genex-rust` (Genex's own code, MIT) builds offline from a vendored
 crate set: `scripts/spike/rust-wgpu/vendor-allowlist.toml` names the direct dependencies,
-`setup-toolchain.sh` vendors their resolved closure (468 crates) into the project-local toolchain
+`setup-toolchain.sh` vendors their resolved closure (469 crates) into the project-local toolchain
 folder, and `native/genex-rust/Cargo.lock` pins what the workspace uses. No crate source is copied
 into this repository or shipped inside Genex.app; each vendored crate keeps its licence files in
 its own folder. A Rust game or a `genex` release links only the subset its targets and features
@@ -208,7 +213,7 @@ Notable terms in the closure:
 | MIT | 84 | alsa-sys 0.4.0, android-properties 0.2.2, block2 0.5.1, block2 0.6.2, bytes 1.12.1, calloop 0.13.0, calloop 0.14.5, calloop-wayland-source 0.3.0, calloop-wayland-source 0.4.1, cfg_aliases 0.2.2, color_quant 1.1.0, combine 4.6.8, crunchy 0.2.4, dispatch 0.2.0, dlib 0.5.3, extended 0.1.0, fax 0.2.7, harfrust 0.12.0, inflections 1.1.1, libm 0.2.16, libredox 0.1.25, libudev-sys 0.1.4, mint 0.5.9, nix 0.31.3, nu-ansi-term 0.50.3, objc-sys 0.3.5, objc2 0.5.3, objc2 0.6.5, objc2-app-kit 0.2.2, objc2-cloud-kit 0.2.2, objc2-contacts 0.2.2, objc2-core-data 0.2.2, objc2-core-image 0.2.2, objc2-core-location 0.2.2, objc2-encode 4.1.0, objc2-foundation 0.2.2, objc2-foundation 0.3.2, objc2-link-presentation 0.2.2, objc2-metal 0.2.2, objc2-quartz-core 0.2.2, objc2-symbols 0.2.2, objc2-ui-kit 0.2.2, objc2-uniform-type-identifiers 0.2.2, objc2-user-notifications 0.2.2, oorandom 11.1.5, orbclient 0.3.55, ordered-float 5.5.0, pulp 0.22.3, pulp-wasm-simd-flag 0.1.1, quick-xml 0.41.0, raw-cpuid 11.6.0, reborrow 0.5.5, redox_syscall 0.4.1, redox_syscall 0.5.18, redox_syscall 0.9.4, sctk-adwaita 0.10.1, simd-adler32 0.3.10, slab 0.4.12, smithay-client-toolkit 0.19.2, smithay-client-toolkit 0.20.0, smithay-clipboard 0.7.3, spin 0.9.9, strict-num 0.1.1, tiff 0.11.3, tokio 1.53.2, tracing 0.1.44, tracing-core 0.1.36, urlencoding 2.1.3, wayland-backend 0.3.17, wayland-client 0.31.15, wayland-csd-frame 0.3.0, wayland-cursor 0.31.14, wayland-protocols 0.32.13, wayland-protocols-experimental 20250721.0.1, wayland-protocols-misc 0.3.12, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12, wayland-scanner 0.31.11, wayland-sys 0.31.11, winnow 1.0.4, x11-dl 2.21.0, xcursor 0.3.11, xkbcommon-dl 0.4.2, zmij 1.0.23 |
 | Apache-2.0 OR MIT | 37 | alsa 0.11.0, atomic-waker 1.1.2, autocfg 1.5.1, bit-set 0.10.0, bit-vec 0.9.1, bit_field 0.10.3, cesu8 1.1.0, color 0.3.3, concurrent-queue 2.5.0, console_error_panic_hook 0.1.7, equivalent 1.0.2, fastrand 2.5.0, fearless_simd 0.4.1, fnv 1.0.7, gilrs 0.11.2, gilrs-core 0.6.8, glifo 0.2.0, indexmap 2.14.2, kurbo 0.13.1, linebender_resource_handle 0.1.1, minicov 0.3.8, nohash-hasher 0.2.0, noise 0.9.0, peniko 0.6.1, pin-project 1.1.13, pin-project-internal 1.1.13, pin-project-lite 0.2.17, polling 3.11.0, pollster 0.4.0, portable-atomic 1.15.0, portable-atomic-util 0.2.8, rustc-hash 1.1.0, rustc-hash 2.1.3, simd_cesu8 1.2.0, uuid 1.27.0, vello_common 0.1.0, vello_cpu 0.1.0 |
 | Zlib OR Apache-2.0 OR MIT | 24 | bytemuck 1.25.2, bytemuck_derive 1.12.1, dispatch2 0.3.1, objc2-app-kit 0.3.2, objc2-audio-toolbox 0.3.2, objc2-avf-audio 0.3.2, objc2-cloud-kit 0.3.2, objc2-core-audio 0.3.2, objc2-core-audio-types 0.3.2, objc2-core-data 0.3.2, objc2-core-foundation 0.3.2, objc2-core-graphics 0.3.2, objc2-core-image 0.3.2, objc2-core-location 0.3.2, objc2-core-text 0.3.2, objc2-core-video 0.3.2, objc2-io-kit 0.3.2, objc2-io-surface 0.3.2, objc2-metal 0.3.2, objc2-quartz-core 0.3.2, objc2-ui-kit 0.3.2, objc2-user-notifications 0.3.2, safe_arch 1.2.0, wide 1.7.1 |
-| Apache-2.0 | 15 | ab_glyph 0.2.32, ab_glyph_rasterizer 0.1.10, approx 0.5.1, codespan-reporting 0.13.1, cpal 0.18.2, gethostname 1.1.0, nalgebra 0.35.0, nalgebra-macros 0.3.0, owned_ttf_parser 0.25.1, parry3d 0.31.1, rapier3d 0.36.0, simba 0.10.2, spirv 0.4.0+sdk-1.4.341.0, unicode-general-category 1.1.0, winit 0.30.13 |
+| Apache-2.0 | 16 | ab_glyph 0.2.32, ab_glyph_rasterizer 0.1.10, approx 0.5.1, codespan-reporting 0.13.1, cpal 0.18.2, gethostname 1.1.0, ktx2 0.5.0, nalgebra 0.35.0, nalgebra-macros 0.3.0, owned_ttf_parser 0.25.1, parry3d 0.31.1, rapier3d 0.36.0, simba 0.10.2, spirv 0.4.0+sdk-1.4.341.0, unicode-general-category 1.1.0, winit 0.30.13 |
 | MPL-2.0 | 11 | symphonia 0.6.1, symphonia-bundle-flac 0.6.1, symphonia-bundle-mp3 0.6.1, symphonia-codec-pcm 0.6.1, symphonia-codec-vorbis 0.6.1, symphonia-common 0.6.1, symphonia-core 0.6.1, symphonia-format-ogg 0.6.1, symphonia-format-riff 0.6.1, symphonia-metadata 0.6.1, triple_buffer 9.0.0 |
 | Unlicense OR MIT | 8 | aho-corasick 1.1.5, byteorder 1.5.0, byteorder-lite 0.1.0, memchr 2.8.3, same-file 1.0.6, termcolor 1.4.1, walkdir 2.5.0, winapi-util 0.1.11 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 6 | linux-raw-sys 0.12.1, linux-raw-sys 0.4.15, rustix 0.38.44, rustix 1.1.5, wasip2 1.0.4+wasi-0.2.12, wit-bindgen 0.57.1 |
@@ -392,6 +397,22 @@ its tests never depend on them. Every one is CC0 from Poly Haven; the credits ar
 | `rustic_stone_wall` | the cabin footing and the chimney | https://polyhaven.com/a/rustic_stone_wall (`rustic_stone_wall_diff_1k.jpg`, `rustic_stone_wall_nor_gl_1k.jpg`, `rustic_stone_wall_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Dimitrios Savva, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 2,779,719 bytes |
 | `kloppenheim_06_puresky` | the golden-hour sky map (B switches to it): image-based light and the backdrop | https://polyhaven.com/a/kloppenheim_06_puresky (`kloppenheim_06_puresky_2k.hdr`, from `https://dl.polyhaven.org/file/ph-assets/`) | Greg Zaal, Jarod Guest, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 4,434,394 bytes |
 
+Harbour Street, renderer pass 2's urban and interior showcase, fetches its own CC0 scans and sky
+map the same way (`node scripts/showcase-assets.ts fetch --scene harbour-street`, pinned in
+`native/genex-rust/examples/showcase/harbour/assets-manifest.json`); its blockout draws untextured
+stand-ins without them.
+
+| Asset | Used for | Source | Authors | Licence | Size |
+| --- | --- | --- | --- | --- | --- |
+| `asphalt_02` | the street and the crossing, wet after the rain (its roughness lowered in code) | https://polyhaven.com/a/asphalt_02 (`asphalt_02_diff_1k.jpg`, `asphalt_02_nor_gl_1k.jpg`, `asphalt_02_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Rob Tuytel, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 2,268,599 bytes |
+| `concrete_pavement` | the pavements either side of the street | https://polyhaven.com/a/concrete_pavement (`concrete_pavement_diff_1k.jpg`, `concrete_pavement_nor_gl_1k.jpg`, `concrete_pavement_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Charlotte Baglioni, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 2,912,926 bytes |
+| `brick_wall_001` | the street facades and the alley walls | https://polyhaven.com/a/brick_wall_001 (`brick_wall_001_diffuse_1k.jpg`, `brick_wall_001_nor_gl_1k.jpg`, `brick_wall_001_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Rob Tuytel, Dimitrios Savva, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 993,044 bytes |
+| `plastered_wall` | the cafe's front, its inner walls and ceiling | https://polyhaven.com/a/plastered_wall (`plastered_wall_diff_1k.jpg`, `plastered_wall_nor_gl_1k.jpg`, `plastered_wall_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Amal Kumar, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 2,313,364 bytes |
+| `large_red_bricks` | the cafe's red wall (the interior's colour-bleed source) | https://polyhaven.com/a/large_red_bricks (`large_red_bricks_diff_1k.jpg`, `large_red_bricks_nor_gl_1k.jpg`, `large_red_bricks_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Rob Tuytel, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 1,712,292 bytes |
+| `herringbone_parquet` | the cafe's polished floor | https://polyhaven.com/a/herringbone_parquet (`herringbone_parquet_diff_1k.jpg`, `herringbone_parquet_nor_gl_1k.jpg`, `herringbone_parquet_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Jenelle van Heerden, Sergej Majboroda, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 1,757,394 bytes |
+| `painted_metal_shutter` | the closed shops' shutters | https://polyhaven.com/a/painted_metal_shutter (`painted_metal_shutter_diff_1k.jpg`, `painted_metal_shutter_nor_gl_1k.jpg`, `painted_metal_shutter_arm_1k.jpg`, from `https://dl.polyhaven.org/file/ph-assets/`) | Dario Barresi, Rico Cilliers, Charlotte Baglioni, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 1,964,868 bytes |
+| `kloppenheim_01_puresky` | the overcast dusk sky map (B switches to it): image-based light and the backdrop | https://polyhaven.com/a/kloppenheim_01_puresky (`kloppenheim_01_puresky_2k.hdr`, from `https://dl.polyhaven.org/file/ph-assets/`) | Greg Zaal, Jarod Guest, via Poly Haven | CC0 1.0 (Poly Haven's licence, https://polyhaven.com/license); no attribution is required and it is given anyway | 3,187,954 bytes |
+
 ## Rust toolchain runtime
 
 Besides its crates (above), a Rust game links what the pinned toolchains compile into every
@@ -420,8 +441,8 @@ not shipped.
 
 ## Asset importer decoders
 
-The Rust · wgpu asset import step (`src/substrate/asset-import/`) runs four WebAssembly modules
-in its own sandbox: three decoders and meshoptimizer's meshlet clusterizer. They are the builds
+The Rust · wgpu asset import step (`src/substrate/asset-import/`) runs five WebAssembly modules
+in its own sandbox: three decoders, meshoptimizer's meshlet clusterizer and its simplifier. They are the builds
 three.js 0.185.1 ships in `examples/jsm/libs`, read from the pinned `three` package (paths below
 are under it). Their licence and notice texts are in the three.js add-on library sections below. The packaged app does not carry the importer yet; when it does,
 this page ships beside the decoders.
@@ -432,6 +453,44 @@ this page ships beside the decoders.
 | `examples/jsm/libs/draco/gltf/` | [Draco](https://github.com/google/draco) 1.5.6 glTF decoder | Apache-2.0 |
 | `examples/jsm/libs/meshopt_decoder.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) 1.1.1 decoder | MIT |
 | `examples/jsm/libs/meshopt_clusterizer.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) meshlet clusterizer (a development build between 1.1.1 and 1.2.0); the importer stores its meshlets in glTF `extras` | MIT |
+| `examples/jsm/libs/meshopt_simplifier.module.js` | [meshoptimizer](https://github.com/zeux/meshoptimizer) simplifier (a development build between 1.1.1 and 1.2.0); the importer stores its levels of detail in glTF `extras` | MIT |
+
+## Asset importer ports
+
+Code of the Rust · wgpu asset import step (`src/substrate/asset-import/`) ported from other
+projects. The test fixture `tests/fixtures/asset-import/quantized.glb` is the output of
+[gltfpack](https://github.com/zeux/meshoptimizer) 1.3.0 (MIT, the meshoptimizer licence below);
+gltfpack itself is not in the repository.
+
+| Genex file | What | Source | Upstream author | Licence |
+| --- | --- | --- | --- | --- |
+| `src/substrate/asset-import/dequantize.ts` | `KHR_mesh_quantization` undone: which attributes become float32 (every one but `JOINTS_n`, morph targets too) and the normalized-integer division with its -1 clamp | glTF-Transform 4.5.1 (https://github.com/donmccurdy/glTF-Transform), `packages/functions/src/dequantize.ts` and `packages/core/src/utils/math-utils.ts` (`decodeNormalizedInt`) | Don McCurdy | MIT (see [glTF-Transform](#gltf-transform)) |
+
+### glTF-Transform
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2024 Don McCurdy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## Components under other terms
 

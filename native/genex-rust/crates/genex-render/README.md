@@ -92,6 +92,55 @@ spares in the ledger (`TargetPolicy::spares`, at most `SPARE_BYTES_MAX` together
 to a step swaps them in instead of allocating and clearing them again; a spare idle for
 `SPARE_IDLE_FRAMES` frames is released. Phones and the web keep no spares.
 
+## glTF models
+
+`src/mesh.rs` reads a GLB's triangles, `src/glb_material.rs` its materials, one part per
+material. Each attribute is read only in a layout core glTF gives it (float positions, normals and
+tangents; float or normalized 8/16-bit uvs and weights; 8/16-bit joints; unsigned indices); any
+other layout, such as a `KHR_mesh_quantization` one the Studio's import step did not dequantize,
+is refused `mesh-invalid` before the `gltf` reader would misread it or panic.
+
+A part also carries its material's `KHR_materials_*` extensions (`GlbPart::material_ext`, from
+`src/glb_material_ext.rs`): `ior`, `specular`, `clearcoat`, `sheen`, `transmission` (factor),
+`volume` (factors) and `anisotropy`, read from the raw extension JSON with the specification's
+defaults and clamped into range, textures named by their image on TEXCOORD_0. They are read, not
+yet shaded: no GPU row carries them.
+
+### Compressed material textures
+
+`src/texture_ktx2.rs` reads a KTX2 file in one fixed GPU format with the `ktx2` crate:
+BC7, ASTC 4x4 or ETC2 RGBA8 (sRGB or linear), or RGBA8, one square power-of-two 2D image whose
+levels are stored plain down to 1 x 1. A Basis Universal or supercompressed file is refused: the
+Studio's export writes each family's levels plain, so the runtime carries no transcoder. Size-class
+arrays made for a family (`ClassArrays::with_family`) take only that family's textures
+(`add_compressed`); a chain is never resampled, so a larger texture drops its top levels into a
+smaller class. The three compression features are renderer-owned (`floor::RENDERER_FEATURES`),
+requested whenever the adapter offers them. A compressed layer takes a quarter of RGBA8's bytes.
+The renderer itself still makes RGBA8 arrays: choosing a family per device and loading a game's
+KTX2 files through it is the follow-up that wires them in.
+
+### `genex_lods` in glTF
+
+The Studio's import step simplifies a GLB of at least 512 triangles with meshoptimizer and stores
+each primitive's levels in its `extras`, never as an extension:
+
+```json
+"extras": { "genex_lods": {
+  "version": 1, "indices": 12,
+  "levels": [ { "first": 0, "count": 1536, "error": 0.006 }, { "first": 1536, "count": 768, "error": 0.009 } ]
+} }
+```
+
+`indices` is a bufferView of little-endian `u32` primitive vertex indices, level after level;
+each level is whole triangles, no finer than the one before, with an object-space error never
+smaller than the one before, at most four levels. `src/mesh_lod.rs` validates them (a typed
+`LodFault` otherwise, and the mesh draws whole) and merges a part's primitives level by level
+(`GlbPart::lods`: level k is every primitive's level k, its error the largest, scaled by each
+node). `select_lod` picks the coarsest level whose error projects to at most a pixel threshold,
+compared as `error * pixels_per_unit <= threshold_px * distance` so `gx_lod_select`
+(`shaders/geometry/lod_select.wgsl`) picks the same level on every GPU. Uploading the levels'
+indices and letting the cull write each instance's index range is the follow-up that draws them.
+
 ## Extension layouts
 
 Level-2 materials and post passes declare `[[wgsl]] api = 1 | 2`. API 2 reads the v2 group map
