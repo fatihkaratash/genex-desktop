@@ -194,6 +194,33 @@ fn a_compressed_chain_takes_a_quarter_of_rgba8s_bytes_so_the_desktop_high_arrays
     assert!(rgba8 as f64 / bc7 as f64 >= 3.5, "the ledger's material arrays: {rgba8} -> {bc7}");
 }
 
+/// A file the Studio's import step wrote (`tests/conformance/rust-assets-ktx2.test.ts` holds it to
+/// the importer's output).
+fn import_fixture(name: &str) -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../tests/fixtures/asset-import").join(name);
+    std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+#[test]
+fn the_import_steps_family_files_read_here_with_the_descriptor_the_ktx2_crate_builds_for_their_format() {
+    let rows = [
+        ("bc", TextureFamily::Bc7, Format::BC7_SRGB_BLOCK),
+        ("astc", TextureFamily::Astc4x4, Format::ASTC_4x4_SRGB_BLOCK),
+        ("etc2", TextureFamily::Etc2Rgba8, Format::ETC2_R8G8B8A8_SRGB_BLOCK),
+        ("rgba8", TextureFamily::Rgba8, Format::R8G8B8A8_SRGB),
+    ];
+    for (wire, family, format) in rows {
+        let bytes = import_fixture(&format!("basis-uastc-64.{wire}.ktx2"));
+        let texture = read_ktx2(&bytes).unwrap_or_else(|error| panic!("{wire}: {error}"));
+        assert_eq!((texture.family(), texture.is_srgb(), texture.side(), texture.levels().len()), (family, true, 64, 7), "{wire}");
+        let reader = ktx2::Reader::new(&bytes[..]).expect("a KTX2 file");
+        let expected = ktx2::dfd::Basic::from_format(format).expect("a descriptor").0;
+        assert_eq!(reader.basic_dfd(), Some(&expected), "{wire}: the import step's descriptor");
+        // The value is NUL-terminated, as KTX 2.0 asks of KTXwriter.
+        assert_eq!(reader.writer(), Some("Genex asset import\0"), "{wire}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // GPU
 

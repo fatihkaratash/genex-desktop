@@ -19,3 +19,10 @@ texture inputs are the shared samples in `../asset-previews/`.
   `KHR_mesh_quantization` (14-bit positions under a node scale, 8-bit normals, 12-bit uvs under
   `KHR_texture_transform`). `quantized.plain.glb` is what the import step writes from it
   (`normalizeGltf`); the runtime's mesh tests load that file.
+- `basis-uastc-64.ktx2`, `basis-etc1s-64.ktx2`: a synthetic 64 x 64 RGBA pattern (a checker over
+  two gradients, alpha falling left to right), sRGB, mipmapped down to 1 x 1, encoded locally with
+  the [Basis Universal](https://github.com/BinomialLLC/basis_universal) v2.50 WebAssembly encoder
+  (`webgl/encoder/build`, Apache-2.0) as UASTC LDR 4x4 with Zstandard and as ETC1S (quality 128).
+  `basis-uastc-64.{bc,astc,etc2,rgba8}.ktx2` are what the import step writes from the UASTC one
+  (`transcodeKtx2Families`, through the pinned transcoder); the runtime's `texture_compressed`
+  rows read them.

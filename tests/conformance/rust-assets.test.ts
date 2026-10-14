@@ -23,7 +23,7 @@ import {
   ImportConverter,
   planImport,
 } from "../../src/substrate/asset-import/import-plan.ts";
-import { transcodeKtx2 } from "../../src/substrate/asset-import/ktx2.ts";
+import { Ktx2FamilySkip, transcodeKtx2 } from "../../src/substrate/asset-import/ktx2.ts";
 import { objToMesh } from "../../src/substrate/asset-import/obj.ts";
 import { isSafeAssetPath, readGameAsset } from "../../src/substrate/asset-import/safe-asset.ts";
 import {
@@ -799,6 +799,37 @@ describe("the importer in its own sandbox", { skip: process.platform === "win32"
       ["0.mtl", "0.obj", "1.stl", "2.ply", "3.glb", "4.ktx2", "11.stl"].sort(),
       "nothing refused was copied",
     );
+  });
+
+  it("a mipmapped Basis KTX2 gets one KTX2 per destination family, admitted beside its kept source", {
+    timeout: 120_000,
+  }, async () => {
+    await copyFile(path.join(IMPORT, "basis-uastc-64.ktx2"), path.join(game, "assets", "rock.ktx2"));
+    const result = await importRustAssets(deps({ newJobId: () => "job-families" }), {
+      gameRoot: game,
+      stack: GameStack.RustWgpu,
+      files: ["assets/rock.ktx2", "assets/texture.ktx2"],
+      targets: [BuildTarget.Mac, BuildTarget.Android],
+    });
+    const [rock, sample40] = result.files;
+    assert.ok(rock?.output, `${JSON.stringify(rock)} ${result.log}`);
+    assert.equal(
+      rock.output.sha256,
+      sha(await readFile(path.join(IMPORT, "basis-uastc-64.ktx2"))),
+      "kept as delivered",
+    );
+    assert.deepEqual(
+      rock.families?.map((family) => family.file),
+      ["assets/rock.bc.ktx2", "assets/rock.astc.ktx2", "assets/rock.etc2.ktx2", "assets/rock.rgba8.ktx2"],
+    );
+    for (const family of rock.families ?? []) {
+      const wire = family.file.split(".").at(-2);
+      const golden = await readFile(path.join(IMPORT, `basis-uastc-64.${wire}.ktx2`));
+      assert.equal(family.sha256, sha(golden), family.file);
+      assert.equal(sha(await readFile(family.path)), family.sha256, `${family.file}: the host's own digest`);
+    }
+    assert.equal(sample40?.families, undefined);
+    assert.equal(sample40?.familiesSkipped, Ktx2FamilySkip.NotSquare);
   });
 
   it("keeps a .hdr as delivered and refuses one with a bad header", { timeout: 120_000 }, async () => {
