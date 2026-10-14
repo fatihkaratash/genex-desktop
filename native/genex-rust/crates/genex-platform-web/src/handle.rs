@@ -61,6 +61,10 @@ pub trait GameHandle {
     fn install_passes(&mut self, presenter: &mut Presenter) -> Vec<(String, RenderError)>;
     /// The custom GPU passes the game registered, `(name, stage)` in registration order.
     fn gpu_passes(&mut self) -> Vec<(String, PassStage)>;
+    /// After a device loss: `presenter`'s device re-created through its opener, every upload
+    /// replayed and the game's custom passes rebuilt on it; answers whether a new device is in use
+    /// (false while the device is not lost).
+    fn recover(&mut self, presenter: &mut Presenter) -> Result<bool, RenderError>;
 }
 
 /// The facade view a studio camera name resolves to: the game's own for None, a named camera, or
@@ -170,5 +174,9 @@ impl<W: Default + 'static> GameHandle for Runtime<W> {
 
     fn gpu_passes(&mut self) -> Vec<(String, PassStage)> {
         Runtime::gpu_passes(self)
+    }
+
+    fn recover(&mut self, presenter: &mut Presenter) -> Result<bool, RenderError> {
+        presenter.recover_for(self)
     }
 }

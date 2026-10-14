@@ -116,7 +116,7 @@ data, never prose to match: read the code, then read the run's `problem`.
 | Code | Meaning |
 | --- | --- |
 | `gpu-unsupported` | No adapter on a WebGPU-core backend, or one below the core limits: a native run ends with `fatal` of this reason. On the web, the designed "this game needs WebGPU" page. |
-| `device-lost` | The GPU device was lost; the run re-creates it, and `capture` answers this meanwhile. Retry. |
+| `device-lost` | The GPU device was lost; the run re-creates it, and `capture` answers this meanwhile. Retry. A web page cannot re-create it: it flushes the saves and shows a card with this code (`GenexShell.status.state` is `failed`). |
 | `gpu-hang` | A `step` or `capture` passed its deadline; the host took it for a GPU hang and ended the run. Known gap: on a Mac the system's GPU watchdog can end a frame stuck in a looping shader before that deadline, and such a frame is answered blank instead of refused. A capture that is suddenly black after a slow `ready` or `capture` points at a shader that never finishes. |
 | `native-feature-missing` | The game declares a native-enhanced feature the device does not offer: the run ends with `fatal` of this reason (the device is opened with exactly the declared features). |
 | `native-features-web` | A web build of a game that declares native-enhanced features: the web has none. |

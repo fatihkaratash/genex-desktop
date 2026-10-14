@@ -34,6 +34,7 @@
 )]
 
 mod live;
+mod pace;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -55,9 +56,12 @@ use genex_studio::{
 };
 use crate::present::Presenter;
 use live::{Live, Presented};
+use pace::{DueFrame, StudioPace};
 
 /// One live frame at 60 Hz.
 const FRAME: Duration = Duration::from_micros(16_667);
+/// While a Live frame waits for the GPU, the loop looks again this soon to send it.
+const LIVE_SEND_POLL: Duration = Duration::from_millis(1);
 /// The graphics path `ready` names when the adapter's backend is not a WebGPU-core one.
 const BACKEND_UNKNOWN: &str = "unknown";
 /// Exit code when the GPU or the world target could not be opened.
@@ -213,17 +217,18 @@ impl<W: Default + 'static> StudioRun<'_, W> {
         }
     }
 
-    /// One live frame of `interval_ms`: its ticks, then a draw when the world moved.
-    fn live_frame(&mut self, interval_ms: f64) {
+    /// One live frame: the ticks its paced time is worth, then a draw when the world moved; the
+    /// timings keep the frame's wall-clock interval.
+    fn live_frame(&mut self, frame: DueFrame) {
         self.fps.frame(self.born.elapsed().as_secs_f64() * 1000.0);
         let ticked_from = Instant::now();
-        let ticks = self.game.advance_live(interval_ms);
+        let ticks = self.game.advance_live(frame.fed_ms);
         let ticked = Instant::now();
         if ticks > 0 {
             self.render();
         }
         let update_ms = (ticked - ticked_from).as_secs_f64() * 1000.0;
-        self.timing.record(interval_ms, update_ms, ticked.elapsed().as_secs_f64() * 1000.0);
+        self.timing.record(frame.interval_ms, update_ms, ticked.elapsed().as_secs_f64() * 1000.0);
     }
 
     /// After a device loss, between the studio's requests: a new device, every mesh replayed, the
@@ -404,13 +409,14 @@ impl<W: Default + 'static> StudioGame for StudioRun<'_, W> {
     }
 }
 
-/// The live loop: serve the studio, re-create a lost device, run the frame, send it to Live, pace
-/// to 60 Hz waking for the studio's next request; returns once `quit` or the studio's end of file
-/// asked the game to close.
+/// The live loop: serve the studio, re-create a lost device, run the frame when its deadline came
+/// ([`StudioPace`]: absolute 60 Hz deadlines, whole frames fed to the clock), hand it to Live
+/// (sent once the GPU finished it, without waiting: the loop looks again every millisecond while
+/// one is in flight), and wait for the next deadline, waking for the studio's next request;
+/// returns once `quit` or the studio's end of file asked the game to close.
 fn run<W: Default + 'static>(studio: &mut Studio, link: &Transport, game: &mut StudioRun<'_, W>) {
-    let mut last: Option<Instant> = None;
+    let mut pace = StudioPace::new(FRAME);
     loop {
-        let start = Instant::now();
         studio.serve(link, game);
         if studio.closing() {
             return;
@@ -418,13 +424,14 @@ fn run<W: Default + 'static>(studio: &mut Studio, link: &Transport, game: &mut S
         if game.presenter.resilient.is_lost() && game.recover() {
             studio.device_restored(link);
         }
-        let interval = last.map_or(0.0, |at| (start - at).as_secs_f64() * 1000.0);
-        last = Some(start);
-        game.live_frame(interval);
+        if let Some(frame) = pace.due(Instant::now()) {
+            game.live_frame(frame);
+        }
         if game.live.present(&mut game.presenter, game.visible) == Presented::Gone {
             studio.end_ring();
         }
-        link.wait(FRAME.saturating_sub(start.elapsed()));
+        let wait = pace.wait(Instant::now());
+        link.wait(if game.live.in_flight() { wait.min(LIVE_SEND_POLL) } else { wait });
     }
 }
 
@@ -567,6 +574,12 @@ mod metal {
     use crate::gpu::{GpuError, GpuPass, GpuPassCtx, PassSetup, PassStage};
     use crate::prelude::*;
     use genex_core::json;
+
+    /// One whole live frame, as the loop's pace feeds it.
+    fn one_frame() -> DueFrame {
+        let ms = FRAME.as_secs_f64() * 1000.0;
+        DueFrame { interval_ms: ms, fed_ms: ms }
+    }
 
     #[derive(Default)]
     struct World {
@@ -752,7 +765,7 @@ mod metal {
         assert_eq!(render["historyReset"], json::Value::Bool(true));
         assert_eq!(render["exposure"].as_str(), "instant");
         for _ in 0..12 {
-            run.live_frame(FRAME.as_secs_f64() * 1000.0);
+            run.live_frame(one_frame());
             run.render();
             let _ = run.presenter.gpu().device.poll(wgpu::PollType::wait_indefinitely());
         }
@@ -789,7 +802,7 @@ mod metal {
         use genex_render::settings::Tonemapper;
         let Some(mut run) = run_of(game(Projection::Perspective, 6.0)) else { return };
         let mut studio = studio(&scratch("hdr-live"));
-        run.live_frame(FRAME.as_secs_f64() * 1000.0);
+        run.live_frame(one_frame());
         run.render();
         let live = last_scene(&run);
         assert!(live.hdr && live.depth_reversed, "a facade game draws the HDR scene: {live:?}");
@@ -809,7 +822,7 @@ mod metal {
         halo.gpu_pass("halo", PassStage::AfterOpaque, V1InWorld);
         let Some(mut run) = run_of(halo) else { return };
         let mut studio = studio(&scratch("hdr-v1"));
-        run.live_frame(FRAME.as_secs_f64() * 1000.0);
+        run.live_frame(one_frame());
         run.render();
         let live = last_scene(&run);
         assert!(!live.hdr && !live.depth_reversed, "a v1 in-world pass keeps the legacy scene: {live:?}");
@@ -842,7 +855,7 @@ mod metal {
         assert_eq!(render["historyReset"], json::Value::Bool(true));
         assert_eq!(render["exposure"].as_str(), "instant");
         for _ in 0..30 {
-            run.live_frame(FRAME.as_secs_f64() * 1000.0);
+            run.live_frame(one_frame());
         }
         let index = run.presenter.resilient.renderer().frame_index();
         assert!(index > 0, "Live frames advanced Live's history");

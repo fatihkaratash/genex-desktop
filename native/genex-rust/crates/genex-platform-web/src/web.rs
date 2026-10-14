@@ -38,7 +38,11 @@
 //! verb, which may have moved the view); every other frame encodes nothing and leaves the canvas
 //! alone (WebGPU keeps its last picture), unless the canvas was resized, when the last world target
 //! is presented again. A 120 or 144 Hz display therefore runs the graph once per tick;
-//! [`studio_frame_tally`] answers the frames rendered and repeated.
+//! [`studio_frame_tally`] answers the frames rendered and repeated. Once the device is lost (the
+//! browser reset its GPU) [`studio_frame`] throws an Error whose `code` is `device-lost` (review
+//! F4); the shell flushes the saves and shows its card with that code. The presenter keeps one
+//! spare renderer, so a capture on other samples than Live's and the Live frame after it swap
+//! renderers instead of rebuilding each from the uploads (review F5).
 //!
 //! [`studio_call`] answers every page verb through genex-studio's `Studio::web()` (the C++ web
 //! build's `webCall` envelope and shapes, the shared ops only; `starting` until boot succeeded).
@@ -194,6 +198,16 @@ fn render_refusal(error: &RenderError) -> JsValue {
     refusal(error.code().wire(), error)
 }
 
+/// The refusal of a frame on a lost device: an Error whose `code` is `device-lost`, which the
+/// shell reads without parsing the message.
+fn device_lost_refusal() -> JsValue {
+    let code = RenderCode::DeviceLost.wire();
+    let error = refusal(code, "the browser lost the GPU device; reload the page");
+    // Setting a property on a fresh Error object cannot fail; the message still names the code.
+    let _ = js_sys::Reflect::set(&error, &JsValue::from_str("code"), &JsValue::from_str(code));
+    error
+}
+
 fn with_shell<T>(f: impl FnOnce(&mut Shell) -> Result<T, JsValue>) -> Result<T, JsValue> {
     SHELL.with_borrow_mut(|slot| match slot.as_mut() {
         Some(shell) => f(shell),
@@ -296,7 +310,10 @@ async fn open_graphics(canvas: Option<HtmlCanvasElement>, world: [u32; 2], model
     };
     let adapter = instance.request_adapter(&options).await.map_err(|error| no_adapter(error.to_string()))?;
     let gpu = Gpu::open(adapter).await?;
-    let presenter = Presenter::with_gpu(gpu, world, wgpu::Features::empty(), Box::new(no_reopen), Box::new(models), log_to_console)?;
+    let mut presenter = Presenter::with_gpu(gpu, world, wgpu::Features::empty(), Box::new(no_reopen), Box::new(models), log_to_console)?;
+    // One spare renderer (the web has no threads, so nothing is warmed off the frame): a capture on
+    // the pinned profile's samples and Live after it swap instead of rebuilding (review F5).
+    presenter.set_off_thread_changes(true);
     log_uncaptured(presenter.gpu());
     let canvas = match (canvas, surface) {
         (Some(element), Some(surface)) => Some(configure_canvas(presenter.gpu(), element, surface)),
@@ -444,7 +461,7 @@ fn present_to_canvas(graphics: &mut Graphics) {
 /// when it ran one (module docs), else leave the canvas's last picture. The frame meter counts
 /// every animation frame. Answers the ticks run; none while a capture is in flight (the frame
 /// neither advances nor draws, and a page verb's drawing is held too ([`studio_call`]), so the
-/// capture reads back the picture it drew).
+/// capture reads back the picture it drew). Throws `device-lost` once the device is lost.
 #[wasm_bindgen]
 pub fn studio_frame(frame_ms: f64) -> Result<u32, JsValue> {
     with_shell(|shell| {
@@ -459,6 +476,9 @@ pub fn studio_frame(frame_ms: f64) -> Result<u32, JsValue> {
             render_world(shell)?;
         }
         let graphics = graphics(shell)?;
+        if graphics.screen.presenter.resilient.is_lost() {
+            return Err(device_lost_refusal());
+        }
         graphics.screen.shown(frame_ms);
         if action == FrameAction::Render || canvas_resized(graphics) {
             present_to_canvas(graphics);

@@ -80,6 +80,7 @@
 //!
 //! [`FrameRenderer`]: genex_render::FrameRenderer
 
+mod hud_history;
 #[cfg(not(target_arch = "wasm32"))]
 mod warm;
 
@@ -726,14 +727,12 @@ impl Presenter {
     }
 
     /// Warm each explicit settings change's renderer off the frame thread and keep the renderer a
-    /// change replaced as the spare for its samples (see the module docs; a studio run). The web has
-    /// no threads: there it changes nothing.
+    /// change replaced as the spare for its samples (see the module docs; a studio run, a desktop
+    /// game). The web has no threads: there it keeps the spare only, so a capture on other samples
+    /// and Live after it swap renderers instead of rebuilding each from the uploads (review F5).
     pub fn set_off_thread_changes(&mut self, on: bool) {
-        if cfg!(target_arch = "wasm32") {
-            return;
-        }
-        self.off_thread = on;
         self.resilient.set_keep_spare(on);
+        self.off_thread = on && !cfg!(target_arch = "wasm32");
     }
 
     /// The platform's clock for frame timing (the web shell's `performance.now()`).
@@ -967,8 +966,7 @@ impl Presenter {
         hud: &mut HudPaint,
     ) -> Result<Drawn, RenderError> {
         let fresh = std::mem::take(&mut hud.textures_delta);
-        self.hud_history.append(fresh.clone());
-        self.hud_history.free.clear();
+        hud_history::record(&mut self.hud_history, fresh.clone());
         self.hud_unsent.append(fresh);
         hud.textures_delta = std::mem::take(&mut self.hud_unsent);
         let drawn = self.render(frame, camera, passes, tick, hud);

@@ -316,7 +316,7 @@ export const NativeRefusal = {
   ForeignImport: "foreign-import",
   /** No adapter on a WebGPU-core backend, or one below core limits: the designed refusal, never a fallback. */
   GpuUnsupported: "gpu-unsupported",
-  /** The GPU device was lost; the run re-creates it, and `capture` answers this meanwhile. */
+  /** The GPU device was lost; the run re-creates it, and `capture` answers this meanwhile (a web page shows its card with this code). */
   DeviceLost: "device-lost",
   /** A frame or step deadline passed: the supervisor took it for a GPU hang and ended the run. */
   GpuHang: "gpu-hang",

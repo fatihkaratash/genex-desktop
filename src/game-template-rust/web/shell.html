@@ -58,7 +58,15 @@
       Frames: the canvas follows its displayed size from the moment it is shown (a resize, or the
       Live view getting its size while studio_boot still runs). Each animation frame feeds the game
       whole refreshes of the display (its rate measured from the frame intervals), not the frame's
-      jittery time, so the sim's 60 Hz ticks land on every second refresh of a 120 Hz display.
+      jittery time, so the sim's 60 Hz ticks land on every second refresh of a 120 Hz display. A
+      frame the module refuses with device-lost (the browser reset its GPU) flushes the saves and
+      shows a card with that code (status failed); any other refusal is frame-failed.
+
+      Input: keys while the canvas has focus, all released at once when the canvas, the window or
+      the page loses it (their keyups would go elsewhere); Mouse1 held from pointerdown to pointerup
+      with the pointer (a click no tick saw is also sent as a tap), the pointer's movement as look
+      while Mouse1 is held or the pointer is locked to the canvas, the wheel in pixels, and real
+      gamepads in the browser's standard mapping, polled each animation frame.
     -->
     <style>
       :root {
@@ -221,6 +229,11 @@
           body: "Something went wrong while the game was loading, so it isn’t running. Reload to try again; if it keeps happening, the game’s build needs a fix.",
           codeLabel: "Code",
         },
+        deviceLost: {
+          title: "The game stopped drawing",
+          body: "The browser reset its graphics, so the game can’t draw any more. Your progress was saved. Reload the page to keep playing.",
+          codeLabel: "Code",
+        },
         saves: {
           "save-quota": "Progress isn’t being saved: this browser’s storage for the game is full.",
           "save-unavailable": "Progress isn’t being saved: this browser keeps no storage for the game.",
@@ -281,6 +294,12 @@
       const REFRESH_SAMPLE_MAX_MS = 100;
       /** How fast the frames' phase against the refreshes is followed (a share per frame). */
       const PHASE_FOLLOW = 1 / 32;
+      /** Why a frame stopped the game: the module's typed code on its error, else frame-failed. Wire values. */
+      const FrameFailure = { DeviceLost: "device-lost", Failed: "frame-failed" };
+      /** The mouse button a page pointer is (the protocol's key name). */
+      const MOUSE1 = "Mouse1";
+      /** One wheel line in pixels (WheelEvent.DOM_DELTA_LINE), as the desktop shell counts a notch. */
+      const WHEEL_LINE_PX = 100;
       /** The IndexedDB object store a game's saves are kept in, keyed by save name. */
       const SAVES_STORE = "files";
       const SAVES_DB_VERSION = 1;
@@ -415,6 +434,22 @@
           version: 1,
           state: () => ({ version: 1, error: status.code, volatile: { boot: { reason: status.reason } } }),
         };
+        console.error(error);
+      }
+
+      /**
+       * A frame the module refused with `device-lost` (the browser reset its GPU): the saves are
+       * flushed first, then the card with the typed code, and the page contract answers the code.
+       */
+      async function showDeviceLost(game, error) {
+        Object.assign(status, { state: State.Failed, code: FrameFailure.DeviceLost, reason: String(error?.message ?? error) });
+        await flushSaves(game);
+        const words = MESSAGE.deviceLost;
+        showCard(State.Failed, [
+          element("h1", words.title, { id: "unsupported-title" }),
+          element("p", words.body),
+          codeFooter(words.codeLabel),
+        ]);
         console.error(error);
       }
 
@@ -803,17 +838,22 @@
         return fed;
       }
 
-      function run(game) {
+      function run(game, input) {
         let last = performance.now();
         const pacer = { samples: [], refresh: null, owed: 0, phase: 0 };
         const frame = (now) => {
           const ms = pacedFrameMs(pacer, Math.min(MAX_FRAME_MS, Math.max(0, now - last)));
           last = now;
           try {
-            game.studio_frame(ms);
+            pollGamepads(game, input);
+            if (game.studio_frame(ms) > 0) input.ticked = true;
             scheduleIdleFlush(game);
           } catch (error) {
-            Object.assign(status, { state: State.Failed, code: "frame-failed", reason: String(error?.message ?? error) });
+            if (error?.code === FrameFailure.DeviceLost) {
+              showDeviceLost(game, error);
+              return;
+            }
+            Object.assign(status, { state: State.Failed, code: FrameFailure.Failed, reason: String(error?.message ?? error) });
             return;
           }
           requestAnimationFrame(frame);
@@ -849,20 +889,94 @@
         return inside ? { x: x / view.width, y: y / view.height } : null;
       }
 
+      /** A wheel event's movement in pixels: lines count WHEEL_LINE_PX, pages the canvas's height. */
+      function wheelPixels(event) {
+        const unit = [1, WHEEL_LINE_PX, canvas.clientHeight || WHEEL_LINE_PX][event.deltaMode] ?? 1;
+        return { x: event.deltaX * unit, y: event.deltaY * unit };
+      }
+
+      /**
+       * Real pads as the `input` verb's `pads` (the browser's standard mapping is the protocol's
+       * order), sent when one changed; a pad that went away is sent once as disconnected.
+       */
+      function pollGamepads(game, input) {
+        const pads = typeof navigator.getGamepads === "function" ? [...navigator.getGamepads()] : [];
+        const now = pads.filter(Boolean).map((pad) => ({
+          index: pad.index,
+          connected: pad.connected,
+          buttons: [...pad.buttons].map((button) => Math.max(button.value, button.pressed ? 1 : 0)),
+          axes: [...pad.axes],
+        }));
+        const gone = [...input.pads.keys()].filter((index) => !now.some((pad) => pad.index === index));
+        const changed = now.filter((pad) => input.pads.get(pad.index) !== JSON.stringify(pad));
+        if (changed.length === 0 && gone.length === 0) return;
+        for (const index of gone) input.pads.delete(index);
+        for (const pad of changed) input.pads.set(pad.index, JSON.stringify(pad));
+        call(game, "input", { pads: [...changed, ...gone.map((index) => ({ index, connected: false }))] });
+      }
+
+      /** Release every key and button the page holds (focus left the game: its keyup would go elsewhere). */
+      function releaseAll(game, input) {
+        const held = [...input.held];
+        if (held.length === 0) return;
+        input.held.clear();
+        call(game, "input", { up: held });
+      }
+
+      /**
+       * The page's input as the `input` verb: keys while the canvas has focus, released all at once
+       * when focus or the page goes; Mouse1 held from pointerdown to pointerup (a click no tick saw
+       * is sent as a tap too, so it is never lost), the pointer and, while it is held or the pointer
+       * is locked, its movement as `look`; the wheel; real gamepads polled each animation frame.
+       */
       function listen(game) {
+        const input = { held: new Set(), pads: new Map(), ticked: false };
         const keyEvent = (field) => (event) => {
           if (event.repeat) return;
+          if (field === "down") input.held.add(event.code);
+          else input.held.delete(event.code);
           call(game, "input", { [field]: [event.code] });
           event.preventDefault();
         };
         canvas.addEventListener("keydown", keyEvent("down"));
         canvas.addEventListener("keyup", keyEvent("up"));
+        canvas.addEventListener("blur", () => releaseAll(game, input));
+        window.addEventListener("blur", () => releaseAll(game, input));
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "hidden") releaseAll(game, input);
+        });
         canvas.addEventListener("pointerdown", (event) => {
           canvas.focus();
           const pointer = worldPointer(event);
-          // A click on a letterbox bar is on no part of the game.
-          if (pointer) call(game, "input", { pointer, tap: ["Mouse1"] });
+          // A press on a letterbox bar is on no part of the game.
+          if (!pointer) return;
+          canvas.setPointerCapture?.(event.pointerId);
+          input.held.add(MOUSE1);
+          input.ticked = false;
+          call(game, "input", { pointer, down: [MOUSE1] });
         });
+        canvas.addEventListener("pointerup", () => {
+          if (!input.held.delete(MOUSE1)) return;
+          call(game, "input", input.ticked ? { up: [MOUSE1] } : { up: [MOUSE1], tap: [MOUSE1] });
+        });
+        canvas.addEventListener("pointercancel", () => {
+          if (input.held.delete(MOUSE1)) call(game, "input", { up: [MOUSE1] });
+        });
+        canvas.addEventListener("pointermove", (event) => {
+          const looking = input.held.has(MOUSE1) || document.pointerLockElement === canvas;
+          if (!looking || (event.movementX === 0 && event.movementY === 0)) return;
+          const ratio = window.devicePixelRatio || 1;
+          call(game, "input", { look: { x: event.movementX * ratio, y: event.movementY * ratio } });
+        });
+        canvas.addEventListener(
+          "wheel",
+          (event) => {
+            call(game, "input", { wheel: wheelPixels(event) });
+            event.preventDefault();
+          },
+          { passive: false },
+        );
+        return input;
       }
 
       async function boot() {
@@ -886,10 +1000,10 @@
         const [worldWidth, worldHeight] = Array.isArray(answer.world) ? answer.world : [];
         if (worldWidth > 0 && worldHeight > 0) shell.world = [worldWidth, worldHeight];
         bindStudio(game);
-        listen(game);
+        const input = listen(game);
         listenForSaves(game);
         if (!params.has("paused")) window.__studio.start();
-        run(game);
+        run(game, input);
       }
 
       boot().catch(showFailed);

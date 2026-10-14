@@ -46,6 +46,10 @@ pub(crate) struct DesktopGame<W> {
     runtime: Runtime<W>,
     presenter: Presenter,
     window: Option<Window>,
+    /// The shell's window while it is live (from `surface_created` to `surface_lost`).
+    shell_surface: Option<ShellSurface>,
+    /// Surfaces asked of the GPU instance for the shell's window.
+    surface_requests: u64,
     /// Frames drawn (headless and windowed alike).
     drawn: u64,
     /// Frames presented on a window.
@@ -69,13 +73,16 @@ fn core_sample(sample: &FrameSample) -> CoreSample {
 }
 
 impl<W: Default + 'static> DesktopGame<W> {
-    /// The game on an opened presenter, live play running from its first frame.
+    /// The game on an opened presenter, live play running from its first frame. A settings change
+    /// (the in-game settings panel) warms its renderer off the frame thread, as Studio's does: the
+    /// window keeps drawing the old settings until the new ones are compiled (review F7).
     pub(crate) fn new(mut runtime: Runtime<W>, mut presenter: Presenter) -> DesktopGame<W> {
         for (_, error) in crate::gpu::host::install(&mut runtime, &mut presenter.passes, presenter.resilient.gpu()) {
             eprintln!("genex: {error}");
         }
+        presenter.set_off_thread_changes(true);
         runtime.start();
-        DesktopGame { runtime, presenter, window: None, drawn: 0, presented: 0 }
+        DesktopGame { runtime, presenter, window: None, shell_surface: None, surface_requests: 0, drawn: 0, presented: 0 }
     }
 
     fn configure(&mut self, surface: wgpu::Surface<'static>, size: [u32; 2]) {
@@ -144,11 +151,17 @@ impl<W: Default + 'static> DesktopGame<W> {
         read_texture(self.presenter.gpu(), &texture, size)
     }
 
-    /// After a device loss: a new device (the window's surface is made again on it at the next
-    /// `resumed`), every mesh and pass rebuilt.
+    /// After a device loss: a new device, every mesh and pass rebuilt, and the window's surface
+    /// made again on it from the kept window (review F3: a desktop's winit sends `resumed` once, at
+    /// start-up, so a surface left for the next one never came back and the window froze).
     fn recover(&mut self) {
         match self.presenter.recover_for(&mut self.runtime) {
-            Ok(true) => self.window = None,
+            Ok(true) => {
+                self.window = None;
+                if let Some(kept) = self.shell_surface.take() {
+                    self.surface_created(&kept);
+                }
+            }
             Ok(false) => {}
             Err(error) => eprintln!("genex: the GPU device is not back yet: {error}"),
         }
@@ -165,6 +178,8 @@ impl<W: Default + 'static> ShellGame for DesktopGame<W> {
     }
 
     fn surface_created(&mut self, surface: &ShellSurface) {
+        self.shell_surface = Some(surface.clone());
+        self.surface_requests += 1;
         let Some(instance) = self.presenter.gpu().instance() else { return };
         match instance.create_surface(surface.clone()) {
             Ok(created) => self.configure(created, surface.size()),
@@ -184,6 +199,7 @@ impl<W: Default + 'static> ShellGame for DesktopGame<W> {
 
     fn surface_lost(&mut self) {
         self.window = None;
+        self.shell_surface = None;
     }
 
     fn frame(&mut self, frame: ShellFrame) -> FrameControl {
@@ -344,23 +360,83 @@ mod tests {
         ticks: u32,
     }
 
-    #[test]
-    #[ignore = "needs the host GPU: run with --ignored metal"]
-    fn metal_a_headless_desktop_run_ticks_live_and_draws_each_frame() {
+    fn cube_game() -> Game<World> {
         let mut game = Game::new(World::default()).world_size(96, 64);
         game.on_update(|sim, _| sim.world.ticks += 1);
         game.on_draw(|_, frame, _| {
             frame.cube(Transform::IDENTITY, Color::RED);
         });
-        let runtime = Runtime::new(game).expect("installs");
-        let game = match open(runtime, &[]) {
-            Ok(game) => game,
+        game
+    }
+
+    /// The desktop game on the host GPU, or None (skipped) without an adapter.
+    fn desktop_game() -> Option<DesktopGame<World>> {
+        let runtime = Runtime::new(cube_game()).expect("installs");
+        match open(runtime, &[]) {
+            Ok(game) => Some(game),
             Err(error) if std::env::var("GENEX_REQUIRE_METAL").is_ok_and(|v| v == "1") => panic!("no GPU: {error}"),
             Err(error) => {
                 eprintln!("skipped: no WebGPU-core adapter ({error})");
-                return;
+                None
             }
-        };
+        }
+    }
+
+    /// One shell frame of a sixtieth of a second, as the windowed loop hands it.
+    fn shell_frame(present: bool) -> ShellFrame {
+        ShellFrame { sample: FrameSample::default(), frame_ms: 1000.0 / 60.0, present, headless: false }
+    }
+
+    /// Review F3: after a device loss the window's surface is made again on the new device (winit
+    /// sends `resumed` once at start-up on a desktop, so waiting for the next one froze the window).
+    #[test]
+    #[ignore = "needs the host GPU: run with --ignored metal"]
+    fn metal_a_recovered_device_makes_the_window_s_surface_again() {
+        let Some(mut game) = desktop_game() else { return };
+        game.surface_created(&ShellSurface::detached([96, 64], 1.0));
+        assert_eq!(game.surface_requests, 1);
+        game.frame(shell_frame(true));
+        game.presenter.resilient.force_device_loss();
+        game.frame(shell_frame(true));
+        assert!(!game.presenter.resilient.is_lost(), "the device was re-created");
+        assert_eq!(game.surface_requests, 2, "the window's surface is asked of the new device");
+        game.surface_lost();
+        game.presenter.resilient.force_device_loss();
+        game.frame(shell_frame(false));
+        assert_eq!(game.surface_requests, 2, "no window, no surface after a later loss");
+    }
+
+    /// Review F7: a settings change in a shipped desktop game (the in-game settings panel) warms
+    /// its renderer off the frame thread, so the window keeps drawing the old settings meanwhile.
+    #[test]
+    #[ignore = "needs the host GPU: run with --ignored metal"]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "the row times a frame and a watchdog lets the held pool go")]
+    fn metal_a_preset_change_never_holds_the_desktop_frame_for_its_compiles() {
+        use crate::render::{ClassOverride, QualityPreset};
+        /// When the watchdog lets the held compile pool go; a frame that waited takes this long.
+        const HOLD_RELEASE: std::time::Duration = std::time::Duration::from_secs(3);
+        let Some(mut game) = desktop_game() else { return };
+        for _ in 0..3 {
+            game.frame(shell_frame(false));
+        }
+        let person = ClassOverride { preset: Some(QualityPreset::Low), ..ClassOverride::default() };
+        game.runtime.render().borrow_mut().set_person(person);
+        let hold = genex_render::compile::hold();
+        let watchdog = std::thread::spawn(move || {
+            std::thread::sleep(HOLD_RELEASE);
+            drop(hold);
+        });
+        let from = std::time::Instant::now();
+        game.frame(shell_frame(false));
+        let took = from.elapsed();
+        watchdog.join().expect("the watchdog lets the pool go");
+        assert!(took < HOLD_RELEASE / 2, "the frame after a preset change took {took:?} (held for its compiles)");
+    }
+
+    #[test]
+    #[ignore = "needs the host GPU: run with --ignored metal"]
+    fn metal_a_headless_desktop_run_ticks_live_and_draws_each_frame() {
+        let Some(game) = desktop_game() else { return };
         let options = ShellOptions { max_frames: Some(12), studio: false };
         let (game, exit) = run_with(game, ShellMode::Headless, options).expect("the shell ran");
         assert_eq!(exit.frames, 12);

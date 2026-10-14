@@ -19,7 +19,10 @@
 //! while this one keeps drawing; [`Resilient::adopt`] then replays what was uploaded meanwhile and
 //! swaps it in. With [`Resilient::set_keep_spare`] the renderer a swap or a rebuild replaced is kept
 //! as the spare for its options, so going back (a capture's pinned profile and Live again) swaps
-//! instead of compiling every pipeline again.
+//! instead of compiling every pipeline again. A spare that was the renderer in use comes back with
+//! its temporal history when at most [`SPARE_HISTORY_FRAMES_MAX`] frames were drawn while it was
+//! out (a capture's settle: Live's TAA, temporal AO and exposure go on where they were, review
+//! F5); any other renderer swapped in starts its history over.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,6 +122,11 @@ impl Extension {
     }
 }
 
+/// A spare that was the renderer in use keeps its history when at most this many frames were
+/// drawn while it was out (a capture's settle and the frames around it); after more, its history
+/// is too old and starts over.
+pub const SPARE_HISTORY_FRAMES_MAX: u64 = 64;
+
 /// Opens a fresh device (natively `Gpu::headless` or the shell's surface-compatible opener).
 pub type GpuOpener = Box<dyn FnMut() -> Result<Gpu, RenderError>>;
 
@@ -127,6 +135,8 @@ struct Spare {
     options: RenderOptions,
     renderer: FrameRenderer,
     replayed: usize,
+    /// The frames drawn when it stopped being the renderer in use; None for one that never was.
+    out_since: Option<u64>,
 }
 
 /// What another thread needs to build a renderer for `options` on this device (see the module
@@ -164,7 +174,7 @@ impl RendererPlan {
         for upload in &self.uploads {
             replay(&mut renderer, &self.gpu, upload)?;
         }
-        Ok(Prepared { renderer, options: self.options, replayed: self.uploads.len(), generation: self.generation })
+        Ok(Prepared { renderer, options: self.options, replayed: self.uploads.len(), generation: self.generation, keeps_history: false })
     }
 }
 
@@ -174,6 +184,8 @@ pub struct Prepared {
     options: RenderOptions,
     replayed: usize,
     generation: u32,
+    /// It was the renderer in use a moment ago (a spare swapped back): its history goes on.
+    keeps_history: bool,
 }
 
 impl Prepared {
@@ -209,6 +221,8 @@ pub struct Resilient {
     spare: Option<Spare>,
     /// The window present's pipelines and letterbox-sized images, on this device.
     window: WindowPresent,
+    /// Frames drawn, by whichever renderer was in use.
+    frames: u64,
 }
 
 impl Resilient {
@@ -236,6 +250,7 @@ impl Resilient {
             keep_spare: false,
             spare: None,
             window: WindowPresent::default(),
+            frames: 0,
         })
     }
 
@@ -375,6 +390,7 @@ impl Resilient {
         custom: &mut dyn CustomStage,
     ) -> Result<FrameReport, RenderError> {
         self.healthy()?;
+        self.frames += 1;
         let report = self.renderer.render_with(&self.gpu, frame, path, overlay, custom);
         report.map_err(|e| self.lost_or(e))
     }
@@ -441,8 +457,9 @@ impl Resilient {
         }
         self.healthy()?;
         if let Some(spare) = self.spare.take_if(|spare| spare.options == options) {
+            let keeps_history = self.history_kept(&spare);
             let Spare { renderer, replayed, .. } = spare;
-            self.swap_in(Prepared { renderer, options, replayed, generation: self.generation })?;
+            self.swap_in(Prepared { renderer, options, replayed, generation: self.generation, keeps_history })?;
             return Ok(true);
         }
         let prepared = self.plan(options).build()?;
@@ -474,9 +491,11 @@ impl Resilient {
     /// thread and [`Resilient::adopt`] (None when there is none for those options).
     pub fn take_spare(&mut self, options: RenderOptions) -> Result<Option<Prepared>, RenderError> {
         self.healthy()?;
-        let Some(Spare { mut renderer, replayed, .. }) = self.spare.take_if(|spare| spare.options == options) else { return Ok(None) };
+        let Some(spare) = self.spare.take_if(|spare| spare.options == options) else { return Ok(None) };
+        let keeps_history = self.history_kept(&spare);
+        let Spare { mut renderer, replayed, .. } = spare;
         self.catch_up(&mut renderer, replayed)?;
-        Ok(Some(Prepared { renderer, options, replayed: self.uploads.len(), generation: self.generation }))
+        Ok(Some(Prepared { renderer, options, replayed: self.uploads.len(), generation: self.generation, keeps_history }))
     }
 
     /// What another thread needs to build a renderer for `options` (see the module docs).
@@ -513,7 +532,7 @@ impl Resilient {
         let usable = self.keep_spare && prepared.options != self.options && prepared.generation == self.generation;
         if usable {
             let Prepared { renderer, options, replayed, .. } = prepared;
-            self.spare = Some(Spare { options, renderer, replayed });
+            self.spare = Some(Spare { options, renderer, replayed, out_since: None });
         }
         usable
     }
@@ -522,18 +541,26 @@ impl Resilient {
     /// uniforms and meshlet setting); the one it replaces becomes the spare when spares are kept
     /// and its options differ.
     fn swap_in(&mut self, prepared: Prepared) -> Result<(), RenderError> {
-        let Prepared { mut renderer, options, replayed, .. } = prepared;
+        let Prepared { mut renderer, options, replayed, keeps_history, .. } = prepared;
         self.catch_up(&mut renderer, replayed)?;
-        renderer.reset_history(HistoryReset::Settings);
+        if !keeps_history {
+            renderer.reset_history(HistoryReset::Settings);
+        }
         let replaced = std::mem::replace(&mut self.renderer, renderer);
         let replaced_options = std::mem::replace(&mut self.options, options);
         if self.spare.as_ref().is_some_and(|spare| spare.options == options) {
             self.spare = None;
         }
         if self.keep_spare && replaced_options != options {
-            self.spare = Some(Spare { options: replaced_options, renderer: replaced, replayed: self.uploads.len() });
+            self.spare = Some(Spare { options: replaced_options, renderer: replaced, replayed: self.uploads.len(), out_since: Some(self.frames) });
         }
         Ok(())
+    }
+
+    /// Whether `spare` comes back with its history: it was the renderer in use, and at most
+    /// [`SPARE_HISTORY_FRAMES_MAX`] frames were drawn since.
+    fn history_kept(&self, spare: &Spare) -> bool {
+        spare.out_since.is_some_and(|at| self.frames.saturating_sub(at) <= SPARE_HISTORY_FRAMES_MAX)
     }
 
     /// Bring `renderer`, which holds the first `replayed` uploads, up to date: the later uploads
