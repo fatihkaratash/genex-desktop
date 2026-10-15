@@ -96,8 +96,10 @@ pub fn outdoors(p: Vec3) -> bool {
     air && (main || side || alley)
 }
 
-/// The low sun, towards it: down the side street from the south, 18 degrees up.
-pub const SUN_DIR: Vec3 = vec3(0.1, 0.33, -1.0);
+/// The low sun, towards it: down the side street from the south, under 10 degrees up, where the
+/// physical sky reddens it and deepens the zenith (G0 look: at 18 degrees the street read as
+/// daylight under a midday-blue sky).
+pub const SUN_DIR: Vec3 = vec3(0.1, 0.17, -1.0);
 const SUN_COLOR: Color = Color::rgb(255, 255, 255);
 const SUN_INTENSITY: f32 = 3.2;
 /// The dusk sky's fill where the device's quality turns image-based lighting off.

@@ -658,6 +658,15 @@ async function waitBooted(page: Page): Promise<void> {
   );
 }
 
+/** Every console warning and error `page` logs from now on (Chromium logs WebGPU validation there). */
+function consoleProblems(page: Page): string[] {
+  const seen: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning" || message.type() === "error") seen.push(message.text());
+  });
+  return seen;
+}
+
 async function openShell(context: BrowserContext, origin: string, init?: string): Promise<Page> {
   const page = await context.newPage();
   if (init) await page.addInitScript(init);
@@ -897,6 +906,9 @@ describe("a rust-wgpu game in Chromium's WebGPU, packaged by the web branch", { 
     const context = await browser.newContext();
     const page = await openShell(context, template.origin);
     assert.equal((await status(page)).state, ShellState.Running);
+    // Every preset's pipelines are valid WebGPU: an invalid one (G0: the background motion's
+    // written normals target) rejects the frame and leaves the canvas black at TAA presets.
+    const logged = consoleProblems(page);
     const out = process.env.GENEX_TEMPLATE_WEB_OUT;
     if (out) await mkdir(out, { recursive: true });
     const problems: string[] = [];
@@ -915,6 +927,7 @@ describe("a rust-wgpu game in Chromium's WebGPU, packaged by the web branch", { 
       }
     }
     assert.deepEqual(problems, []);
+    assert.deepEqual(logged, [], "no WebGPU validation warning or error at any preset");
     await context.close();
   });
 

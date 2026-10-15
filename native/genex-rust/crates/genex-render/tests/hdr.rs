@@ -869,8 +869,12 @@ fn metal_agx_punchy_costs_no_more_than_plain_agx_at_1080p() {
             renderer
         })
         .collect();
-    let mut landed: Vec<Vec<f32>> = vec![Vec::new(); curves.len()];
-    for round in 0..8u64 {
+    // Each round's p50 per curve: punchy's cost over AgX is the median of the rounds' paired
+    // differences, so a clock step that lands on one curve's block of one round moves one pair
+    // (G0 perf-platform: one of four runs read punchy 0.507 ms against AgX 0.430 ms).
+    const ROUNDS: u64 = 8;
+    let mut landed: Vec<Vec<Vec<f32>>> = vec![vec![Vec::new(); curves.len()]; ROUNDS as usize];
+    for round in 0..ROUNDS {
         for (k, renderer) in renderers.iter_mut().enumerate() {
             for frame in 0..80u64 {
                 let Some(times) = renderer.arm_frame_timer(&gpu.queue) else {
@@ -878,7 +882,7 @@ fn metal_agx_punchy_costs_no_more_than_plain_agx_at_1080p() {
                     return;
                 };
                 if round > 0 && frame >= 8 {
-                    landed[k].extend(times);
+                    landed[round as usize][k].extend(times);
                 }
                 renderer.set_frame_index(frame);
                 renderer.render(&gpu, &scene, CullPath::Gpu).expect("frame");
@@ -887,15 +891,15 @@ fn metal_agx_punchy_costs_no_more_than_plain_agx_at_1080p() {
             }
         }
     }
-    let p50: Vec<f32> = landed
-        .iter_mut()
-        .map(|times| {
-            times.sort_by(f32::total_cmp);
-            times[(times.len() - 1) / 2]
-        })
-        .collect();
+    let median = |values: &mut Vec<f32>| {
+        values.sort_by(f32::total_cmp);
+        values[(values.len() - 1) / 2]
+    };
+    let rounds: Vec<Vec<f32>> = landed.iter_mut().skip(1).map(|round| round.iter_mut().map(&median).collect()).collect();
+    let p50: Vec<f32> = (0..curves.len()).map(|k| median(&mut rounds.iter().map(|round| round[k]).collect())).collect();
+    let punchy_over_agx = median(&mut rounds.iter().map(|round| round[2] - round[1]).collect());
     let row = format!(
-        "{{\"row\":\"tonemap-curves-1080p\",\"adapter\":\"{}\",\"noneP50Ms\":{:.4},\"agxP50Ms\":{:.4},\"punchyP50Ms\":{:.4}}}",
+        "{{\"row\":\"tonemap-curves-1080p\",\"adapter\":\"{}\",\"noneP50Ms\":{:.4},\"agxP50Ms\":{:.4},\"punchyP50Ms\":{:.4},\"punchyOverAgxMedianMs\":{punchy_over_agx:.4}}}",
         gpu.receipt().adapter,
         p50[0],
         p50[1],
@@ -905,7 +909,7 @@ fn metal_agx_punchy_costs_no_more_than_plain_agx_at_1080p() {
     if let Ok(path) = std::env::var("GENEX_PERF_OUT") {
         std::fs::write(path, format!("{row}\n")).expect("perf row");
     }
-    assert!(p50[2] - p50[1] <= PUNCHY_OVER_AGX_MS_MAX, "punchy {} ms against AgX {} ms", p50[2], p50[1]);
+    assert!(punchy_over_agx <= PUNCHY_OVER_AGX_MS_MAX, "punchy over AgX {punchy_over_agx} ms a round (p50s: punchy {} ms, AgX {} ms)", p50[2], p50[1]);
 }
 
 /// `value` rounded to the nearest half float (what an `rgba16float` texel holds), as f32.

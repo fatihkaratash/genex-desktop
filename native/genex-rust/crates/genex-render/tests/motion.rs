@@ -373,6 +373,37 @@ fn the_motion_frame_and_previous_model_rows_match_the_prepass_shader() {
     validator.validate(&background).expect("the background motion validates in WebGPU core");
 }
 
+/// The locations `entry` (a fragment entry point of `module`) writes.
+fn fragment_output_locations(module: &naga::Module, entry: &str) -> Vec<u32> {
+    let point = module.entry_points.iter().find(|point| point.name == entry).unwrap_or_else(|| panic!("{entry} is declared"));
+    let Some(result) = point.function.result.as_ref() else { return Vec::new() };
+    let binding_location = |binding: Option<&naga::Binding>| match binding {
+        Some(naga::Binding::Location { location, .. }) => Some(*location),
+        _ => None,
+    };
+    if let naga::TypeInner::Struct { members, .. } = &module.types[result.ty].inner {
+        return members.iter().filter_map(|member| binding_location(member.binding.as_ref())).collect();
+    }
+    binding_location(result.binding.as_ref()).into_iter().collect()
+}
+
+#[test]
+fn the_background_motion_pipeline_writes_only_targets_its_fragment_stage_outputs() {
+    // WebGPU (Dawn, Chrome) refuses a colour target with a non-zero write mask and no fragment
+    // output at its location; wgpu's Metal path does not, so the web went black at every TAA preset
+    // (G0 perf-platform: "Invalid RenderPipeline vs_background_motion").
+    let module = naga::front::wgsl::parse_str(genex_render::motion::BACKGROUND_MOTION).expect("the background motion parses");
+    let outputs = fragment_output_locations(&module, genex_render::motion::BACKGROUND_FRAGMENT_ENTRY);
+    let targets = genex_render::motion::background_targets();
+    for (location, target) in targets.iter().enumerate() {
+        let target = target.as_ref().expect("every prepass target is bound");
+        let written = !target.write_mask.is_empty();
+        let output = outputs.contains(&(location as u32));
+        assert_eq!(written, output, "target {location} ({:?}): write mask {:?}, fragment output {output}", target.format, target.write_mask);
+    }
+    assert_eq!(outputs, vec![genex_render::motion::MOTION_LOCATION], "the background writes the motion alone");
+}
+
 // ---------------------------------------------------------------------------------------------
 // GPU rows
 

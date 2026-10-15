@@ -111,6 +111,14 @@ pub const REACTIVE_LABEL: &str = "taa reactive";
 pub const DISOCCLUSION_TOLERANCE: f32 = 0.05;
 /// The current sample's extra weight per render pixel of motion (fully current at 100 px).
 pub const MOTION_REJECTION_PER_PX: f32 = 0.01;
+/// How much the history sample is sharpened against its four outer Catmull-Rom taps where it fell
+/// halfway between texel centres on both axes (`GX_TAA_HISTORY_SHARPEN`; none on a texel centre,
+/// so a still camera's history is untouched). Every frame of motion resamples the history, and a
+/// fractional resample loses high frequencies the next one loses again: G0 (2026-10-15), panned at
+/// 1 and 4 px a frame bench-outdoor kept 49% and 57% of its still sharpness at high. At 0.2 it keeps
+/// 100% and 86% (ultra 102% and 89%) with the 1 px pan's flicker 0.061% -> 0.066%; 0.3 overshot
+/// at 1 px (122%), the feedback sharpening every frame of the history's memory.
+pub const HISTORY_SHARPEN: f32 = 0.2;
 /// The colour box: the neighbourhood's mean ± this many standard deviations (tonemapped YCoCg),
 /// intersected with its min/max (`GX_TAA_VARIANCE_GAMMA` in taa.wgsl). FSR 2.2 weighs its samples
 /// `exp(-(2..3) d²)` by their distance from the unjittered centre at one deviation; measured here
@@ -176,6 +184,13 @@ pub const TAA: &str = include_str!("../../shaders/post/taa.wgsl");
 pub const REACTIVE: &str = concat!(
     include_str!("../../shaders/common.wgsl"),
     include_str!("../../shaders/clip_position.wgsl"),
+    // Mirrors `layout::GpuPrevModel` (`motion::PREV_MODEL_WGSL`, held to it by tests/layout.rs).
+    "
+struct PrevModel {
+    model: mat4x4<f32>,
+    flags: vec4<u32>,
+}
+",
     include_str!("../../shaders/post/reactive.wgsl")
 );
 /// The particles' reactive coverage: their billboards (`particles_draw.wgsl`'s shape, its
@@ -194,6 +209,9 @@ pub const REACTIVE_PARTICLES: &str = concat!(
 struct ReactiveJitter {
     // xy: this frame's jitter in NDC (y up); z: the coverage of a transparent mesh; w: reserved.
     ndc: vec4<f32>,
+    // xy: the render size; z: the motion (px) below which a mesh writes none; w: 1 when a mesh's
+    // coverage follows its motion (particles take theirs whole).
+    motion: vec4<f32>,
 }
 @group(2) @binding(0) var<uniform> gx_reactive_jitter: ReactiveJitter;
 
@@ -244,21 +262,63 @@ pub const TRANSPARENT_COVERAGE: f32 = 0.9;
 /// materials draw no time-driven change, so a still transparent draw looks the same next frame.
 pub const SETTLED_TRANSPARENT_COVERAGE: f32 = 0.0;
 
-/// The coverage this frame's transparent meshes write into the reactive mask at most (each its
-/// material's alpha below it): [`SETTLED_TRANSPARENT_COVERAGE`] when the frame has last frame's
-/// `history` and every transparent row (`transparent`, rows of `prev_models`, drawn from
-/// `sources`) stood still, else [`TRANSPARENT_COVERAGE`]. A row stands still when its model
-/// matched last frame's (`MOTION_FLAG_STILL` without `MOTION_FLAG_NO_HISTORY`) and it is not
-/// skinned (its vertices may move under a still model). The camera's motion does not count.
-pub fn transparent_coverage(history: bool, transparent: &[u32], prev_models: &[crate::layout::GpuPrevModel], sources: &[crate::scene::DrawSource]) -> f32 {
-    let row_still = |row: &u32| {
-        prev_models.get(*row as usize).is_some_and(|prev| {
-            let flags = prev.flags[0];
-            flags & crate::motion::MOTION_FLAG_STILL != 0 && flags & crate::motion::MOTION_FLAG_NO_HISTORY == 0
-        })
-    };
-    let settled = history && transparent.iter().all(row_still) && sources.iter().all(|source| !source.skinned);
-    if settled { SETTLED_TRANSPARENT_COVERAGE } else { TRANSPARENT_COVERAGE }
+/// How far (render pixels a frame) a moved transparent must move under a pixel for it to write the
+/// whole of [`ReactiveCoverage::cap`]; a slower one writes its share of it above
+/// [`REACTIVE_STILL_MOTION_PX`] (shaders/post/reactive.wgsl).
+pub const REACTIVE_FULL_MOTION_PX: f32 = 1.0;
+/// The motion (render pixels a frame) below which a moved transparent writes no coverage: less
+/// than the history's own bilinear reprojection moves a value, so TAA keeps it as a still one.
+pub const REACTIVE_STILL_MOTION_PX: f32 = 1.0 / 32.0;
+
+/// What this frame's transparent meshes write into the reactive mask at most, each its material's
+/// alpha below it ([`transparent_coverage`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReactiveCoverage {
+    /// The most coverage a transparent mesh writes.
+    pub cap: f32,
+    /// Whether a mesh writes its share of the cap by how far its surface moved under each pixel
+    /// since last frame (its model against last frame's, through this frame's camera), whole from
+    /// [`REACTIVE_FULL_MOTION_PX`]: when every row has last frame's model and none is skinned.
+    pub by_motion: bool,
+}
+
+/// This frame's transparent rows and their previous-model entries.
+#[derive(Clone, Copy, Debug)]
+pub struct TransparentRows<'a> {
+    /// Whether the frame has last frame's history.
+    pub history: bool,
+    /// The transparent rows (indices into `prev_models`).
+    pub rows: &'a [u32],
+    /// Last frame's model of every row and its motion flags.
+    pub prev_models: &'a [crate::layout::GpuPrevModel],
+    /// The draws the transparent rows come from.
+    pub sources: &'a [crate::scene::DrawSource],
+}
+
+/// The coverage this frame's transparent meshes write into the reactive mask: a cap of
+/// [`SETTLED_TRANSPARENT_COVERAGE`] when the frame has last frame's history and every transparent
+/// row stood still (its model matched last frame's: `MOTION_FLAG_STILL` without
+/// `MOTION_FLAG_NO_HISTORY`, and it is not skinned: its vertices may move under a still model),
+/// else [`TRANSPARENT_COVERAGE`]; scaled by each pixel's motion ([`ReactiveCoverage::by_motion`])
+/// unless the frame has no history, a row has none (or the table does not hold it) or a draw is
+/// skinned. The camera's motion does not count. G0 (2026-10-15): a lake drifting a tenth of a
+/// millimetre a frame (a hundredth of a pixel) wrote the whole cap, so its flat water showed every
+/// frame's jittered sample: 602 flickering pixels in the lake box against none still at high.
+pub fn transparent_coverage(frame: &TransparentRows<'_>) -> ReactiveCoverage {
+    let whole = ReactiveCoverage { cap: TRANSPARENT_COVERAGE, by_motion: false };
+    if !frame.history || frame.sources.iter().any(|source| source.skinned) {
+        return whole;
+    }
+    let mut moved = false;
+    for row in frame.rows {
+        let Some(prev) = frame.prev_models.get(*row as usize) else { return whole };
+        let flags = prev.flags[0];
+        if flags & crate::motion::MOTION_FLAG_NO_HISTORY != 0 {
+            return whole;
+        }
+        moved |= flags & crate::motion::MOTION_FLAG_STILL == 0;
+    }
+    if moved { ReactiveCoverage { cap: TRANSPARENT_COVERAGE, by_motion: true } } else { ReactiveCoverage { cap: SETTLED_TRANSPARENT_COVERAGE, by_motion: false } }
 }
 
 const SCENE_BINDING: u32 = 0;
@@ -351,23 +411,37 @@ impl GpuTaaParams {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct GpuReactiveJitter {
     /// xy: this frame's jitter in NDC (y up, [`crate::jitter::offset_ndc`]); z: the most coverage
-    /// a transparent mesh writes (its material's alpha below it; [`transparent_coverage`]); w:
+    /// a transparent mesh writes (its material's alpha below it; [`ReactiveCoverage::cap`]); w:
     /// reserved.
     pub ndc: [f32; 4],
+    /// xy: the render size in pixels; z: [`REACTIVE_STILL_MOTION_PX`]; w: 1 when a mesh writes its
+    /// share of the cap by its motion under the pixel ([`ReactiveCoverage::by_motion`]), else 0
+    /// (the share reaches all of it at [`REACTIVE_FULL_MOTION_PX`]).
+    pub motion: [f32; 4],
 }
 
 impl GpuReactiveJitter {
     /// The row for a frame jittered by `jitter_px` (render pixels, y down) at `render` size.
     pub fn new(jitter_px: [f32; 2], render: (u32, u32)) -> GpuReactiveJitter {
         let [x, y] = crate::jitter::offset_ndc(jitter_px, render);
-        GpuReactiveJitter { ndc: [x, y, TRANSPARENT_COVERAGE, 0.0] }
+        let motion = [render.0 as f32, render.1 as f32, REACTIVE_STILL_MOTION_PX, 0.0];
+        GpuReactiveJitter { ndc: [x, y, TRANSPARENT_COVERAGE, 0.0], motion }
     }
 
     /// This row with the transparent meshes writing `coverage` ([`transparent_coverage`]).
-    pub fn with_coverage(self, coverage: f32) -> GpuReactiveJitter {
+    pub fn with_coverage(self, coverage: ReactiveCoverage) -> GpuReactiveJitter {
         let [x, y, _, w] = self.ndc;
-        GpuReactiveJitter { ndc: [x, y, coverage, w] }
+        let [width, height, per_px, _] = self.motion;
+        GpuReactiveJitter { ndc: [x, y, coverage.cap, w], motion: [width, height, per_px, f32::from(u8::from(coverage.by_motion))] }
     }
+}
+
+fn reactive_group(device: &Device, layout: &BindGroupLayout, jitter: &Buffer, prev_models: &Buffer) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("taa reactive jitter"),
+        layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: jitter.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: prev_models.as_entire_binding() }],
+    })
 }
 
 /// Last frame's unjittered `prev_view_proj` × the inverse of this frame's `view_proj` (both
@@ -763,6 +837,7 @@ pub enum ReactiveEntry {
 pub struct ReactiveNode {
     jitter_layout: BindGroupLayout,
     jitter: Buffer,
+    /// Group 2 over the jitter row and a one-row previous-model table (it holds that table).
     group: wgpu::BindGroup,
 }
 
@@ -774,24 +849,31 @@ pub const REACTIVE_BLEND: wgpu::BlendState = wgpu::BlendState {
 };
 
 impl ReactiveNode {
-    /// The node and its jitter row (group 2 of both entry points).
+    /// The node, its jitter row and its group 2 (both entry points): the row and the frame's
+    /// previous-model table (the mesh entry's vertex stage reads last frame's model of its row).
     pub fn new(device: &Device) -> Result<ReactiveNode, RenderError> {
         let size = wgpu::BufferSize::new(size_of::<GpuReactiveJitter>() as u64);
+        let prev_size = wgpu::BufferSize::new(size_of::<crate::layout::GpuPrevModel>() as u64);
         let jitter_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("taa reactive jitter"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: size },
-                count: None,
-            }],
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: size },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: prev_size },
+                    count: None,
+                },
+            ],
         });
         let jitter = buffer(device, "taa reactive jitter", size_of::<GpuReactiveJitter>() as u64, BufferUsages::UNIFORM | BufferUsages::COPY_DST)?;
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("taa reactive jitter"),
-            layout: &jitter_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: jitter.as_entire_binding() }],
-        });
+        let empty = buffer(device, "taa reactive no previous models", size_of::<crate::layout::GpuPrevModel>() as u64, BufferUsages::STORAGE)?;
+        let group = reactive_group(device, &jitter_layout, &jitter, &empty);
         Ok(ReactiveNode { jitter_layout, jitter, group })
     }
 
@@ -800,9 +882,15 @@ impl ReactiveNode {
         &self.jitter_layout
     }
 
-    /// The jitter row's bind group (group 2).
+    /// Group 2 over the jitter row and a one-row previous-model table (particles, which read no
+    /// model, and a frame without the table: its row then writes no motion share).
     pub fn jitter_group(&self) -> &wgpu::BindGroup {
         &self.group
+    }
+
+    /// Group 2 over the jitter row and this frame's previous-model table `prev_models`.
+    pub fn group(&self, device: &Device, prev_models: &Buffer) -> wgpu::BindGroup {
+        reactive_group(device, &self.jitter_layout, &self.jitter, prev_models)
     }
 
     /// Write this frame's jitter row.
@@ -1189,18 +1277,22 @@ mod tests {
         let prev_models = [prev(0), prev(MOTION_FLAG_STILL), prev(MOTION_FLAG_STILL | MOTION_FLAG_NO_HISTORY), prev(MOTION_FLAG_STILL)];
         let coverage = |history: bool, rows: &[u32], skinned: bool| {
             let sources: Vec<_> = rows.iter().map(|_| source(skinned)).collect();
-            transparent_coverage(history, rows, &prev_models, &sources)
+            transparent_coverage(&TransparentRows { history, rows, prev_models: &prev_models, sources: &sources })
         };
-        assert_eq!(coverage(true, &[1, 3], false), SETTLED_TRANSPARENT_COVERAGE, "still rows, whether the camera moved or not");
-        assert_eq!(coverage(true, &[], false), SETTLED_TRANSPARENT_COVERAGE, "no transparent rows");
-        assert_eq!(coverage(false, &[1, 3], false), TRANSPARENT_COVERAGE, "no last frame");
-        assert_eq!(coverage(true, &[1, 0], false), TRANSPARENT_COVERAGE, "a row moved");
-        assert_eq!(coverage(true, &[1, 2], false), TRANSPARENT_COVERAGE, "a row without history");
-        assert_eq!(coverage(true, &[1, 9], false), TRANSPARENT_COVERAGE, "a row the table does not hold");
-        assert_eq!(coverage(true, &[1, 3], true), TRANSPARENT_COVERAGE, "a skinned row");
+        let settled = ReactiveCoverage { cap: SETTLED_TRANSPARENT_COVERAGE, by_motion: false };
+        let whole = ReactiveCoverage { cap: TRANSPARENT_COVERAGE, by_motion: false };
+        assert_eq!(coverage(true, &[1, 3], false), settled, "still rows, whether the camera moved or not");
+        assert_eq!(coverage(true, &[], false), settled, "no transparent rows");
+        assert_eq!(coverage(false, &[1, 3], false), whole, "no last frame");
+        assert_eq!(coverage(true, &[1, 0], false), ReactiveCoverage { cap: TRANSPARENT_COVERAGE, by_motion: true }, "a row moved: its share by its motion");
+        assert_eq!(coverage(true, &[1, 2], false), whole, "a row without history");
+        assert_eq!(coverage(true, &[1, 9], false), whole, "a row the table does not hold");
+        assert_eq!(coverage(true, &[1, 3], true), whole, "a skinned row");
         // A reactive transparent keeps a tenth of its history at least.
         const { assert!(TRANSPARENT_COVERAGE <= 0.9 && TRANSPARENT_COVERAGE > SETTLED_TRANSPARENT_COVERAGE) };
-        assert_eq!(GpuReactiveJitter::new([0.5, 0.25], (100, 50)).with_coverage(0.0).ndc, [0.01, -0.01, 0.0, 0.0]);
+        assert_eq!(GpuReactiveJitter::new([0.5, 0.25], (100, 50)).with_coverage(settled).ndc, [0.01, -0.01, 0.0, 0.0]);
+        let moving = GpuReactiveJitter::new([0.5, 0.25], (100, 50)).with_coverage(coverage(true, &[0], false));
+        assert_eq!(moving.motion, [100.0, 50.0, REACTIVE_STILL_MOTION_PX, 1.0]);
     }
 
     /// Renderer pass 2 (P2-0.8a) flipped the ledger (named in the log): each history slot also

@@ -601,7 +601,10 @@ pub fn firefly(index: usize, home: Vec3, t: f32) -> (Vec3, f32) {
     (home + wander, blink * blink * blink)
 }
 
-/// The fireflies: tiny emissive bodies the look's bloom haloes, each as bright as its blink.
+/// The fireflies: tiny emissive bodies the look's bloom haloes, each as bright as its blink. Each
+/// draws under its own id: a firefly that blinks out is skipped, so by draw order alone the ones
+/// after it would take another's last position as their own and TAA would follow the wrong motion
+/// (G0: a dark-cored trail behind the forest shot's fireflies in Live).
 fn fireflies(frame: &mut Frame, t: f32) {
     frame.tag("fireflies");
     for (i, home) in layout().fireflies.iter().enumerate() {
@@ -609,8 +612,10 @@ fn fireflies(frame: &mut Frame, t: f32) {
         if lit < 0.02 {
             continue;
         }
+        frame.id(&format!("firefly-{i}"));
         frame.sphere_with(at, FIREFLY_RADIUS, &Material::emissive(FIREFLY, FIREFLY_GLOW * lit));
     }
+    frame.end_id();
 }
 
 /// Where duck `i` swims at `t`: slow loops on the lake. Answers its position and heading.

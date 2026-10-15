@@ -305,8 +305,8 @@ Each feature has a switch; off is its cheaper variant, never a refusal:
 | `meshlets`, `occlusion` | clustered big meshes, Hi-Z culling (off on every preset) | the instance path |
 | `texture-quality` | texture size classes above 256 texels (read at load) | 256 texels |
 
-On an M4 Max at 1080p (GPU p50) HDR with tonemap and exposure costs about 0.1 ms, bloom 0.25 to
-0.4, AO 0.45 to 0.6 (1.4 at `ultra`), contact shadows 0.15 to 0.3, TAA 0.2, EASU with RCAS under
+On an M4 Max at 1080p (GPU p50) HDR with tonemap and exposure costs about 0.1 ms,
+bloom 0.25-0.4, AO 0.45-0.6 (1.4 at `ultra`), contact shadows 0.15-0.3, TAA 0.2, EASU with RCAS under
 0.3 and `ultra`'s sun shadows about 0.6.
 
 Quality resolves in order, each layer overriding the one before it key by key: the class's preset
@@ -334,8 +334,8 @@ bloom = false               # any switch above
 ```
 
 The build lane compiles `[render]` into every destination. In code,
-`game.render_settings(RenderConfig::new().preset(QualityPreset::Medium))` (a game that sets a
-config in code is not read from `[render]`). Give the person the last word: call
+`game.render_settings(RenderConfig::new().preset(QualityPreset::Medium))` (then `[render]` is not
+read). Give the person the last word: call
 `genex::render::settings_panel(ui)` from `on_ui` (an options menu); it shows the detected class, a
 row of presets (none drawing less than the one below), the render scale and a
 switch per feature (Tab, Space). A preset change rebuilds the renderer for its anti-aliasing (a short
@@ -361,10 +361,11 @@ custom pass.
 
 Captures are drawn on a pinned profile (a fixed reference class, the game's `[render]`, the verb's
 layer, the nominal scale), ignore the person's saved choice and settle on their own history: TAA a
-whole jitter cycle (8 frames, 16 on `ultra`), auto exposure at once, a custom pass starting empty.
-Each capture's `render` names its preset, class, settings source and settle frames, so one build
-on one adapter gives one picture, with one known exception: under TAA (`high`, `ultra`), two
-captures of one tick can differ by one level in a few pixels (open renderer work). `state().volatile.render` (class, preset, scale, `features`,
+whole jitter cycle (8 frames, 16 on `ultra`) with AO weighing those frames alike, auto exposure at
+once, a custom pass starting empty. Desktop-high and desktop-ultra captures assume that 2 GiB, so
+1440p and 4K captures keep their preset. Each capture's `render` names its preset, class, settings
+source and settle frames: one build on one adapter gives one picture, except that under TAA two
+captures of one tick can differ by one level in a few pixels. `state().volatile.render` (class, preset, scale, `features`,
 `degraded`, `gpuMs`, `cpuMs`) describes the last drawn frame, sits outside the checksum and is
 never compared.
 

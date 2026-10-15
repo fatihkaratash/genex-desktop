@@ -898,7 +898,7 @@ pub struct Renderer {
     /// The most coverage the frame's transparent meshes write into TAA's reactive mask, each its
     /// material's alpha below it ([`crate::post::taa::transparent_coverage`]), read before the
     /// uploads take the plan's previous-model table.
-    transparent_coverage: f32,
+    transparent_coverage: crate::post::taa::ReactiveCoverage,
 }
 
 fn texture_entry(binding: u32, sample_type: wgpu::TextureSampleType, dimension: wgpu::TextureViewDimension) -> BindGroupLayoutEntry {
@@ -1798,6 +1798,8 @@ pub(crate) struct FramePrep {
     camera: crate::scene::CameraDesc,
     /// The motion prepass's frame row and group 2, on frames writing motion (RQ5.6).
     motion: Option<FrameMotion>,
+    /// The reactive coverage's group 2 over this frame's previous-model table (TAA frames).
+    reactive_group: Option<BindGroup>,
 }
 
 /// One frame's motion prepass inputs: the frame row, the instance draws' group 2 and the meshlet
@@ -2050,7 +2052,7 @@ impl<'a> WorldNodes<'a> {
                 if let Some(vertices) = background.as_ref() {
                     rows.push((&renderer.background, 0, bytemuck::cast_slice(vertices)));
                 }
-                renderer.write_uploads(frame.queue(), &self.prep.uploads, plan, &rows);
+                renderer.write_uploads(frame.encoder(), &self.prep.uploads, plan, &rows);
                 renderer.write_meshlets(frame.queue(), self.prep);
                 // The frame's first command buffer opens with the armed timer's begin pass.
                 if let Some(timer) = renderer.timer.borrow_mut().as_mut() {
@@ -2540,7 +2542,7 @@ impl Renderer {
             temporal_last: [None, None],
             motion_row: None,
             taa_reproject: crate::post::taa::IDENTITY,
-            transparent_coverage: crate::post::taa::TRANSPARENT_COVERAGE,
+            transparent_coverage: crate::post::taa::ReactiveCoverage { cap: crate::post::taa::TRANSPARENT_COVERAGE, by_motion: false },
             library,
             meshlet_game: Meshlets::DEFAULT,
             meshlet_upload_pending: false,
@@ -3390,7 +3392,7 @@ impl Renderer {
             self.skinned_prev.written = None;
             self.motion_row = None;
             self.taa_reproject = crate::post::taa::IDENTITY;
-            self.transparent_coverage = crate::post::taa::TRANSPARENT_COVERAGE;
+            self.transparent_coverage = crate::post::taa::ReactiveCoverage { cap: crate::post::taa::TRANSPARENT_COVERAGE, by_motion: false };
             return None;
         }
         let bytes = u64::from(plan.skinned_vertices) * VERTEX_STRIDE;
@@ -3402,7 +3404,12 @@ impl Renderer {
         let row = self.motion_history[set_index(temporal.set)].apply(plan, step);
         self.taa_reproject = crate::post::taa::reprojection(&row.prev_view_proj, &plan.frame.view_proj);
         // Read before the uploads take the previous-model table out of the plan.
-        self.transparent_coverage = crate::post::taa::transparent_coverage(!temporal.reset, &plan.transparent, &plan.prev_models, &plan.transparent_sources);
+        self.transparent_coverage = crate::post::taa::transparent_coverage(&crate::post::taa::TransparentRows {
+            history: !temporal.reset,
+            rows: &plan.transparent,
+            prev_models: &plan.prev_models,
+            sources: &plan.transparent_sources,
+        });
         self.motion_row = Some(row);
         self.skinned_prev.written = Some((temporal.set, bytes));
         previous
@@ -3877,7 +3884,7 @@ impl Renderer {
         });
         pass.set_pipeline(&reactive.mesh);
         pass.set_bind_group(0, &prep.groups.frame, &[]);
-        pass.set_bind_group(2, reactive.node.jitter_group(), &[]);
+        pass.set_bind_group(2, prep.reactive_group.as_ref().unwrap_or(reactive.node.jitter_group()), &[]);
         pass.set_index_buffer(self.meshes.indices.slice(..), wgpu::IndexFormat::Uint32);
         for (k, source) in plan.transparent_sources.iter().enumerate() {
             let entry = u64::from(plan.views) + k as u64;
@@ -3921,12 +3928,13 @@ impl Renderer {
     }
 
     /// Graph node 1: this frame's frame uniforms, cull views and tables, and the frame's own rows
-    /// `frame_rows` (fog, background), from the upload arena in one submission ahead of the frame (RC-08).
-    fn write_uploads(&self, queue: &Queue, uploads: &Uploads, plan: &FramePlan, frame_rows: &[crate::tables::UploadWrite<'_>]) {
+    /// `frame_rows` (fog, background), from the upload arena as copies at the head of `encoder`, the
+    /// frame's own (RC-08).
+    fn write_uploads(&self, encoder: &mut wgpu::CommandEncoder, uploads: &Uploads, plan: &FramePlan, frame_rows: &[crate::tables::UploadWrite<'_>]) {
         let mut writes = vec![(&self.frame_uniforms, 0, uploads.frame.as_slice()), (&self.cull_views, 0, uploads.cull_views.as_slice())];
         writes.extend(uploads.writes(&self.tables, plan));
         writes.extend_from_slice(frame_rows);
-        self.upload_arena.borrow_mut().upload(&self.device, queue, &writes);
+        self.upload_arena.borrow_mut().upload(encoder, &writes);
     }
 
     /// Prepare a frame of `scene`: plan and room in the tables, the targets of the current scale
@@ -3967,7 +3975,8 @@ impl Renderer {
             self.ensure_upscale()?;
         }
         let motion = self.motion_row.take().zip(self.motion_group(&spec)).map(|(row, (group, meshlet_group))| FrameMotion { row, group, meshlet_group });
-        Ok(FramePrep { plan, environment_sun, uploads, path, clear: scene.clear, groups, prepass, meshlets, camera: scene.camera, motion })
+        let reactive_group = self.reactive.as_ref().filter(|_| spec.motion).map(|reactive| reactive.node.group(&self.device, self.tables.prev_models.get()));
+        Ok(FramePrep { plan, environment_sun, uploads, path, clear: scene.clear, groups, prepass, meshlets, camera: scene.camera, motion, reactive_group })
     }
 
     /// The part-1 nodes of the frame `prep`.
@@ -4351,8 +4360,8 @@ impl Renderer {
     pub fn cull_only(&mut self, gpu: &Gpu, scene: &Scene) -> Result<(), RenderError> {
         let scene_path = self.scene_path(self.render_size(), None);
         let (plan, uploads, _) = self.prepare(scene, CullPath::Gpu, &scene_path, &FrameTemporal::NONE)?;
-        self.write_uploads(&gpu.queue, &uploads, &plan, &[]);
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("cull only") });
+        self.write_uploads(&mut encoder, &uploads, &plan, &[]);
         self.encode_cull(&mut encoder, &plan);
         gpu.queue.submit([encoder.finish()]);
         #[cfg(not(target_arch = "wasm32"))]

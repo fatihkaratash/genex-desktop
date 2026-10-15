@@ -78,6 +78,9 @@ const GX_TAA_TONEMAP_EPSILON: f32 = 1.0 / 65504.0;
 // is under the first stands still, and its accumulation floor is alpha_min times the second.
 const GX_TAA_STILL_MOTION_PX: f32 = 0.01;
 const GX_TAA_STILL_ALPHA_SHARE: f32 = 0.5;
+// `post::taa::HISTORY_SHARPEN`: the history's sharpening against its outer taps where it fell
+// halfway between texel centres (none on a centre).
+const GX_TAA_HISTORY_SHARPEN: f32 = 0.2;
 // `post::taa::LOCK_SIMILAR_RATIO`: two neighbours' lock lumas (perceived lightness of the
 // tonemapped colour) are similar within this ratio (FSR 2.2's 1.05 on lightness^(1/6)).
 const GX_TAA_LOCK_SIMILAR_RATIO: f32 = 1.3400956;
@@ -174,7 +177,16 @@ fn gx_taa_sane(c: vec3<f32>) -> vec3<f32> {
 // The history at `uv` through Catmull-Rom (Jimenez's five bilinear taps; the corner taps of the
 // 4x4 kernel are dropped), negative lobes clamped; alpha is the centre tap's depth key (bilinear:
 // between two surfaces at an edge, which the key-range test accepts).
-fn gx_taa_history_catmull_rom(uv: vec2<f32>) -> vec4<f32> {
+struct HistorySample {
+    // The Catmull-Rom history (rgb) and the centre tap's depth key (a).
+    value: vec4<f32>,
+    // The mean of the four outer taps: the history's neighbourhood about a texel away.
+    around: vec3<f32>,
+    // How far between texel centres the sample fell: 0 on a centre, 1 halfway on both axes.
+    between: f32,
+}
+
+fn gx_taa_history_catmull_rom(uv: vec2<f32>) -> HistorySample {
     // The history's own size: after a dynamic-resolution step it is last frame's render size,
     // reprojected into this frame's in uv.
     let size = vec2<f32>(textureDimensions(gx_history));
@@ -192,14 +204,19 @@ fn gx_taa_history_catmull_rom(uv: vec2<f32>) -> vec4<f32> {
     let tc0 = (center - 1.0) * texel;
     let tc12 = (center + w2 / w12) * texel;
     let tc3 = (center + 2.0) * texel;
-    let a = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc12.x, tc0.y), 0.0).rgb * (w12.x * w0.y);
-    let b = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc0.x, tc12.y), 0.0).rgb * (w0.x * w12.y);
+    let ta = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc12.x, tc0.y), 0.0).rgb;
+    let tb = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc0.x, tc12.y), 0.0).rgb;
     let centre = textureSampleLevel(gx_history, gx_linear, tc12, 0.0);
-    let c = centre.rgb * (w12.x * w12.y);
-    let d = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc3.x, tc12.y), 0.0).rgb * (w3.x * w12.y);
-    let e = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc12.x, tc3.y), 0.0).rgb * (w12.x * w3.y);
+    let td = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc3.x, tc12.y), 0.0).rgb;
+    let te = textureSampleLevel(gx_history, gx_linear, vec2<f32>(tc12.x, tc3.y), 0.0).rgb;
+    let sum = ta * (w12.x * w0.y) + tb * (w0.x * w12.y) + centre.rgb * (w12.x * w12.y) + td * (w3.x * w12.y) + te * (w12.x * w3.y);
     let weight = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
-    return vec4<f32>(max((a + b + c + d + e) / weight, vec3<f32>(0.0)), centre.a);
+    var out: HistorySample;
+    out.value = vec4<f32>(max(sum / weight, vec3<f32>(0.0)), centre.a);
+    out.around = 0.25 * (ta + tb + td + te);
+    let off = f * (1.0 - f);
+    out.between = 2.0 * (off.x + off.y);
+    return out;
 }
 
 // `history` clipped towards the centre of the box [lo, hi] (YCoCg) along the line to it.
@@ -468,8 +485,8 @@ fn fs_taa(in: TaaOut) -> TaaTargets {
     // the colour box. A select, not a branch: measured cheaper (0.015 ms against 0.025 ms at 1080p).
     let motion = select(textureLoad(gx_motion, n.closest, 0).xy, camera.yz * 2.0 * gx_taa.size.zw, n.key_hi <= 0.0);
     let prev_uv = uv - motion * vec2<f32>(0.5, -0.5);
-    let history_sample = gx_taa_history_catmull_rom(prev_uv);
-    let history_rgb = history_sample.rgb * gx_taa.params.y;
+    let resampled = gx_taa_history_catmull_rom(prev_uv);
+    let history_sample = resampled.value;
     let history_key = history_sample.a;
     let reactive = clamp(textureLoad(gx_reactive, pixel, 0).r, 0.0, 1.0);
     let prev_luma = textureLoad(gx_luma_history, gx_taa_side_texel(prev_uv, textureDimensions(gx_luma_history)), 0);
@@ -479,6 +496,10 @@ fn fs_taa(in: TaaOut) -> TaaTargets {
     let frames = f32(gx_taa.counts.x);
     let average = 1.0 / (frames + 1.0);
     let motion_px = length(motion * 0.5 * gx_taa.size.xy);
+    // The history resampled between texel centres is sharpened back by how far between them it
+    // fell: each frame of motion resamples it, and the losses compound over its memory.
+    let sharpen = GX_TAA_HISTORY_SHARPEN * resampled.between;
+    let history_rgb = max(history_sample.rgb + sharpen * (history_sample.rgb - resampled.around), vec3<f32>(0.0)) * gx_taa.params.y;
     // A still pixel (a still camera on a still surface) averages over twice as many frames: its
     // jittered sample of a sub-pixel edge (a grass blade, a far tree tip against the sky) moves the
     // history by alpha times the edge's contrast every frame, which kept such edges flickering by

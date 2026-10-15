@@ -659,6 +659,35 @@ fn metal_final_column_shots_at_high_and_ultra() {
     println!("{record}");
 }
 
+/// Pass 1's mean chroma (`LookStats::chroma`) of the golden-hour shots at `high`, measured on the
+/// pass-1 head (565a01d4) with the fetched textures by the G0 look area (2026-10-14).
+const PASS1_CHROMA: [(&str, f64); 3] = [("wide", 24.6), ("forest", 27.8), ("cabin", 22.4)];
+/// How far over pass 1's chroma a shot may go.
+const CHROMA_OVER_PASS1_MAX: f64 = 1.10;
+
+/// G0 look (2026-10-14): with AgX punchy's saturation (P2-0.10) on the scene's warm white balance,
+/// the golden hour read over-saturated and yellow (grass and canopy acid yellow-green, an orange
+/// glare on the dock): mean chroma 24.6 -> 32.1 on the wide shot, 27.8 -> 34.6 on the forest and
+/// 22.4 -> 28.2 on the cabin, at the same mean luma. At `high` each shot stays within
+/// [`CHROMA_OVER_PASS1_MAX`] of pass 1's chroma.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_the_golden_hour_keeps_pass_one_s_saturation() {
+    if gpu().is_none() {
+        return;
+    }
+    let mut problems = Vec::new();
+    for (name, pass1) in PASS1_CHROMA {
+        let (capture, _) = studio_shot_as(name, DrawnAs::Preset(QualityPreset::High)).expect("a presenter");
+        let chroma = LookStats::of(&capture).chroma;
+        eprintln!("{name} at high: chroma {chroma:.1} against pass 1's {pass1}");
+        if chroma > pass1 * CHROMA_OVER_PASS1_MAX {
+            problems.push(format!("{name}: chroma {chroma:.1} against pass 1's {pass1}"));
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
 /// The cabin shot's chimney smoke: the columns it rises through and the rows read (below the top
 /// edge, beside the HUD card), and how far either side of a pixel the sky beside it is read.
 const SMOKE_COLUMNS: std::ops::Range<u32> = 490..580;

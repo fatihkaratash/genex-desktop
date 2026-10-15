@@ -26,8 +26,11 @@ const FOG_DENSITY: f32 = 0.0032;
 const FOG_HEIGHT_FALLOFF: f32 = 0.16;
 /// The golden hour, for the whole frame: the look's white balance (linear gains, normalised to keep
 /// the brightness). The sun itself is white outside the atmosphere; the physical sky reddens it on
-/// its way down, and this warms what the sky's blue fill would cool.
-pub const WHITE_BALANCE: [f32; 3] = [1.0, 0.9, 0.76];
+/// its way down, and this warms what the sky's blue fill would cool. A light touch: under AgX
+/// punchy's saturation (P2-0.10) pass 1's [1.0, 0.9, 0.76] turned the grass and canopy acid
+/// yellow-green and the dock orange (G0 look: mean chroma 24.6 -> 32.3 on the wide shot, at the same
+/// luma); at these gains each shot is within 5% of pass 1's chroma.
+pub const WHITE_BALANCE: [f32; 3] = [1.0, 0.98, 0.94];
 /// Bloom: the lanterns', windows' and fireflies' glow and the sun's sheen on the water, held soft.
 const BLOOM_INTENSITY: f32 = 0.05;
 const BLOOM_RADIUS: f32 = 1.4;

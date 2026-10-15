@@ -195,12 +195,15 @@ struct Run {
     window: Vec<Envelope>,
     /// Every frame, when the run keeps them (the evidence of its worst frame).
     frames: Option<Vec<Capture>>,
+    /// The pixels of the last frame whose own motion (the renderer's motion target) carried them
+    /// farther than the radius since the frame before, when the run reads it.
+    fast: Option<Vec<bool>>,
 }
 
 impl Run {
     /// A run whose frames move values by at most `radius` pixels a frame.
     fn new(radius: usize) -> Run {
-        Run { radius, pops: Vec::new(), flickers: Vec::new(), popped: Vec::new(), last: None, window: Vec::new(), frames: None }
+        Run { radius, pops: Vec::new(), flickers: Vec::new(), popped: Vec::new(), last: None, window: Vec::new(), frames: None, fast: None }
     }
 
     /// [`Run::new`], keeping every frame.
@@ -210,16 +213,32 @@ impl Run {
 
     /// Take the next frame.
     fn push(&mut self, capture: Capture) {
+        self.push_moving(capture, None);
+    }
+
+    /// Take the next frame and `fast`, its pixels that moved farther than the radius since the
+    /// frame before (the renderer's motion; None: not read). The envelope cannot judge such a
+    /// pixel (its value left the box), so it neither flickers nor pops: a near post the dolly
+    /// sweeps past at 30 pixels a frame popped all over in both runs of a pair, and the runs'
+    /// differing light made the two pop sets differ pixel by pixel.
+    fn push_moving(&mut self, capture: Capture, fast: Option<Vec<bool>>) {
         let next = Envelope::of(&capture, self.radius);
         if self.popped.is_empty() {
             self.popped = vec![false; next.luma.len()];
         }
+        let judged = |fast: &Option<Vec<bool>>, i: usize| fast.as_ref().is_none_or(|fast| !fast[i]);
         if let Some(previous) = self.window.last() {
-            let flickered = (0..next.luma.len()).filter(|i| !previous.holds(*i, next.luma[*i], FLICKER_LEVELS)).map(|i| i as u32).collect();
+            let flickered = (0..next.luma.len())
+                .filter(|i| judged(&fast, *i) && !previous.holds(*i, next.luma[*i], FLICKER_LEVELS))
+                .map(|i| i as u32)
+                .collect();
             self.flickers.push(flickered);
         }
         if let [before, now] = self.window.as_slice() {
-            let popped: Vec<u32> = (0..next.luma.len()).filter(|i| pops_at(before, now, &next, *i)).map(|i| i as u32).collect();
+            let popped: Vec<u32> = (0..next.luma.len())
+                .filter(|i| judged(&fast, *i) && judged(&self.fast, *i) && pops_at(before, now, &next, *i))
+                .map(|i| i as u32)
+                .collect();
             for i in &popped {
                 self.popped[*i as usize] = true;
             }
@@ -233,6 +252,7 @@ impl Run {
             frames.push(capture.clone());
         }
         self.last = Some(capture);
+        self.fast = fast;
     }
 
     fn pixels(&self) -> f64 {
@@ -360,8 +380,16 @@ fn cabin_truck(k: f32) -> (Vec3, Vec3) {
 struct Drawn {
     preset: QualityPreset,
     class: DeviceClass,
-    off: &'static [RenderFeature],
+    off: Vec<RenderFeature>,
 }
+
+/// The features both runs of a shadow row switch off, so the pair differs by the shadows alone.
+/// G0 (2026-10-15): bloom is screen-space, so the sun's disc entering the pan's frame (and the
+/// dolly's lamp leaving it) brightened its glare over four frames in both runs; the glare lifts a
+/// shadowed pixel past the flicker threshold sooner than a sunlit one (the tone curve), and that
+/// difference was counted as the shadows changing 1.2-1.3% of the picture at once. The glare's
+/// own onset is held by [`metal_lakeside_the_sun_s_glare_enters_the_pan_without_a_step`].
+const SHADOW_ROW_ISOLATED: &[RenderFeature] = &[RenderFeature::Bloom];
 
 /// The features a run without the sun's shadows switches off.
 const SUN_SHADOWS: &[RenderFeature] = &[RenderFeature::Shadows, RenderFeature::ContactShadows];
@@ -371,7 +399,16 @@ const SPOT_SHADOWS: &[RenderFeature] = &[RenderFeature::SpotShadows];
 /// The Lakeside drawn Live along `path` as `drawn` says: [`WARM_FRAMES`] on the first pose, then
 /// [`PATH_FRAMES`] measured. None without a presenter (no adapter).
 fn lakeside_run(path: Path, radius: usize, drawn: &Drawn, keep: bool) -> Option<Run> {
+    lakeside_run_at(path, radius, drawn, keep, None, &mut |_| {})
+}
+
+/// [`lakeside_run`] in a window of `window` pixels (Live draws at the window's pixels up to the
+/// class's reference resolution; None: the world size), handing every measured frame to `sink`.
+fn lakeside_run_at(path: Path, radius: usize, drawn: &Drawn, keep: bool, window: Option<(u32, u32)>, sink: &mut dyn FnMut(&Capture)) -> Option<Run> {
     let mut presenter = Presenter::open(showcase_game::showcase::WORLD_SIZE, showcase_game::assets()).ok()?;
+    if let Some(window) = window {
+        presenter.set_window_size(window);
+    }
     let mut runtime = lakeside_at(SHOT_TICK);
     assert!(presenter.install_for(&mut runtime).is_empty(), "every pass installs");
     let pose = |runtime: &mut genex::Runtime<showcase_game::world::World>, k: f32| {
@@ -391,24 +428,42 @@ fn lakeside_run(path: Path, radius: usize, drawn: &Drawn, keep: bool) -> Option<
         ..RenderChange::default()
     };
     presenter.render_settings().expect("the game's settings attached").borrow_mut().apply(&change);
+    presenter.resilient.renderer_mut().renderer_mut().set_depth_readback(true);
     let mut run = if keep { Run::keeping(radius) } else { Run::new(radius) };
     for k in 0..WARM_FRAMES + PATH_FRAMES {
         runtime.step(FIXED_STEP_MS);
         pose(&mut runtime, k as f32 - WARM_FRAMES as f32);
         presenter.draw_view(&mut runtime, View::Game).expect("a view").expect("drawn");
         if k >= WARM_FRAMES {
-            run.push(presenter.resilient.capture().expect("the Live picture"));
+            let capture = presenter.resilient.capture().expect("the Live picture");
+            sink(&capture);
+            let fast = fast_pixels(&presenter, (capture.width(), capture.height()), radius);
+            run.push_moving(capture, fast);
         }
     }
     assert!(presenter.take_pass_refusals().is_empty(), "every pass draws");
     Some(run)
 }
 
+/// The pixels of the last Live frame whose motion (the renderer's motion target, NDC) carried them
+/// farther than `radius` pixels on either axis; None when the frame wrote no motion (no TAA) or at
+/// another size than the picture.
+fn fast_pixels(presenter: &Presenter, (width, height): (u32, u32), radius: usize) -> Option<Vec<bool>> {
+    let resilient = &presenter.resilient;
+    let motion = resilient.renderer().renderer().read_motion(resilient.gpu()).ok()?;
+    if motion.len() != (width * height) as usize {
+        return None;
+    }
+    let limit = radius as f32;
+    let (half_w, half_h) = (width as f32 * 0.5, height as f32 * 0.5);
+    Some(motion.iter().map(|m| (m[0] * half_w).abs() > limit || (m[1] * half_h).abs() > limit).collect())
+}
+
 /// One Lakeside row: `path` drawn as `drawn` with and without `shadows`; the record and, when the
 /// shadows add pops, the problem.
 fn lakeside_row(name: &str, (path, radius): (Path, usize), preset: QualityPreset, class: DeviceClass, shadows: &'static [RenderFeature]) -> Option<(String, Option<String>)> {
-    let on = lakeside_run(path, radius, &Drawn { preset, class, off: &[] }, true)?;
-    let off = lakeside_run(path, radius, &Drawn { preset, class, off: shadows }, false)?;
+    let on = lakeside_run(path, radius, &Drawn { preset, class, off: SHADOW_ROW_ISOLATED.to_vec() }, true)?;
+    let off = lakeside_run(path, radius, &Drawn { preset, class, off: [shadows, SHADOW_ROW_ISOLATED].concat() }, false)?;
     let label = format!("{name}-{}-{}", preset.wire(), class.wire());
     write_png(&out_dir().join(format!("pops-{label}.png")), &on.pop_map());
     write_png(&out_dir().join(format!("pops-{label}-shadows-off.png")), &off.pop_map());
@@ -495,6 +550,120 @@ fn metal_lakeside_shadows_add_no_one_frame_pops_on_a_pan_an_orbit_or_a_dolly() {
         }
     }
     finish("lakeside-paths", &records, &problems);
+}
+
+/// The most pixels the bloom may change in a single frame beyond what the motion explains, as a
+/// share of the frame: the shadows' step bound ([`SHADOW_STEP_SHARE_MAX`]).
+const GLARE_STEP_SHARE_MAX: f64 = SHADOW_STEP_SHARE_MAX;
+
+/// G0 (2026-10-15): on the Lakeside pan the sun's disc enters the frame's top-right corner over
+/// four frames, and its glare (screen-space bloom, which sees nothing beyond the screen) grew over
+/// a quarter of the picture in those frames: 2% of the pixels changed in one frame beyond the
+/// motion, with or without shadows. The glare adds no such step: the bloom-attributed flicker of
+/// any frame stays within [`GLARE_STEP_SHARE_MAX`].
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_lakeside_the_sun_s_glare_enters_the_pan_without_a_step() {
+    if gpu().is_none() {
+        return;
+    }
+    let mut records = Vec::new();
+    let mut problems = Vec::new();
+    for preset in [QualityPreset::High, QualityPreset::Ultra] {
+        let Some(on) = lakeside_run(pan, PAN_RADIUS, &Drawn { preset, class: desktop_high(), off: Vec::new() }, false) else { return };
+        let Some(off) = lakeside_run(pan, PAN_RADIUS, &Drawn { preset, class: desktop_high(), off: vec![RenderFeature::Bloom] }, false) else { return };
+        let steps: Vec<f64> = attributed(&on.flickers, &off.flickers, on.popped.len()).iter().map(|count| *count as f64 / on.pixels()).collect();
+        let worst = steps.iter().copied().fold(0.0, f64::max);
+        let frame = steps.iter().position(|share| *share == worst).unwrap_or(0);
+        let label = format!("glare-pan-{}", preset.wire());
+        records.push(format!("{{\"row\": \"{label}\", \"frames\": {PATH_FRAMES}, \"glareStepMax\": {worst:.5}, \"stepFrame\": {frame}}}"));
+        if worst > GLARE_STEP_SHARE_MAX {
+            problems.push(format!("{label}: the glare changes {:.3}% of the picture at once at frame {frame}", worst * 100.0));
+        }
+    }
+    finish("lakeside-glare", &records, &problems);
+}
+
+/// The Live window the plan's motion sequences draw at (section 7: 1440p, high and ultra).
+const SEQUENCE_WINDOW: (u32, u32) = (2560, 1440);
+/// The sequences' frame rate and x264 quality (constant rate factor: near-lossless, for the eye).
+const SEQUENCE_FPS: u32 = 60;
+const SEQUENCE_CRF: &str = "14";
+
+/// An mp4 being written by ffmpeg from BGRA frames on its stdin (None without an ffmpeg on PATH).
+struct Mp4 {
+    child: std::process::Child,
+    path: PathBuf,
+}
+
+impl Mp4 {
+    fn start(path: &std::path::Path, (width, height): (u32, u32)) -> Option<Mp4> {
+        let size = format!("{width}x{height}");
+        let fps = SEQUENCE_FPS.to_string();
+        let args = ["-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &size, "-r", &fps, "-i", "-", "-c:v", "libx264", "-crf", SEQUENCE_CRF, "-pix_fmt", "yuv420p"];
+        let child = std::process::Command::new("ffmpeg").args(args).arg(path).stdin(std::process::Stdio::piped()).spawn();
+        match child {
+            Ok(child) => Some(Mp4 { child, path: path.to_path_buf() }),
+            Err(error) => {
+                eprintln!("no mp4 for {}: ffmpeg did not start ({error})", path.display());
+                None
+            }
+        }
+    }
+
+    fn push(&mut self, capture: &Capture) {
+        use std::io::Write;
+        if let Some(stdin) = self.child.stdin.as_mut() {
+            stdin.write_all(capture.bgra()).expect("ffmpeg takes the frame");
+        }
+    }
+
+    fn finish(mut self) {
+        drop(self.child.stdin.take());
+        let status = self.child.wait().expect("ffmpeg ends");
+        assert!(status.success(), "ffmpeg wrote no {}", self.path.display());
+    }
+}
+
+/// Section 7's motion evidence (G0 visual, 2026-10-15: no mp4 existed for the owner's "no
+/// blinking" re-watch, and the rows ran at 1280x720 only): the Lakeside pan, orbit and dolly drawn
+/// Live in a 1440p window at high and ultra, 120 frames each, written as
+/// `sequences/<path>-<preset>-1440p.mp4` (ffmpeg on PATH) with each run's one-frame pop map and its
+/// flicker and pop counts (`sequences/lakeside-sequences.json`). An evidence row: the gated
+/// metrics are the 720p rows above.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_lakeside_motion_paths_at_1440p_are_written_for_the_owner() {
+    if gpu().is_none() {
+        return;
+    }
+    let dir = out_dir().join("sequences");
+    std::fs::create_dir_all(&dir).expect("the sequences folder");
+    let scale = (SEQUENCE_WINDOW.1 / showcase_game::showcase::WORLD_SIZE[1]) as usize;
+    let paths: [(&str, Path, usize); 3] = [("pan", pan, PAN_RADIUS), ("orbit", orbit, ORBIT_RADIUS), ("dolly", dolly, DOLLY_RADIUS)];
+    let mut records = Vec::new();
+    for (name, path, radius) in paths {
+        for preset in [QualityPreset::High, QualityPreset::Ultra] {
+            let label = format!("{name}-{}-1440p", preset.wire());
+            let mut mp4 = Mp4::start(&dir.join(format!("{label}.mp4")), SEQUENCE_WINDOW);
+            let mut size = None;
+            let mut sink = |capture: &Capture| {
+                size = Some((capture.width(), capture.height()));
+                if let Some(mp4) = mp4.as_mut() {
+                    mp4.push(capture);
+                }
+            };
+            let drawn = Drawn { preset, class: desktop_high(), off: Vec::new() };
+            let Some(run) = lakeside_run_at(path, radius * scale, &drawn, false, Some(SEQUENCE_WINDOW), &mut sink) else { return };
+            if let Some(mp4) = mp4 {
+                mp4.finish();
+            }
+            assert_eq!(size, Some(SEQUENCE_WINDOW), "{label}: Live draws at the window's pixels");
+            write_png(&dir.join(format!("pops-{label}.png")), &run.pop_map());
+            records.push(format!("{{\"row\": \"{label}\", \"frames\": {PATH_FRAMES}, \"radiusPx\": {}, \"pops\": {}, \"meanFlicker\": {:.5}, \"maxFlicker\": {:.5}}}", radius * scale, run.total_pops(), run.mean_flicker(), run.max_flicker()));
+        }
+    }
+    finish("sequences/lakeside-sequences", &records, &[]);
 }
 
 /// SH-15 / SH-07: on mobile-high (one shadowed spot slot) the camera trucks across the cabin's axis,
@@ -647,17 +816,6 @@ fn bench_pixel(gpu: &Gpu) -> f32 {
     2.0 * BENCH_DEPTH * genex::math::tan(probe.camera.fovy_degrees.to_radians() * 0.5) / support::SIZE[1] as f32
 }
 
-/// The pixels of `run` that flickered between any two consecutive frames inside `region`.
-fn flickering_in(run_frames: &[Capture], region: [u32; 4]) -> usize {
-    let [x0, y0, w, h] = region;
-    let width = run_frames[0].width();
-    let lumas: Vec<Vec<f32>> = run_frames.iter().map(lumas).collect();
-    (y0..y0 + h)
-        .flat_map(|y| (x0..x0 + w).map(move |x| (y * width + x) as usize))
-        .filter(|i| lumas.windows(2).any(|pair| f64::from((pair[0][*i] - pair[1][*i]).abs()) > FLICKER_LEVELS))
-        .count()
-}
-
 /// bench-outdoor drawn Live under `quality` with the camera moving `step` world units sideways a
 /// frame (the pass-1 shimmer row's frames): the last [`BENCH_COMPARED`] frames, kept whole (the lake
 /// box reads every pair).
@@ -668,6 +826,12 @@ fn bench_frames(gpu: &Gpu, class: DeviceClass, quality: &Quality, step: f32) -> 
 /// [`bench_frames`] with every transparent draw (the lake) also moved `drift` world units along x a
 /// frame: a moving transparent, which TAA's reactive mask marks.
 fn bench_frames_drifting(gpu: &Gpu, class: DeviceClass, quality: &Quality, step: f32, drift: f32) -> Vec<Capture> {
+    bench_frames_moving(gpu, class, quality, step, drift).0
+}
+
+/// [`bench_frames_drifting`] with each kept frame's motion (the renderer's motion target: NDC
+/// current minus previous, the jitter removed, top row first).
+fn bench_frames_moving(gpu: &Gpu, class: DeviceClass, quality: &Quality, step: f32, drift: f32) -> (Vec<Capture>, Vec<Vec<[f32; 2]>>) {
     use genex_render::FrameRenderer;
     use genex_render::immediate::ImmediateFrame;
     let options = RenderOptions { msaa: genex_render::renderer::landed_samples(quality.anti_aliasing) > 1 };
@@ -679,10 +843,12 @@ fn bench_frames_drifting(gpu: &Gpu, class: DeviceClass, quality: &Quality, step:
     renderer.set_scene_format(scene_format(class, rg11b10));
     renderer.set_look(lakeside_look());
     renderer.set_device_class(class);
+    renderer.set_depth_readback(true);
     let base = loaded.scene(0);
     let forward = Vec3::from(base.camera.target) - Vec3::from(base.camera.eye);
     let side = forward.cross(Vec3::Y).normalize();
     let mut kept = Vec::new();
+    let mut motions = Vec::new();
     for k in 0..BENCH_FRAMES {
         let mut drawn = base.clone();
         let offset = side * step * k as f32;
@@ -696,9 +862,41 @@ fn bench_frames_drifting(gpu: &Gpu, class: DeviceClass, quality: &Quality, step:
         frames.render(gpu, &frame, CullPath::Gpu, None).expect("a Live frame");
         if k >= BENCH_FRAMES - BENCH_COMPARED {
             kept.push(frames.capture(gpu).expect("capture"));
+            motions.push(frames.renderer().read_motion(gpu).unwrap_or_default());
         }
     }
-    kept
+    (kept, motions)
+}
+
+/// The pixels of each pair of `frames` whose luma differs by more than [`FLICKER_LEVELS`] from
+/// the frame before at the point the renderer's own `motions` (one per frame, as
+/// [`bench_frames_moving`] reads them) say it came from (bilinear): what the motion does not
+/// explain. A still camera's frames have no motion, so this is the plain per-pixel flicker; a frame
+/// without motion (no TAA) is compared pixel to pixel.
+fn compensated_flickers(frames: &[Capture], motions: &[Vec<[f32; 2]>]) -> Vec<Vec<u32>> {
+    let lumas: Vec<Vec<f32>> = frames.iter().map(lumas).collect();
+    let (width, height) = (frames[0].width() as usize, frames[0].height() as usize);
+    let sample = |luma: &[f32], x: f32, y: f32| {
+        let (x, y) = (x.clamp(0.0, (width - 1) as f32), y.clamp(0.0, (height - 1) as f32));
+        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+        let row = |yy: usize| luma[yy * width + x0] * (1.0 - fx) + luma[yy * width + x1] * fx;
+        row(y0) * (1.0 - fy) + row(y1) * fy
+    };
+    (1..frames.len())
+        .map(|k| {
+            let motion = motions.get(k).filter(|motion| motion.len() == width * height);
+            (0..width * height)
+                .filter(|i| {
+                    let [mx, my] = motion.map_or([0.0, 0.0], |motion| motion[*i]);
+                    let (x, y) = ((i % width) as f32 - mx * 0.5 * width as f32, (i / width) as f32 + my * 0.5 * height as f32);
+                    f64::from((lumas[k][*i] - sample(&lumas[k - 1], x, y)).abs()) > FLICKER_LEVELS
+                })
+                .map(|i| i as u32)
+                .collect()
+        })
+        .collect()
 }
 
 /// The last of `frames` with every pixel that flickered between any two consecutive frames painted
@@ -767,9 +965,17 @@ fn metal_bench_outdoor_lake_box_holds_still_while_the_camera_creeps() {
     let mut problems = Vec::new();
     for preset in [QualityPreset::High, QualityPreset::Ultra] {
         let quality = preset_quality(preset, class);
-        let still = bench_frames(&gpu, class, &quality, 0.0);
-        let creeping = bench_frames(&gpu, class, &quality, step);
-        let (lake_still, lake_creeping) = (flickering_in(&still, LAKE_BOX), flickering_in(&creeping, LAKE_BOX));
+        let (still, still_motion) = bench_frames_moving(&gpu, class, &quality, 0.0, 0.0);
+        let (creeping, creeping_motion) = bench_frames_moving(&gpu, class, &quality, step, 0.0);
+        // G0 (2026-10-15): the box's pixels compared at the point each one's motion came from. A
+        // pixel-to-pixel comparison counted the trees' and rocks' silhouettes in the box sliding a
+        // fiftieth of a pixel a frame (496 creeping against 34 still at high, with or without the
+        // sun's shadows), and those are no flicker.
+        let width = support::SIZE[0];
+        let lake_still = flagged_in(&compensated_flickers(&still, &still_motion), width, LAKE_BOX);
+        let creeping_flickers = compensated_flickers(&creeping, &creeping_motion);
+        let lake_creeping = flagged_in(&creeping_flickers, width, LAKE_BOX);
+        write_png(&out_dir().join(format!("lake-box-compensated-creeping-{}.png", preset.wire())), &flagged_map(creeping.last().expect("a frame"), &creeping_flickers));
         let mut run = Run::new(0);
         for frame in creeping.iter().cloned() {
             run.push(frame);
@@ -779,7 +985,6 @@ fn metal_bench_outdoor_lake_box_holds_still_while_the_camera_creeps() {
             off.push(frame);
         }
         let shadows = shadow_flicker(&run, &off);
-        let width = support::SIZE[0];
         let lake_shadows = flagged_in(&added_flickers(&run, &off), width, LAKE_BOX);
         write_png(&out_dir().join(format!("lake-box-creeping-shadows-{}.png", preset.wire())), &flagged_map(creeping.last().expect("a frame"), &added_flickers(&run, &off)));
         let (shadow_mean, shadow_max) = (mean(&shadows), shadows.iter().copied().fold(0.0, f64::max));
@@ -841,13 +1046,20 @@ fn metal_bench_outdoor_lake_box_holds_still_while_the_camera_pans() {
             let (pan_on, pan_off) = runs(px * pixel);
             let lake_still = flagged_in(&still_on.flickers, width, LAKE_BOX);
             let lake_pan = flagged_in(&pan_on.flickers, width, LAKE_BOX);
+            // Recorded beside the envelope's counts (the gate's definition, G0: an owner question):
+            // each box pixel against the point its own motion came from, as the creeping row reads it.
+            let compensated = |step: f32| {
+                let (frames, motion) = bench_frames_moving(&gpu, class, &quality, step, 0.0);
+                flagged_in(&compensated_flickers(&frames, &motion), width, LAKE_BOX)
+            };
+            let (lake_still_compensated, lake_pan_compensated) = (compensated(0.0), compensated(px * pixel));
             let added = |on: &Run, off: &Run| flagged_in(&added_flickers(on, off), width, LAKE_BOX);
             let (shadow_still, shadow_pan) = (added(&still_on, &still_off), added(&pan_on, &pan_off));
             let last = pan_on.last.as_ref().expect("a frame");
             write_png(&out_dir().join(format!("lake-box-pan-{}-{px}px.png", preset.wire())), &flagged_map(last, &pan_on.flickers));
             write_png(&out_dir().join(format!("lake-box-pan-shadows-{}-{px}px.png", preset.wire())), &flagged_map(last, &added_flickers(&pan_on, &pan_off)));
             let record = format!(
-                "{{\"row\": \"lake-box-pan-{}-{px}px\", \"radiusPx\": {radius}, \"lakeStill\": {lake_still}, \"lakePan\": {lake_pan}, \"lakeShadowStill\": {shadow_still}, \"lakeShadowPan\": {shadow_pan}}}",
+                "{{\"row\": \"lake-box-pan-{}-{px}px\", \"radiusPx\": {radius}, \"lakeStill\": {lake_still}, \"lakePan\": {lake_pan}, \"lakeShadowStill\": {shadow_still}, \"lakeShadowPan\": {shadow_pan}, \"lakeStillCompensated\": {lake_still_compensated}, \"lakePanCompensated\": {lake_pan_compensated}}}",
                 preset.wire()
             );
             eprintln!("{record}");

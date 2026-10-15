@@ -205,7 +205,11 @@ impl GpuAoParams {
         .filter(|(on, _)| *on)
         .fold(0, |all, (_, flag)| all | flag);
         let noise_frame = if quality.temporal { (facts.frame_index % u64::from(u32::MAX)) as u32 } else { 0 };
-        let weight = if blends_history { HISTORY_WEIGHT } else { 0.0 };
+        let weight = match (blends_history, facts.history_frames) {
+            (false, _) => 0.0,
+            (true, None) => HISTORY_WEIGHT,
+            (true, Some(frames)) => HISTORY_WEIGHT.min(frames as f32 / (frames as f32 + 1.0)),
+        };
         GpuAoParams {
             size: [w, h, 1.0 / w, 1.0 / h],
             params: [settings.radius, settings.intensity, FALLOFF_FRACTION, settings.thickness],
@@ -288,6 +292,10 @@ pub struct AoFrameFacts {
     pub step_change: bool,
     /// Whether the prepass's motion target is bound ([`FLAG_MOTION`]).
     pub motion: bool,
+    /// Frames the history has blended since it started over, when the node counts them: the
+    /// history's weight follows the running average `n / (n + 1)` up to [`HISTORY_WEIGHT`], so a
+    /// settled capture's frames weigh alike (None: [`HISTORY_WEIGHT`] from the first frame on).
+    pub history_frames: Option<u32>,
 }
 
 /// The frame's AO: the look's radius and intensity at the quality's sampling.
@@ -593,6 +601,8 @@ pub struct AoNode {
     upsample: crate::post::upsample::JointUpsample,
     /// Live's history put aside while a settled capture draws on the node (RQ5 review).
     live_stash: Option<LiveStash>,
+    /// Frames the history has blended since it started over ([`AoFrameFacts::history_frames`]).
+    history_frames: u32,
     /// The previous size's last term and view-depth chain, kept from a dynamic-resolution step's
     /// remake until the step frame has read them as its history (pass 2, RC-05).
     carried: Option<(Target, Chain)>,
@@ -611,6 +621,8 @@ struct LiveStash {
     chain: Texture,
     parity: usize,
     previous: Option<AoCamera>,
+    /// Frames its history had blended.
+    history_frames: u32,
     /// Whether the capture ended and the next Live frame restores it.
     restore: bool,
 }
@@ -801,6 +813,7 @@ impl AoNode {
             groups: None,
             upsample: crate::post::upsample::JointUpsample::new(device)?,
             live_stash: None,
+            history_frames: 0,
             carried: None,
             neutral_motion: make_target(device, "ao no motion", (1, 1), crate::motion::MOTION_FORMAT, AO_USAGE).view,
         })
@@ -826,7 +839,7 @@ impl AoNode {
         copy_all_mips(&mut encoder, term, &stash_term);
         copy_all_mips(&mut encoder, chain, &stash_chain);
         queue.submit([encoder.finish()]);
-        self.live_stash = Some(LiveStash { shape, term: stash_term, chain: stash_chain, parity: self.parity, previous: self.previous, restore: false });
+        self.live_stash = Some(LiveStash { shape, term: stash_term, chain: stash_chain, parity: self.parity, previous: self.previous, history_frames: self.history_frames, restore: false });
     }
 
     /// The capture is over: the next Live frame takes the stashed history back.
@@ -860,6 +873,7 @@ impl AoNode {
         copy_all_mips(encoder, &stash.chain, &targets.chains[last].texture);
         self.parity = stash.parity;
         self.previous = stash.previous;
+        self.history_frames = stash.history_frames;
         self.remade = false;
     }
 
@@ -1020,7 +1034,11 @@ impl AoNode {
         let carried = self.carried.take().filter(|_| remade && !explicit);
         let step_change = remade && !explicit && carried.is_none();
         let reset = (remade && carried.is_none()) || explicit;
-        let facts = AoFrameFacts { history_reset: reset && !step_change, step_change, motion: input.motion.is_some(), ..input.facts };
+        // A settled capture's re-renders weigh alike (G0: with the history's 0.9 from the second
+        // frame on, the first frame's slices held 48% of an 8-frame capture at high, and the
+        // template block's base drew their noise as dark clumps that Live's frames average away).
+        self.history_frames = if reset { 0 } else { self.history_frames.saturating_add(1) };
+        let facts = AoFrameFacts { history_reset: reset && !step_change, step_change, motion: input.motion.is_some(), history_frames: Some(self.history_frames), ..input.facts };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&GpuAoParams::for_frame(input.settings, size, facts)));
         let previous = if reset { None } else { self.previous };
         queue.write_buffer(&self.view, 0, bytemuck::bytes_of(&GpuAoView::new(input.camera, previous).at_render(input.render)));
@@ -1478,6 +1496,21 @@ mod tests {
         // Pass 2, P4 (flipped from every step): a reset takes the running frames' slices.
         assert_eq!(reset.counts[3], FLAG_TEMPORAL | FLAG_BENT_NORMALS | FLAG_INTERLEAVE, "and the running frames' slices");
         assert_eq!(high.params[..2], [look.ao_radius, look.ao_intensity]);
+    }
+
+    /// G0 visual (2026-10-15): the history's weight follows the running average from a reset, so a
+    /// settled capture's frames weigh alike, and holds [`HISTORY_WEIGHT`] from the tenth frame on.
+    #[test]
+    fn the_history_weight_is_the_running_average_until_it_reaches_the_live_weight() {
+        let look = Look::default();
+        let settings = AoSettings::new(&look, &HIGH).expect("on");
+        let weight = |frames: Option<u32>| GpuAoParams::for_frame(&settings, (960, 540), AoFrameFacts { frame_index: 17, history_frames: frames, ..AoFrameFacts::default() }).history[0];
+        assert_eq!(weight(Some(0)), 0.0, "nothing behind the first frame");
+        assert_eq!(weight(Some(1)), 0.5);
+        assert_eq!(weight(Some(3)), 0.75);
+        assert_eq!(weight(Some(9)), HISTORY_WEIGHT);
+        assert_eq!(weight(Some(400)), HISTORY_WEIGHT);
+        assert_eq!(weight(None), HISTORY_WEIGHT, "a caller that does not count keeps the Live weight");
     }
 
     /// RQ4 review (performance 5): targets remade without a history to carry (another shape; a

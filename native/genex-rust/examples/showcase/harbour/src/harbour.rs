@@ -24,6 +24,11 @@ const SHADOW_DISTANCE: u16 = 60;
 /// height (per metre).
 const FOG_DENSITY: f32 = 0.006;
 const FOG_HEIGHT_FALLOFF: f32 = 0.12;
+/// Dusk's key: auto exposure draws the street this far under middle grey, so the neon, the bulbs
+/// and the café's windows carry the picture (G0 look: at middle grey every shot read as daylight).
+/// A look's key, not a patch of the curve (owner decision D2 removed those).
+const DUSK_KEY_EV: f32 = -1.5;
+
 /// Bloom: the neon, the bulbs and the lamps glow, held soft.
 const BLOOM_INTENSITY: f32 = 0.06;
 const BLOOM_RADIUS: f32 = 1.2;
@@ -326,15 +331,15 @@ pub fn look_fog() -> Fog {
     Fog::default().with_density(FOG_DENSITY).with_height(FOG_HEIGHT_FALLOFF, 0.0)
 }
 
-/// Harbour Street's render choices: AgX punchy with auto exposure and no exposure patch (owner
-/// decision D2: the curve's mid-grey is the renderer's business, not a scene's), the damp air's
-/// fog, soft bloom for the neon, and the sun's shadows at their best where the device allows
-/// (four cascades over the street, PCSS-lite at `high`, full PCSS at `ultra`).
+/// Harbour Street's render choices: AgX punchy with auto exposure keyed low for dusk
+/// ([`DUSK_KEY_EV`]), the damp air's fog, soft bloom for the neon, and the sun's shadows at their
+/// best where the device allows (four cascades over the street, PCSS-lite at `high`, full PCSS at
+/// `ultra`).
 pub fn render_config() -> RenderConfig {
     let shadows = ShadowConfig::new().cascades(SHADOW_CASCADES).distance(SHADOW_DISTANCE);
     RenderConfig::new()
         .tonemap(Tonemap::AgxPunchy)
-        .exposure(Exposure::auto())
+        .exposure(Exposure::auto().compensation(DUSK_KEY_EV))
         .fog(look_fog())
         .bloom(Bloom::new(BLOOM_INTENSITY).radius(BLOOM_RADIUS))
         .shadows_at(QualityPreset::High, shadows.filter(ShadowFilter::PcssLite))

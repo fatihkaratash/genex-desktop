@@ -105,6 +105,8 @@ pub const BACKGROUND_FRAGMENT_ENTRY: &str = "fs_background_motion";
 /// The motion prepass's colour targets, in location order: the normals, the motion and TAA's
 /// reactive mask.
 pub const TARGET_FORMATS: [TextureFormat; 3] = [crate::prepass::NORMALS_FORMAT, MOTION_FORMAT, crate::post::taa::REACTIVE_FORMAT];
+/// The motion target's location among [`TARGET_FORMATS`] (the normals share its format).
+pub const MOTION_LOCATION: u32 = 1;
 
 /// The WGSL mirror of [`GpuPrevModel`] (`PrevModel`): the shader that reads the previous-model
 /// table (shaders/prepass.wgsl) declares it, and tests/layout.rs holds both to one size.
@@ -632,10 +634,7 @@ impl MotionNode {
     pub fn background_pipeline(&self, device: &Device, reversed: bool) -> Result<Compiled<RenderPipeline>, RenderError> {
         let module = crate::shaders::module(device, "background motion", BACKGROUND_MOTION)?;
         let layout = pipeline_layout(device, "background motion", &[&self.layout]);
-        let targets = TARGET_FORMATS.map(|format| {
-            let write_mask = if format == MOTION_FORMAT { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() };
-            Some(wgpu::ColorTargetState { format, blend: None, write_mask })
-        });
+        let targets = background_targets();
         let constants = [("GX_DEPTH_REVERSED", f64::from(u8::from(reversed)))];
         let depth = wgpu::DepthStencilState {
             format: crate::renderer::DEPTH_FORMAT,
@@ -666,6 +665,19 @@ impl MotionNode {
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// The background-motion pipeline's colour targets: the prepass's three, with the motion alone
+/// written (the fragment stage outputs nothing else, and WebGPU refuses a written target without
+/// an output at its location).
+pub fn background_targets() -> [Option<wgpu::ColorTargetState>; 3] {
+    // By location, never by format: the normals are Rg16Float like the motion.
+    let mut location = 0;
+    TARGET_FORMATS.map(|format| {
+        let write_mask = if location == MOTION_LOCATION { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() };
+        location += 1;
+        Some(wgpu::ColorTargetState { format, blend: None, write_mask })
+    })
 }
 
 /// The prepass's depth test: written, `Less` (standard Z) or `Greater` (reverse-Z).

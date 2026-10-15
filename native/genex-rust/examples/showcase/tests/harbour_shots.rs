@@ -26,6 +26,9 @@ use support::{SHOT_TICK, gpu, out_dir, percentile, write_png};
 /// share of its pixels clip to white.
 const EXPOSED_LUMA: std::ops::RangeInclusive<f64> = 30.0..=200.0;
 const CLIPPED_LUMA: f64 = 250.0;
+/// Dusk is keyed low: no shot's mean encoded luma above this (G0 look, 2026-10-14: lit and exposed
+/// as daylight, every shot sat at 124-130, middle grey, with a midday-blue sky).
+const DUSK_MEAN_LUMA_MAX: f64 = 100.0;
 const CLIPPED_SHARE_MAX: f64 = 0.02;
 /// The window-shafts shot looks at the sun's patches on the café floor: its brightest 1% stands
 /// at least this many times over its median (no patch, no shafts).
@@ -106,6 +109,9 @@ fn metal_every_harbour_shot_is_drawn_the_same_twice_exposed_and_written_as_a_png
         println!("{}: mean luma {mean:.1}, clipped {:.2}%, median {median:.1}, p99 {top:.1}", shot.name, clipped * 100.0);
         if !EXPOSED_LUMA.contains(&mean) {
             failures.push(format!("{}: mean luma {mean:.1} outside {EXPOSED_LUMA:?}", shot.name));
+        }
+        if mean > DUSK_MEAN_LUMA_MAX {
+            failures.push(format!("{}: mean luma {mean:.1} over dusk's {DUSK_MEAN_LUMA_MAX}", shot.name));
         }
         if clipped > CLIPPED_SHARE_MAX {
             failures.push(format!("{}: {:.2}% of the pixels clip", shot.name, clipped * 100.0));

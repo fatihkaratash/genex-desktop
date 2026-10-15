@@ -671,6 +671,7 @@ pub const GPU_STRUCTS: &[GpuStructLayout] = &[
     layout_of::<GpuHizParams>("HizParams"),
     layout_of::<GpuPrevModel>("PrevModel"),
     layout_of::<crate::post::taa::GpuTaaParams>("TaaParams"),
+    layout_of::<crate::post::taa::GpuReactiveJitter>("ReactiveJitter"),
     layout_of::<crate::post::fsr::GpuEasuParams>("EasuParams"),
     layout_of::<crate::post::fsr::GpuRcasParams>("RcasParams"),
     layout_of::<GpuLightExt>("LightExt"),

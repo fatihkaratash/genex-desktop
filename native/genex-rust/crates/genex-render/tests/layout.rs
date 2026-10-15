@@ -77,7 +77,7 @@ use naga::proc::Layouter;
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 
 /// The golden sizes in bytes. Changing one is a layout change for every shader and extension.
-const GOLDEN: [(&str, usize); 33] = [
+const GOLDEN: [(&str, usize); 34] = [
     // RQ5.6 flipped 752 -> 768: the camera's TAA jitter lane (`GpuFrame::jitter`). Pass 2's
     // contracts wave flipped 768 -> 784: each cascade's comparison bias (`GpuFrame::cascade_bias`).
     // P2-0.8b (T-06) flipped 784 -> 800: the frame's texture mip bias (`GpuFrame::texture_lod`).
@@ -110,6 +110,9 @@ const GOLDEN: [(&str, usize); 33] = [
     // RQ5 review flipped 64 -> 128 (named in the log): the camera reprojection TAA's disocclusion
     // test reads (`reproject`, a mat4x4).
     ("TaaParams", 128),
+    // G0 (2026-10-15) flipped 16 -> 32 (named in the log): the reactive coverage's motion row (the
+    // render size and whether a moved mesh writes its share of the cap by its motion).
+    ("ReactiveJitter", 32),
     ("EasuParams", 64),
     ("RcasParams", 32),
     ("LightExt", 32),

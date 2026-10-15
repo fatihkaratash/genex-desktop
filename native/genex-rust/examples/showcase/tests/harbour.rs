@@ -4,7 +4,8 @@
 //! stand in the open and the café shots inside the café, a walk from the pavement through the
 //! café's door meets no wall, the street is lit by more than 200 binned local lights within the
 //! renderer's light table, the `where` probe follows the camera through the door, every fetched texture and sky map it asks for is a row of its fetch
-//! manifest (and every row is used), and its look adds no exposure patch (owner decision D2).
+//! manifest (and every row is used), and its look is keyed low for dusk with no +EV patch (owner
+//! decision D2).
 
 use genex::math::Vec3;
 use genex::render::{Environment, ExposureMode, Tonemap};
@@ -210,12 +211,15 @@ fn every_fetched_file_the_scene_asks_for_is_a_manifest_row_and_every_row_is_used
     }
 }
 
+/// G0 look (2026-10-15) flipped "no compensation at all" to "keyed low, never a + patch": decision
+/// D2 removed the +EV patches that made up for pass 1's darker punchy curve; dusk is keyed under
+/// middle grey (at middle grey every shot read as daylight).
 #[test]
-fn the_look_is_agx_punchy_with_auto_exposure_and_no_exposure_patch() {
+fn the_look_is_agx_punchy_with_auto_exposure_keyed_low_for_dusk_and_no_exposure_patch() {
     let runtime = runtime();
     let look = runtime.render().borrow().look();
     assert_eq!((look.tonemapper, look.exposure), (Tonemap::AgxPunchy, ExposureMode::Auto));
-    assert_eq!(look.ev_compensation, 0.0, "decision D2: no +EV patch on a new scene");
+    assert!(look.ev_compensation < 0.0, "dusk is keyed under middle grey, never a +EV patch (decision D2): {}", look.ev_compensation);
     assert!(look.fog.is_on(), "the damp air after the rain");
 }
 

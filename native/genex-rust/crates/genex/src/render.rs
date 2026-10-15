@@ -965,11 +965,21 @@ fn unprobed_facts() -> DeviceFacts {
 /// finding 02: counted as memory, mobile-low's MSAA was the first rung its 48 MB budget gave up,
 /// so captures "as mobile-low" drew no anti-aliasing at all and EASU turned the far dock deck's
 /// aliased seams into a regular dot pattern.
+///
+/// A desktop-high or desktop-ultra capture is the plan's reference Mac
+/// ([`CAPTURE_DESKTOP_GPU_MEMORY_BYTES`]: the 2 GiB desktop cap), so its 1440p and 4K captures
+/// draw their preset's own settings. G0 look: fitted to desktop-high's 512 MiB, 4K captures drew
+/// no AA, no AO and 768 shadow maps, and 1440p ultra drew less than high.
 fn capture_facts(class: DeviceClass) -> DeviceFacts {
     let mut facts = DeviceFacts::new(TargetOs::Linux, wgpu::Backend::Noop, wgpu::DeviceType::Other);
     facts.transient_saves_memory = Some(class.form == FormFactor::Mobile);
-    facts
+    let reference_desktop = class.form == FormFactor::Desktop && matches!(class.tier, PerformanceTier::High | PerformanceTier::Ultra);
+    facts.with_gpu_visible_memory(reference_desktop.then_some(CAPTURE_DESKTOP_GPU_MEMORY_BYTES))
 }
+
+/// The GPU-visible memory of a desktop-high or desktop-ultra capture's reference device: the
+/// memory whose share is the desktop cap ([`genex_render::presets::class_budget_bytes`]).
+const CAPTURE_DESKTOP_GPU_MEMORY_BYTES: u64 = genex_render::presets::DESKTOP_BUDGET_MEMORY_CAP_BYTES * genex_render::presets::DESKTOP_BUDGET_MEMORY_DIVISOR;
 
 /// The material texture arrays `textures` reserves on `class` (`texture::material_arrays`): none
 /// with texture quality off, whose single 256 class grows with the game's textures.
@@ -2039,6 +2049,43 @@ mod tests {
         assert_eq!(mac.capture_output(), (3840, 2160), "or at the size asked for");
         mac.set_capture_size(None);
         assert_eq!(mac.capture_output(), world);
+    }
+
+    /// G0 look (2026-10-14): captures at 2560x1440 and 3840x2160 were fitted to desktop-high's
+    /// 512 MiB, so 4K high and ultra drew no AA, no AO and 768 shadow maps, and 1440p ultra drew
+    /// less than high (AO off, 270-row bloom). A capture at either size draws its preset's own
+    /// settings, the ones it draws at the world size, and ultra keeps everything high draws.
+    #[test]
+    fn captures_at_1440p_and_4k_draw_their_preset_s_own_settings_and_ultra_keeps_all_of_high() {
+        let mut mac = mac_with_memory((1280, 720), Some(SMALL_MAC_MEMORY));
+        let capture_at = |mac: &mut RenderControl, preset: QualityPreset, size: Option<(u32, u32)>| {
+            mac.apply(&RenderChange { preset: Some(Some(PresetChoice::Preset(preset))), ..RenderChange::default() });
+            mac.set_capture_size(size);
+            mac.capture_frame().0.quality
+        };
+        for size in [(2560, 1440), (3840, 2160)] {
+            let mut drawn = Vec::new();
+            for preset in [QualityPreset::High, QualityPreset::Ultra] {
+                let reference = capture_at(&mut mac, preset, None);
+                let quality = capture_at(&mut mac, preset, Some(size));
+                assert!(quality.anti_aliasing.temporal(), "{preset:?} at {size:?} keeps TAA: {:?}", quality.anti_aliasing);
+                assert_eq!(quality.ao.resolution, reference.ao.resolution, "{preset:?} at {size:?} keeps its AO");
+                assert_eq!(quality.shadows, reference.shadows, "{preset:?} at {size:?} keeps its shadow maps");
+                assert_eq!(quality.bloom, reference.bloom, "{preset:?} at {size:?} keeps its bloom");
+                drawn.push(quality);
+            }
+            let (high, ultra) = (&drawn[0], &drawn[1]);
+            assert!(ao_rank(ultra.ao.resolution) >= ao_rank(high.ao.resolution), "{size:?}: ultra's AO {:?} under high's {:?}", ultra.ao.resolution, high.ao.resolution);
+            assert!(ultra.shadows.map_size >= high.shadows.map_size && ultra.bloom.resolution >= high.bloom.resolution, "{size:?}: ultra draws less than high");
+        }
+    }
+
+    fn ao_rank(resolution: AoResolution) -> u8 {
+        match resolution {
+            AoResolution::Full => 2,
+            AoResolution::Half => 1,
+            _ => 0,
+        }
     }
 
     /// The ledger and probe rows of a Mac at [`MAC_OUTPUTS`] with a large, a small and an unknown

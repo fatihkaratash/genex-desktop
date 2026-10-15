@@ -9,13 +9,17 @@
 //! instance row, at the same index, filled only while motion vectors are drawn.
 //!
 //! Uploads (renderer pass 2, RC-08): graph node 1's writes come from one [`UploadArena`], whose
-//! mapped staging chunks are kept and reused, recorded as copies into an upload encoder submitted
-//! at once. `queue.write_buffer` made a staging buffer per call in wgpu-core and freed it after the
-//! GPU used it (16 a frame on a lit scene; 0.34 ms of CPU a frame against 0.08 ms for a 3 MB frame
-//! of 17 writes on an M4 Max). The upload encoder is submitted before anything else of the frame,
-//! as the queue writes landed ahead of every later submission.
+//! mapped staging chunks are kept and reused, recorded as copies at the head of the frame's own
+//! command encoder, ahead of everything the frame records after node 1 (every submission of the
+//! frame's work goes through that encoder, which is submitted before any other node's own).
+//! `queue.write_buffer` made a staging buffer per call in wgpu-core and freed it after the GPU used
+//! it (16 a frame on a lit scene; 0.34 ms of CPU a frame against 0.08 ms for a 3 MB frame of 17
+//! writes on an M4 Max). G0 (2026-10-15): submitted as a command buffer of their own ahead of the
+//! frame's, the copies cost the features-off frame 0.025-0.045 ms of GPU time (bench-outdoor and
+//! stress-forest at 1080p, median of 5 interleaved runs against `queue.write_buffer`'s 0.574 and
+//! 0.903 ms), which `queue.write_buffer` puts in the frame's own submission.
 
-use wgpu::{BindGroupLayout, BindGroupLayoutEntry, BindingType, Buffer, BufferBindingType, BufferUsages, Device, Queue, ShaderStages};
+use wgpu::{BindGroupLayout, BindGroupLayoutEntry, BindingType, Buffer, BufferBindingType, BufferUsages, Device, ShaderStages};
 
 use crate::caps::{UploadBudget, check_buffer};
 use crate::cull::CpuCull;
@@ -122,22 +126,21 @@ impl UploadArena {
         UploadArena { belt: wgpu::util::StagingBelt::new(device.clone(), UPLOAD_CHUNK_BYTES) }
     }
 
-    /// Record `writes` (empty ones skipped) as copies from the arena into one upload encoder and
-    /// submit it now, ahead of the rest of the frame. Nothing is submitted when every write is empty.
-    pub(crate) fn upload(&mut self, device: &Device, queue: &Queue, writes: &[UploadWrite<'_>]) {
+    /// Record `writes` (empty ones skipped) as copies from the arena into `encoder` (the frame's
+    /// own, before anything that reads them); its chunks come back once that encoder is submitted.
+    /// Nothing is recorded when every write is empty.
+    pub(crate) fn upload(&mut self, encoder: &mut wgpu::CommandEncoder, writes: &[UploadWrite<'_>]) {
         if writes.iter().all(|(_, _, bytes)| bytes.is_empty()) {
             return;
         }
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame uploads") });
         for (target, offset, bytes) in writes {
             let Some(size) = wgpu::BufferSize::new(copy_size(bytes.len())) else { continue };
-            let mut view = self.belt.write_buffer(&mut encoder, target, *offset, size);
+            let mut view = self.belt.write_buffer(encoder, target, *offset, size);
             view.slice(..bytes.len()).copy_from_slice(bytes);
             let pad = view.len() - bytes.len();
             view.slice(bytes.len()..).copy_from_slice(&[0; 4][..pad]);
         }
-        self.belt.finish_and_recall_on_submit(&encoder);
-        queue.submit([encoder.finish()]);
+        self.belt.finish_and_recall_on_submit(encoder);
     }
 }
 

@@ -682,6 +682,60 @@ fn metal_matrix_scenes_by_profiles_by_sizes() {
     println!("{record:#}");
 }
 
+/// Owner decision D7 (2026-10-14): a whole frame within 16.7 ms GPU p95 at desktop-high's high at
+/// 1440p output and at ultra at 4K output on the reference M4 Max, both allowed dynamic resolution.
+const D7_FRAME_BUDGET_MS: f64 = 16.7;
+/// D7's outputs and presets: high at 1440p, ultra at 4K.
+const D7_ROWS: [([u32; 2], QualityPreset); 2] = [([2560, 1440], QualityPreset::High), ([3840, 2160], QualityPreset::Ultra)];
+
+/// D7 (G0 perf-platform, 2026-10-15): at 1440p high and 4K ultra every scene's whole frame fits
+/// [`D7_FRAME_BUDGET_MS`] at scale 1 or at one of the class's dynamic-resolution steps (the highest
+/// that fits is the one DRS settles on). The matrix measured scale 1 alone, where stress-forest's 4K
+/// ultra frame is 17.4 ms. `GENEX_PERF_OUT` receives the record (default `perf/d7-<sha>.json`).
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_d7_whole_frames_fit_at_1440p_high_and_4k_ultra_with_dynamic_resolution() {
+    let Some((gpu, timestamp_problem)) = open() else { return };
+    let Some(stamps) = timestamp_problem.is_none().then(|| Stamps::new(&gpu)) else {
+        eprintln!("skipped: no timestamp queries");
+        return;
+    };
+    let (warmup, frames) = (env_u32("GENEX_PERF_WARMUP", DEFAULT_WARMUP), env_u32("GENEX_PERF_FRAMES", DEFAULT_FRAMES).max(1));
+    let class = classify(gpu.device_facts());
+    let steps: Vec<f32> = class_defaults(class).drs_steps.iter().rev().copied().collect();
+    let (mut rows, mut problems) = (Vec::new(), Vec::new());
+    for (size, preset) in D7_ROWS {
+        for cell in Cell::all().into_iter().filter(|cell| kept(&cell.name())) {
+            let mut measured = Vec::new();
+            let mut fits = None;
+            for scale in &steps {
+                let hundredths = (scale * 100.0).round() as u16;
+                let profile = if hundredths >= 100 { Profile::Preset(preset) } else { Profile::Scaled(preset, hundredths) };
+                let mut subject = cell.build(&gpu, size, profile_options(profile, class));
+                apply_profile(subject.renderer(), profile, class);
+                let mut samples = measure(&gpu, Some(&stamps), warmup, frames, subject.as_mut());
+                let p = p95(&mut samples.gpu);
+                measured.push(json!({ "scale": scale, "gpuP95Ms": p }));
+                if p <= D7_FRAME_BUDGET_MS {
+                    fits = Some(*scale);
+                    break;
+                }
+            }
+            let name = cell.name();
+            eprintln!("D7 {name} {} {size:?}: fits at {fits:?} ({measured:?})", preset.wire());
+            rows.push(json!({ "row": name, "preset": preset.wire(), "size": size, "fitsAtScale": fits, "steps": measured }));
+            if fits.is_none() {
+                problems.push(format!("{name} at {} {size:?} is over {D7_FRAME_BUDGET_MS} ms at every DRS step", preset.wire()));
+            }
+        }
+    }
+    let method = json!({ "warmupFrames": warmup, "measuredFrames": frames, "statistic": "GPU timestamp p95, scale 1 then each DRS step down until one fits", "budgetMs": D7_FRAME_BUDGET_MS, "drsSteps": steps });
+    let head = header(&gpu, &timestamp_problem, "render-perf-d7", method);
+    let record = merge(head.json, rows, Vec::new());
+    write_record(&out_path("d7", &head.sha, "GENEX_PERF_OUT"), &record);
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
 /// The presenter-path row's limit: Live frames through `Presenter::draw_view` (render settings,
 /// the frame timer armed, dynamic resolution observing) may cost at most this much more frame p95
 /// than the renderer core drawing the same shot with the same quality.
