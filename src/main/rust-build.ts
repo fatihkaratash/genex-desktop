@@ -116,6 +116,8 @@ const MESSAGE = {
   unsafeCode: `${ExtensionRefusal.UnsafeCode}: \`unsafe\` code builds only in a game the person trusts`,
   trustClaimed: `${ExtensionRefusal.TrustPersonOnly}: the game's own files cannot trust it; only the person can, in Studio`,
   buildScriptLinked: (file: string) => `${file} is a link or not a file, and the build lane never works through one`,
+  stoppedBySignal: (signal: string) =>
+    `the build stopped on ${signal} before it printed anything (the system ends a build this way when memory or disk runs out)`,
 } as const;
 
 /** How long a whole `cargo build` (or clippy) may run, per destination. */
@@ -1118,6 +1120,9 @@ export class RustBuilds implements GameBuildLane {
     const messages: CargoMessages = parseCargoMessages(result.stdout, stageDir(plan.bin), manifest);
     const rendered = diagnosticLines(messages);
     const lines = rendered.length ? rendered : outputLinesOf(result);
+    // A step the system killed (memory or disk) prints nothing: name the signal, never an empty problem.
+    const killedBy = lines.length === 0 && !result.timedOut ? result.signal : null;
+    if (killedBy) lines.push(MESSAGE.stoppedBySignal(killedBy));
     const reason = result.timedOut ? BuildProblemCode.TimedOut : BuildProblemCode.CommandFailed;
     const problem = { command: result.command, code: result.code, diagnostics: messages.diagnostics };
     const unsafeRefused = !plan.trust.trusted && messages.diagnostics.some((d) => d.code === UNSAFE_CODE_LINT);
