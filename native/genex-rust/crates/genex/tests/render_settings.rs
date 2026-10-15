@@ -674,6 +674,7 @@ mod metal {
     use genex::gpu::{GpuError, GpuPass, GpuPassCtx, PassSetup, PassStage};
     use genex::present::Presenter;
     use genex::View;
+    use genex_render::drs::{CALM_FRACTION, MAX_SCALE_STEPS, RISE_AFTER_FRAMES, RISE_BACKOFF_MAX_FRAMES};
 
     fn required() -> bool {
         std::env::var("GENEX_REQUIRE_METAL").is_ok_and(|value| value == "1")
@@ -1207,6 +1208,42 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     /// frames each, with room for a rise undone by another program's GPU work.
     const RISE_FRAMES_MAX: u32 = 1200;
 
+    /// What `frames` Live frames gave the controller: the landed GPU times over `over_ms`, and
+    /// the calm runs it could rise on (each [`RISE_AFTER_FRAMES`] frames in a row under
+    /// [`CALM_FRACTION`] of `target_ms`), with `stop` ending the frames early.
+    struct Landed {
+        frames: u32,
+        over: u32,
+        calm_runs: u32,
+    }
+
+    fn landed_frames(presenter: &mut Presenter, runtime: &mut Runtime<Scene>, frames: u32, (target_ms, over_ms): (f32, f32), stop: &dyn Fn() -> bool) -> Landed {
+        let mut landed = Landed { frames: 0, over: 0, calm_runs: 0 };
+        let mut calm = 0;
+        while landed.frames < frames && !stop() {
+            live_frame(presenter, runtime);
+            landed.frames += 1;
+            let Some(ms) = runtime.render().borrow().last_gpu_ms() else { continue };
+            landed.over += u32::from(ms > over_ms);
+            calm = if ms < target_ms * CALM_FRACTION { calm + 1 } else { 0 };
+            if calm == RISE_AFTER_FRAMES {
+                landed.calm_runs += 1;
+                calm = 0;
+            }
+        }
+        landed
+    }
+
+    /// G0 round 2: these rows read the GPU's own timestamps, and another program's GPU work
+    /// lands in them too (Apple's timestamps span the queue's wall time). At host load 32 to 146
+    /// the rise after the load was gone never came (the light frames never stayed calm for
+    /// [`RISE_AFTER_FRAMES`]) and frames inside the class's time crossed it. A row whose frames
+    /// did not give the controller its premise fails naming the busy host, not dynamic
+    /// resolution: the gate reads that as not measured.
+    fn busy_host(what: &str, landed: &Landed) -> String {
+        format!("premise not met, the host's GPU is busy: {what} ({} of {} frames over, {} calm runs)", landed.over, landed.frames, landed.calm_runs)
+    }
+
     /// The wall clock, as the native presenter's own (`present::default_clock`).
     #[allow(clippy::disallowed_types, reason = "the row's rise phase times frames as Live does")]
     fn wall_clock() -> genex_render::timing::Clock {
@@ -1272,13 +1309,16 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
             // its span as the CPU's, as in Live, and does not undo a rise.
             presenter.set_clock(wall_clock());
             iterations.set(64);
-            let mut frames = 0;
-            while handle.borrow().status().scale < nominal && frames < RISE_FRAMES_MAX {
-                live_frame(&mut presenter, &mut runtime);
-                frames += 1;
-            }
+            let gpu_target = handle.borrow().gpu_target_ms();
+            let below_nominal = || handle.borrow().status().scale < nominal;
+            let landed = landed_frames(&mut presenter, &mut runtime, RISE_FRAMES_MAX, (gpu_target, gpu_target), &|| !below_nominal());
             let back = handle.borrow().status().scale;
-            eprintln!("{preset_choice:?}: the load gone, scale {back} after {frames} frames");
+            eprintln!("{preset_choice:?}: the load gone, scale {back} after {} frames ({} calm runs)", landed.frames, landed.calm_runs);
+            // Each step up waits for one calm run, or up to RISE_BACKOFF_MAX_FRAMES after a rise
+            // was undone: fewer runs than that for every step a class has was not the
+            // controller's premise.
+            let runs_needed = (MAX_SCALE_STEPS as u32 - 1) * (RISE_BACKOFF_MAX_FRAMES / RISE_AFTER_FRAMES);
+            assert!(back == nominal || landed.calm_runs >= runs_needed, "{preset_choice:?}: {}", busy_host("the light frames never stayed calm", &landed));
             assert_eq!(back, nominal, "{preset_choice:?}: frames under the budget give the nominal scale back");
         }
     }
@@ -1321,10 +1361,10 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         assert!(loaded < class_target * 0.8 && loaded > budget * 1.5, "the premise: inside the class's time, over the budget");
         // The class's own target keeps the full scale under this load.
         handle.borrow_mut().apply(&RenderChange { render_scale_lock: Some(None), ..RenderChange::default() });
-        for _ in 0..60 {
-            live_frame(&mut presenter, &mut runtime);
-        }
-        assert_eq!(handle.borrow().status().scale, 1.0, "frames inside the class's time keep scale 1");
+        let inside = landed_frames(&mut presenter, &mut runtime, 60, (class_target, class_target), &|| false);
+        let kept = handle.borrow().status().scale;
+        assert!(kept == 1.0 || inside.over == 0, "{}", busy_host("frames of the class's time crossed it", &inside));
+        assert_eq!(kept, 1.0, "frames inside the class's time keep scale 1");
         let held = handle.borrow_mut().apply(&RenderChange { frame_budget_ms: Some(Some(budget)), ..RenderChange::default() });
         assert_eq!(held.frame_budget_ms, Some(budget));
         for _ in 0..60 {
@@ -1335,9 +1375,9 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         assert!(stepped < 1.0, "the verb's budget steps the scale down");
         handle.borrow_mut().apply(&RenderChange { frame_budget_ms: Some(None), ..RenderChange::default() });
         assert_eq!(handle.borrow().gpu_target_ms(), class_target, "null gives the class's target back");
-        for _ in 0..60 {
-            live_frame(&mut presenter, &mut runtime);
-        }
-        assert_eq!(handle.borrow().status().scale, 1.0, "and the full scale");
+        let released = landed_frames(&mut presenter, &mut runtime, 60, (class_target, class_target), &|| false);
+        let full = handle.borrow().status().scale;
+        assert!(full == 1.0 || released.over == 0, "{}", busy_host("frames of the class's time crossed it", &released));
+        assert_eq!(full, 1.0, "and the full scale");
     }
 }
