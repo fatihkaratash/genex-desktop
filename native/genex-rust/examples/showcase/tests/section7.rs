@@ -38,6 +38,15 @@ const DETERMINISM_SHOTS: [(Scene, &str); 2] = [(Scene::Lakeside, "wide"), (Scene
 const CHILD_ENV: &str = "GENEX_SECTION7_CHILD";
 const CHILD_OUT_ENV: &str = "GENEX_SECTION7_CHILD_OUT";
 const OUT_ENV: &str = "GENEX_SECTION7_OUT";
+/// The 4K shots the stills writer found drawing two pictures in one process (G0 round 2), and how
+/// often the repeat row captures each.
+const REPEAT_SHOTS: [(Scene, &str, QualityPreset); 4] = [
+    (Scene::Lakeside, "wide", QualityPreset::High),
+    (Scene::Lakeside, "dock", QualityPreset::Ultra),
+    (Scene::Lakeside, "forest", QualityPreset::Ultra),
+    (Scene::Harbour, "cafe", QualityPreset::High),
+];
+const REPEATS: usize = 5;
 
 /// The showcase's scenes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +166,92 @@ fn metal_showcase_captures_at_1440p_and_4k_are_deterministic_across_processes() 
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
+/// Busy threads on every core until dropped: the stills writer's 4K mismatches came under load.
+struct CpuLoad {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl CpuLoad {
+    #[allow(clippy::disallowed_methods, reason = "test glue: busy threads load the host; no simulation runs on them")]
+    fn start() -> CpuLoad {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
+        let threads = (0..cores)
+            .map(|_| {
+                let stop = std::sync::Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    let mut spin = 0_u64;
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        spin = std::hint::black_box(spin.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1));
+                    }
+                })
+            })
+            .collect();
+        CpuLoad { stop, threads }
+    }
+}
+
+impl Drop for CpuLoad {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Where two captures of one size differ: the pixel count, the largest channel step and the box.
+fn difference(a: &Capture, b: &Capture) -> String {
+    let width = a.width() as usize;
+    let (mut count, mut largest) = (0_usize, 0_u8);
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+    for (at, (pa, pb)) in a.bgra().chunks(4).zip(b.bgra().chunks(4)).enumerate() {
+        let step = pa.iter().zip(pb).map(|(ca, cb)| ca.abs_diff(*cb)).max().unwrap_or(0);
+        if step == 0 {
+            continue;
+        }
+        count += 1;
+        largest = largest.max(step);
+        let (x, y) = (at % width, at / width);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    format!("{count} pixels differ, largest step {largest}, box ({x0},{y0})-({x1},{y1})")
+}
+
+/// G0 round 2: the stills writer stopped at a different 4K shot in each of four runs, two settled
+/// captures of one tick drawing two pictures in one process while other lanes loaded the machine.
+/// One 4K shot captured [`REPEATS`] times in one process, a 1440p capture of it between each two
+/// as the writer orders them and every core busy, draws one picture.
+#[test]
+#[ignore = "needs a GPU: run with --ignored metal"]
+fn metal_a_4k_shot_captured_again_in_one_process_under_load_draws_one_picture() {
+    if gpu().is_none() {
+        return;
+    }
+    let out = std::env::var_os(OUT_ENV).map(PathBuf::from);
+    let _load = CpuLoad::start();
+    let mut problems = Vec::new();
+    for (scene, shot, preset) in REPEAT_SHOTS {
+        let first = capture(scene, shot, preset, (3840, 2160)).expect("a presenter");
+        for run in 1..REPEATS {
+            // The writer's order: a 1440p capture between two 4K ones.
+            capture(scene, shot, preset, (2560, 1440)).expect("a 1440p presenter");
+            let again = capture(scene, shot, preset, (3840, 2160)).expect("another presenter");
+            if again.digest() == first.digest() {
+                continue;
+            }
+            problems.push(format!("{} {shot} {} capture {run}: {}", scene.wire(), preset.wire(), difference(&first, &again)));
+            if let Some(dir) = &out {
+                std::fs::create_dir_all(dir).expect("the out folder");
+                write_png(&dir.join(format!("repeat-{}-{shot}-0.png", scene.wire())), &first);
+                write_png(&dir.join(format!("repeat-{}-{shot}-{run}.png", scene.wire())), &again);
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
 /// Section 7's stills: every shot of both scenes at high and ultra at 1440p and 4K, each taken twice
 /// in one process (one picture), written as PNGs with their digests.
 #[test]
@@ -175,8 +270,11 @@ fn metal_section7_stills_are_written_at_1440p_and_4k() {
                 for (w, h) in SIZES {
                     let first = capture(scene, shot, preset, (w, h)).expect("a presenter");
                     let again = capture(scene, shot, preset, (w, h)).expect("a second presenter");
-                    assert_eq!(again.digest(), first.digest(), "{} {shot} {} {w}x{h}: two settled captures differ", scene.wire(), preset.wire());
                     write_png(&dir.join(format!("{shot}-{}-{w}x{h}.png", preset.wire())), &first);
+                    if again.digest() != first.digest() {
+                        write_png(&dir.join(format!("{shot}-{}-{w}x{h}-again.png", preset.wire())), &again);
+                        panic!("{} {shot} {} {w}x{h}: two settled captures differ: {}", scene.wire(), preset.wire(), difference(&first, &again));
+                    }
                     rows.push(format!("{{\"scene\": \"{}\", \"shot\": \"{shot}\", \"preset\": \"{}\", \"size\": [{w}, {h}], \"digest\": \"{:016x}\"}}", scene.wire(), preset.wire(), first.digest()));
                 }
             }
