@@ -15,7 +15,6 @@
  * `STUDIO_BROWSER_TESTS=1` and a Chromium already installed; nothing is downloaded.
  */
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -25,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "@playwright/test";
 import { webShellPage } from "../../src/main/rust-build-web.ts";
 import { SECOND_MS } from "../../src/shared/duration.ts";
+import { playwrightHeadlessChromiumOnDisk } from "../helpers/playwright-chromium.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
@@ -72,17 +72,9 @@ const BROKEN: ReadonlyArray<{ name: string; module: string | null; reason: RegEx
 
 const browserSkip = (): string | false => {
   if (process.env.STUDIO_BROWSER_TESTS !== "1") return "launches Chromium; set STUDIO_BROWSER_TESTS=1 to run";
-  let executable = "";
-  try {
-    executable = chromium.executablePath();
-  } catch {
-    executable = "";
-  }
-  const revision = /^(.*[/\\])chromium-(\d+)[/\\]/.exec(executable);
-  const headlessShell = revision ? `${revision[1]}chromium_headless_shell-${revision[2]}` : "";
-  const installed =
-    (executable !== "" && existsSync(executable)) || (headlessShell !== "" && existsSync(headlessShell));
-  return installed ? false : "no Playwright Chromium is installed; this suite never downloads one";
+  return playwrightHeadlessChromiumOnDisk()
+    ? false
+    : "no Playwright Chromium is installed; this suite never downloads one";
 };
 
 /** A static server over `root`: any regular file under it (never through a link), 404 otherwise; every path asked is recorded. */
