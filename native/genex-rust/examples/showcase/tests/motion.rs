@@ -45,10 +45,17 @@ use support::{SHOT_TICK, gpu, lakeside_at, write_png};
 const POP_LEVELS: f64 = 16.0;
 /// The luma change above which a pixel counts as flickering between two frames (the pass-1 row's).
 const FLICKER_LEVELS: f64 = 3.0;
-/// The most pixels the shadows may add to one frame's pops, as a share of the frame: G0 asks for
-/// zero one-frame shadow pops; one hundredth of a percent (92 pixels at 1280x720) leaves room for
-/// the noise of two differently lit runs, and a single blinking 10 x 10 shadow block exceeds it.
-const SHADOW_POP_SHARE_MAX: f64 = 0.0001;
+/// The most pixels the shadows may add to one frame's pops on a mobile class, as a share of the
+/// frame (owner decision D9, 2026-10-15): one hundredth of a percent (92 pixels at 1280x720); a
+/// single blinking 10 x 10 shadow block exceeds it. Desktop classes allow none
+/// ([`shadow_pop_share_max`]).
+const MOBILE_SHADOW_POP_SHARE_MAX: f64 = 0.0001;
+
+/// D9: zero one-frame shadow pops on every desktop class; a mobile class may add
+/// [`MOBILE_SHADOW_POP_SHARE_MAX`] of the frame. Applied exactly as the gates apply it, never loosened.
+fn shadow_pop_share_max(class: DeviceClass) -> f64 {
+    if class.form == FormFactor::Mobile { MOBILE_SHADOW_POP_SHARE_MAX } else { 0.0 }
+}
 /// The most pixels the shadows may make flicker into a frame, mean over the path, as a share of the
 /// frame: the creeping bound P2-0.2 sets for shadow-attributed flicker (the still row's 0.15%).
 const SHADOW_FLICKER_SHARE_MAX: f64 = 0.0015;
@@ -485,7 +492,7 @@ fn lakeside_row(name: &str, (path, radius): (Path, usize), preset: QualityPreset
     );
     eprintln!("{record}");
     let mut problems = Vec::new();
-    if worst as f64 / on.pixels() > SHADOW_POP_SHARE_MAX {
+    if worst as f64 / on.pixels() > shadow_pop_share_max(class) {
         problems.push(format!("the shadows pop {worst} pixels for one frame at frame {worst_frame} ({total} over the path)"));
     }
     if flicker_mean > SHADOW_FLICKER_SHARE_MAX {
